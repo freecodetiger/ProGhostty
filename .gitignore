@@ -1,10 +1,13 @@
 .DS_Store
 .build/
 .swiftpm/
+.tools/
+.zig-cache-global/
 DerivedData/
+zig-out/
+Vendor/ghostty/zig-out/
+Vendor/ghostty/.zig-cache/
 *.xcuserdata/
 xcuserdata/
 
-# The interrupted Ghostty clone is intentionally not committed.
-# Add Ghostty later as a real submodule or a documented vendored snapshot.
-Vendor/ghostty/
+# Ghostty is tracked as a submodule under Vendor/ghostty.
