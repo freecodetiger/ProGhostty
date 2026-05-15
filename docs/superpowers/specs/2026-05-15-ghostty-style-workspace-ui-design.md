@@ -96,7 +96,7 @@ TerminalCanvas
   WorkspaceSwitcherOverlay, when open
 ```
 
-The current `TerminalTabView` top bar should be removed from the default terminal view. History, plugins, settings, and workspace management should not be reached through visible in-window tabs.
+The terminal canvas should not include a top bar. History, plugins, settings, and workspace management should not be reached through visible in-window tabs.
 
 ## Titlebar Workspace Label
 

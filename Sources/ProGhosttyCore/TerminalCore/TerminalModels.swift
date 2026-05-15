@@ -50,11 +50,16 @@ public enum TerminalEvent: Sendable {
   case error(session: TerminalSessionID, message: String)
 }
 
-@MainActor public protocol TerminalEngine: AnyObject {
+@MainActor public protocol TerminalSessionManager: AnyObject {
   func createSession(config: TerminalSessionConfig) throws -> TerminalSessionID
   func closeSession(_ id: TerminalSessionID)
   func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int)
   func writeInput(_ data: Data, to id: TerminalSessionID)
-  func viewForSession(_ id: TerminalSessionID) -> NSView?
   var events: AsyncStream<TerminalEvent> { get }
+}
+
+@MainActor public protocol TerminalSurfaceRegistry: AnyObject {
+  func viewForSession(_ id: TerminalSessionID) -> NSView?
+  func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?)
+  func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?)
 }

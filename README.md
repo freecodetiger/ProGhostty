@@ -5,9 +5,29 @@ ProGhostty is a macOS-native terminal MVP shaped by `guide.md`: a Ghostty-core a
 ## Current Build Shape
 
 - `ProGhosttyCore` contains the terminal engine protocol, mock engine, OSC parser, command block indexer, SQLite history/workspace stores, settings, and plugin scanner.
-- `ProGhosttyApp` is a SwiftUI macOS shell using `MockTerminalEngine` so the UI and data layer can run before libghostty is linked.
+- `ProGhosttyApp` is a SwiftUI macOS shell using `PTYTerminalEngine` by default. The live path is PTY bytes from the user's shell into `libghostty-vt`, then a temporary plain-text formatter surface for display.
+- `MockTerminalEngine` remains available as a fallback/demo engine so the UI and data layer can run without a real terminal backend.
 - `Vendor/ghostty` tracks the official Ghostty source as a git submodule. `LibGhosttyTerminalEngine` is intentionally a narrow stub; real integration should stay isolated there.
-- Tests under `Tests/ProGhosttyCoreTests` cover OSC parsing, command block indexing, history store behavior, and workspace store behavior.
+- `ProGhosttyGhosttyVT` is a narrow C wrapper around the unstable `libghostty-vt` C API. Swift code calls `GhosttyVTBridge`, not Ghostty headers directly.
+- `PaneNode` / `SplitPane` / `TerminalPane` form the renderer-agnostic split tree for workspace panes. Each pane stores only lightweight metadata and a `TerminalSessionID`, not Ghostty-specific bridge types.
+- `docs/architecture/terminal-core-positioning.md` defines the layer boundaries for PTY, Ghostty, shell integration plugins, and the product UI.
+- Tests under `Tests/ProGhosttyCoreTests` cover OSC parsing, command block indexing, history store behavior, workspace store behavior, PTY launch, and the Ghostty VT bridge.
+
+## Terminal Backend
+
+The current runtime flow is:
+
+```text
+SwiftUI terminal view
+  -> PTYTerminalEngine
+  -> forkpty shell process
+  -> PTY output bytes
+  -> GhosttyVTBridge / libghostty-vt
+  -> plain-text formatted terminal state
+  -> NSTextView surface
+```
+
+This is intentionally not the final Ghostty renderer. `libghostty-vt` now interprets PTY bytes and maintains terminal state, while the app uses its plain formatter as a temporary rendering surface. A future full renderer should replace only the surface/bridge internals and keep the upper app layers unchanged.
 
 ## Ghostty VT Library
 
@@ -27,6 +47,14 @@ With only Command Line Tools installed, the build produces:
 - `Vendor/ghostty/zig-out/include/ghostty/vt.h`
 
 `ghostty-vt.xcframework` requires full Xcode because Ghostty invokes `xcodebuild -create-xcframework`. Long term, investigate how the full macOS frontend links complete libghostty/GhosttyKit before replacing `MockTerminalEngine`.
+
+The SwiftPM build currently links the locally built static archive:
+
+```text
+Vendor/ghostty/zig-out/lib/libghostty-vt.a
+```
+
+If that archive is missing, re-run the VT build command above before `swift build` or `swift test`.
 
 ## Run
 

@@ -17,7 +17,22 @@ let package = Package(
   dependencies: [],
   targets: [
     .target(
+      name: "ProGhosttyGhosttyVT",
+      publicHeadersPath: "include",
+      cSettings: [
+        .unsafeFlags(["-IVendor/ghostty/zig-out/include"])
+      ],
+      linkerSettings: [
+        .unsafeFlags(["Vendor/ghostty/zig-out/lib/libghostty-vt.a"])
+      ]
+    ),
+    .target(
+      name: "ProGhosttyPTY",
+      publicHeadersPath: "include"
+    ),
+    .target(
       name: "ProGhosttyCore",
+      dependencies: ["ProGhosttyGhosttyVT", "ProGhosttyPTY"],
       linkerSettings: [
         .linkedLibrary("sqlite3")
       ]

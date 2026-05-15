@@ -2,14 +2,14 @@ import Foundation
 
 @MainActor
 public final class TerminalInputRouter {
-  private let engine: TerminalEngine
+  private let sessionManager: TerminalSessionManager
 
-  public init(engine: TerminalEngine) {
-    self.engine = engine
+  public init(sessionManager: TerminalSessionManager) {
+    self.sessionManager = sessionManager
   }
 
   public func send(_ text: String, to session: TerminalSessionID, appendNewline: Bool = false) {
     let payload = appendNewline ? text + "\n" : text
-    engine.writeInput(Data(payload.utf8), to: session)
+    sessionManager.writeInput(Data(payload.utf8), to: session)
   }
 }

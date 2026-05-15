@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 @MainActor
-public final class MockTerminalEngine: TerminalEngine {
+public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRegistry {
   private struct SessionState {
     var config: TerminalSessionConfig
     var view: NSTextView
@@ -11,6 +11,8 @@ public final class MockTerminalEngine: TerminalEngine {
 
   private var sessions: [TerminalSessionID: SessionState] = [:]
   private let continuation: AsyncStream<TerminalEvent>.Continuation
+  private var inputHandler: (@MainActor (TerminalSessionID, Data) -> Void)?
+  private var activationHandler: (@MainActor (TerminalSessionID) -> Void)?
   public let events: AsyncStream<TerminalEvent>
 
   public init() {
@@ -23,7 +25,7 @@ public final class MockTerminalEngine: TerminalEngine {
     let id = TerminalSessionID()
     let textView = NSTextView()
     textView.isEditable = false
-    textView.isSelectable = true
+    textView.isSelectable = false
     textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     textView.string =
       "ProGhostty mock terminal\n\(config.workingDirectory ?? FileManager.default.currentDirectoryPath) $ "
@@ -73,9 +75,20 @@ public final class MockTerminalEngine: TerminalEngine {
     }
 
     let scrollView = NSScrollView()
-    scrollView.hasVerticalScroller = true
+    TerminalSurfaceStyle.configureScrollView(
+      scrollView,
+      backgroundColor: NSColor(calibratedWhite: 0.08, alpha: 1)
+    )
     scrollView.documentView = textView
     return scrollView
+  }
+
+  public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {
+    inputHandler = handler
+  }
+
+  public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {
+    activationHandler = handler
   }
 
   private func run(command: String, session id: TerminalSessionID) {
