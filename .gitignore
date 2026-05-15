@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserdata/
+xcuserdata/
+
+# The interrupted Ghostty clone is intentionally not committed.
+# Add Ghostty later as a real submodule or a documented vendored snapshot.
+Vendor/ghostty/
