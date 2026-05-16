@@ -3,94 +3,88 @@ import Foundation
 public struct ShellEnvironmentScanner {
   private let fileManager: FileManager
   private let environment: [String: String]
+  private let detector: ShellPluginDetector
+  private let configWriter: ShellConfigWriter
 
   public init(
     fileManager: FileManager = .default,
-    environment: [String: String] = ProcessInfo.processInfo.environment
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    detector: ShellPluginDetector = ShellPluginDetector(),
+    configWriter: ShellConfigWriter = ShellConfigWriter()
   ) {
     self.fileManager = fileManager
     self.environment = environment
+    self.detector = detector
+    self.configWriter = configWriter
   }
 
   public func scan() -> ShellEnvironmentReport {
     let shell = environment["SHELL"] ?? "/bin/zsh"
     let home = environment["HOME"] ?? NSHomeDirectory()
-    let homebrew = firstExisting(["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]) != nil
-    let installedNames = Set(
-      recommendationPlans().map(\.name).filter {
-        commandExists($0) || zshPluginExists($0, home: home)
-      })
-
-    let recommendations = recommendationPlans().map { plan in
-      PluginRecommendation(plan: plan, isInstalled: installedNames.contains(plan.name))
+    let snapshot = ShellPluginDetectionSnapshot(
+      homeDirectory: home,
+      defaultShell: shell,
+      executableNames: executableNames(),
+      existingPaths: existingKnownPaths(home: home),
+      fileContents: readableShellConfig(home: home)
+    )
+    let detected = detector.detect(in: snapshot)
+    let recommendations = detected.filter { plugin in
+      guard let definition = ShellPluginCatalog.definition(id: plugin.definitionId) else { return false }
+      return definition.shouldAutoRecommend && plugin.status == .notInstalled
     }
 
     return ShellEnvironmentReport(
       defaultShell: shell,
-      zshExists: fileManager.isExecutableFile(atPath: "/bin/zsh") || commandExists("zsh"),
-      homebrewExists: homebrew,
+      zshExists: fileManager.isExecutableFile(atPath: "/bin/zsh") || executableNames().contains("zsh"),
+      homebrewExists: fileManager.isExecutableFile(atPath: "/opt/homebrew/bin/brew")
+        || fileManager.isExecutableFile(atPath: "/usr/local/bin/brew"),
       ohMyZshExists: fileManager.fileExists(atPath: "\(home)/.oh-my-zsh"),
+      detectedPlugins: detected,
       recommendations: recommendations
     )
   }
 
-  private func recommendationPlans() -> [PluginInstallPlan] {
-    [
-      plan(
-        "zsh-autosuggestions", reason: "Command suggestions while typing",
-        command: "brew install zsh-autosuggestions",
-        snippet: "source $(brew --prefix)/share/zsh-autosuggestions/zsh-autosuggestions.zsh"),
-      plan(
-        "zsh-syntax-highlighting", reason: "Highlights valid and invalid shell syntax",
-        command: "brew install zsh-syntax-highlighting",
-        snippet: "source $(brew --prefix)/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
-      ),
-      plan(
-        "fzf", reason: "Fast fuzzy search for files and history", command: "brew install fzf",
-        snippet: nil),
-      plan(
-        "zoxide", reason: "Smarter directory jumping", command: "brew install zoxide",
-        snippet: "eval \"$(zoxide init zsh)\""),
-      plan(
-        "starship", reason: "Portable shell prompt", command: "brew install starship",
-        snippet: "eval \"$(starship init zsh)\""),
-      plan(
-        "atuin", reason: "Searchable shell history", command: "brew install atuin",
-        snippet: "eval \"$(atuin init zsh)\""),
-      plan(
-        "ripgrep", reason: "Fast recursive text search", command: "brew install ripgrep",
-        snippet: nil),
-      plan("fd", reason: "Fast file search", command: "brew install fd", snippet: nil),
-      plan("jq", reason: "JSON processing in the shell", command: "brew install jq", snippet: nil),
-      plan("gh", reason: "GitHub CLI integration", command: "brew install gh", snippet: nil),
-      plan(
-        "lazygit", reason: "Terminal UI for Git workflows", command: "brew install lazygit",
-        snippet: nil),
-      plan(
-        "delta", reason: "Readable Git diffs", command: "brew install git-delta",
-        snippet: "git config --global core.pager delta"),
-    ]
-  }
-
-  private func plan(_ name: String, reason: String, command: String, snippet: String?)
-    -> PluginInstallPlan
-  {
-    PluginInstallPlan(
-      name: name, reason: reason, commands: [command], configSnippet: snippet, riskLevel: .low)
-  }
-
-  private func firstExisting(_ paths: [String]) -> String? {
-    paths.first { fileManager.isExecutableFile(atPath: $0) }
-  }
-
-  private func commandExists(_ command: String) -> Bool {
+  private func executableNames() -> Set<String> {
     let path = environment["PATH"] ?? "/bin:/usr/bin:/usr/local/bin:/opt/homebrew/bin"
-    return path.split(separator: ":").contains { dir in
-      fileManager.isExecutableFile(atPath: "\(dir)/\(command)")
+    let fallbackDirs = ["/opt/homebrew/bin", "/usr/local/bin", "/bin", "/usr/bin"]
+    var names: Set<String> = []
+    let dirs = Array(Set(path.split(separator: ":").map(String.init) + fallbackDirs)).sorted()
+    for dir in dirs {
+      guard let entries = try? fileManager.contentsOfDirectory(atPath: dir) else { continue }
+      for entry in entries where fileManager.isExecutableFile(atPath: "\(dir)/\(entry)") {
+        names.insert(entry)
+      }
     }
+    return names
   }
 
-  private func zshPluginExists(_ name: String, home: String) -> Bool {
-    fileManager.fileExists(atPath: "\(home)/.oh-my-zsh/custom/plugins/\(name)")
+  private func existingKnownPaths(home: String) -> Set<String> {
+    let paths = [
+      "\(home)/.oh-my-zsh",
+      "\(home)/.oh-my-zsh/custom/plugins/zsh-autosuggestions",
+      "\(home)/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting",
+      "\(home)/.sdkman/bin/sdkman-init.sh",
+      "/opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh",
+      "/usr/local/share/zsh-autosuggestions/zsh-autosuggestions.zsh",
+      "/opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh",
+      "/usr/local/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh",
+    ]
+    return Set(paths.filter { fileManager.fileExists(atPath: $0) })
+  }
+
+  private func readableShellConfig(home: String) -> [String: String] {
+    let paths = configWriter.readableConfigPaths(homeDirectory: home)
+
+    var contents: [String: String] = [:]
+    for path in paths {
+      guard let data = fileManager.contents(atPath: path),
+        let string = String(data: data, encoding: .utf8)
+      else {
+        continue
+      }
+      contents[path] = string
+    }
+    return contents
   }
 }

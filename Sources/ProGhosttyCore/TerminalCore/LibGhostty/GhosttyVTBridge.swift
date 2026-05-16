@@ -11,6 +11,32 @@ public struct GhosttyTerminalFrame: Sendable {
     public var faint: Bool
     public var underline: Bool
     public var inverse: Bool
+    public var usesDefaultForeground: Bool
+    public var usesDefaultBackground: Bool
+
+    public init(
+      scalar: UnicodeScalar,
+      foreground: RGB,
+      background: RGB,
+      bold: Bool,
+      italic: Bool,
+      faint: Bool,
+      underline: Bool,
+      inverse: Bool,
+      usesDefaultForeground: Bool = false,
+      usesDefaultBackground: Bool = false
+    ) {
+      self.scalar = scalar
+      self.foreground = foreground
+      self.background = background
+      self.bold = bold
+      self.italic = italic
+      self.faint = faint
+      self.underline = underline
+      self.inverse = inverse
+      self.usesDefaultForeground = usesDefaultForeground
+      self.usesDefaultBackground = usesDefaultBackground
+    }
   }
 
   public struct RGB: Sendable, Equatable {
@@ -97,7 +123,9 @@ public final class GhosttyVTBridge {
         italic: rawCell.italic,
         faint: rawCell.faint,
         underline: rawCell.underline,
-        inverse: rawCell.inverse
+        inverse: rawCell.inverse,
+        usesDefaultForeground: rawCell.fg_default,
+        usesDefaultBackground: rawCell.bg_default
       )
     }
 

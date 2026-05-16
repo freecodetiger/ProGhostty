@@ -48,7 +48,6 @@ final class AppModel: ObservableObject {
   enum Section: String, CaseIterable, Identifiable {
     case terminals = "Terminals"
     case history = "History"
-    case workspaces = "Workspaces"
     case plugins = "Plugins"
     case settings = "Settings"
 
@@ -59,13 +58,19 @@ final class AppModel: ObservableObject {
   @Published var workspaceRuntimes: [WorkspaceRuntime] = []
   @Published var activeWorkspaceID: UUID?
   @Published var isWorkspaceSwitcherPresented = false
+  @Published var isHistoryPresented = false
+  @Published var isPluginManagerPresented = false
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
   @Published var commandLine = ""
   @Published var historySearch = ""
   @Published var historyResults: [CommandBlock] = []
   @Published var workspaces: [Workspace] = []
-  @Published var settings: AppSettings
-  @Published var pluginReport: ShellEnvironmentReport
+  @Published var settings: AppSettings {
+    didSet {
+      applyTerminalAppearance()
+    }
+  }
+  @Published var requestedPluginPlanID: String?
   @Published var shellIntegrationState = "partial"
 
   private let sessionManager: TerminalSessionManager
@@ -76,7 +81,9 @@ final class AppModel: ObservableObject {
   private let historyStore: HistoryStore?
   private let workspaceStore: WorkspaceStore?
   private let settingsStore: SettingsStore
-  private let pluginScanner = ShellEnvironmentScanner()
+  private let terminalActionDispatcher = TerminalActionDispatcher()
+  private var settingsWindowController: NSWindowController?
+  private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
 
   init() {
     DebugLog.write("AppModel init")
@@ -96,7 +103,6 @@ final class AppModel: ObservableObject {
     self.sessionManager = sessionManager
     paneWorkspaceController = PaneWorkspaceController(sessionManager: sessionManager, focusStore: focusStore)
     indexer = CommandBlockIndexer(maxPreviewBytes: loadedSettings.maxOutputPreviewKB * 1024)
-    pluginReport = pluginScanner.scan()
 
     surfaceRegistry.setInputHandler { [weak self] sourceSession, data in
       self?.routeTerminalInput(data, from: sourceSession)
@@ -104,6 +110,7 @@ final class AppModel: ObservableObject {
     surfaceRegistry.setActivationHandler { [weak self] session in
       self?.selectSession(session)
     }
+    applyTerminalAppearance()
 
     Task { await consumeEvents() }
     refreshWorkspaces()
@@ -175,6 +182,51 @@ final class AppModel: ObservableObject {
     return title.isEmpty ? "ProGhostty" : title
   }
 
+  var activeTitlebarLabel: String {
+    let workspace = compactTitlebarTitle(activeWorkspaceTitle)
+    guard let cwd = compactPathComponent(selectedCwd ?? activeWorkspace?.displayPath),
+      cwd != workspace
+    else {
+      return workspace
+    }
+    return "\(workspace) · \(cwd)"
+  }
+
+  var activeTitlebarTooltip: String? {
+    guard activeWorkspace != nil else { return nil }
+    let fullPath = displayPath(selectedCwd ?? activeWorkspace?.displayPath) ?? "-"
+    let paneCount = activeWorkspacePaneCount
+    let workspaceCount = workspaceRuntimes.count
+    let paneLabel = paneCount == 1 ? "pane" : "panes"
+    let workspaceLabel = workspaceCount == 1 ? "workspace" : "workspaces"
+    return """
+    \(activeWorkspaceTitle)
+    \(fullPath)
+    \(paneCount) \(paneLabel) · \(workspaceCount) running \(workspaceLabel)
+    """
+  }
+
+  var appText: AppText {
+    AppText(language: settings.appLanguage)
+  }
+
+  var appColorScheme: ColorScheme? {
+    guard !settings.followSystemAppearance else { return nil }
+    return settings.themeName == "light" ? .light : .dark
+  }
+
+  var terminalPalette: TerminalSurfacePalette {
+    effectiveThemeName == "light" ? .light : .dark
+  }
+
+  var usesDarkAppearance: Bool {
+    effectiveThemeName == "dark"
+  }
+
+  var terminalBackgroundColor: NSColor {
+    terminalPalette.background
+  }
+
   var selectedSessionID: TerminalSessionID? {
     activeWorkspace?.selectedSessionID(focusStore: focusStore)
   }
@@ -196,11 +248,35 @@ final class AppModel: ObservableObject {
     activeWorkspace?.selectedLastBlock(focusStore: focusStore)
   }
 
+  private var activeWorkspacePaneCount: Int {
+    guard let activeWorkspace else { return 0 }
+    return PaneTreeReducer.listLeaves(in: activeWorkspace.layout.root).count
+  }
+
   func activateWorkspace(_ workspaceID: UUID) {
     guard workspaceRuntimes.contains(where: { $0.id == workspaceID }) else { return }
     paneWorkspaceController.activeWorkspaceID = workspaceID
     activeWorkspaceID = workspaceID
     syncWorkspaceSwitcherState()
+    closeUtilityOverlays()
+  }
+
+  func switchWorkspace(named name: String) {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    if let runtime = workspaceRuntimes.first(where: { $0.title == trimmed }) {
+      activateWorkspace(runtime.id)
+      return
+    }
+    if let workspace = workspaces.first(where: { $0.name == trimmed }) {
+      createAndActivateWorkspace(workspace: workspace)
+    }
+  }
+
+  func openWorkspaceCreation(named name: String) {
+    syncWorkspaceSwitcherState()
+    workspaceSwitcherState.query = name
+    isWorkspaceSwitcherPresented = true
   }
 
   func selectPane(_ paneID: UUID) {
@@ -224,6 +300,7 @@ final class AppModel: ObservableObject {
       activeWorkspaceID = workspace.id
       syncWorkspaceSwitcherState()
     } else {
+      applyFocusedTerminalSurface()
       objectWillChange.send()
     }
   }
@@ -296,6 +373,7 @@ final class AppModel: ObservableObject {
       runtime.cwdBySession[closed.sessionId] = nil
       runtime.lastBlockBySession[closed.sessionId] = nil
       workspaceRuntimes[index] = runtime
+      applyFocusedTerminalSurface()
       let leavesAfter = PaneTreeReducer.listLeaves(in: runtime.layout.root)
       DebugLog.write("closePane success closed=\(closed.paneId) leavesAfter=\(leavesAfter.count) next=\(focusStore.focusedPaneId(in: activeWorkspaceID)?.uuidString ?? "-")")
     } catch {
@@ -307,7 +385,7 @@ final class AppModel: ObservableObject {
     guard let command = block.command, let selectedSessionID else { return }
     let payload = settings.rerunAutoEnter ? command + "\n" : command
     sessionManager.writeInput(Data(payload.utf8), to: selectedSessionID)
-    section = .terminals
+    closeUtilityOverlays()
   }
 
   private func routeTerminalInput(_ data: Data, from sourceSession: TerminalSessionID) {
@@ -329,12 +407,116 @@ final class AppModel: ObservableObject {
   }
 
   func deleteWorkspace(_ workspace: Workspace) {
+    let isRunning = workspaceRuntimes.contains { runtime in
+      runtime.workspace?.id == workspace.id || runtime.id == workspace.id
+    }
+    guard !isRunning else {
+      shellIntegrationState = "running workspace cannot be deleted while its sessions are alive"
+      return
+    }
     try? workspaceStore?.delete(id: workspace.id)
     refreshWorkspaces()
   }
 
+  func deleteWorkspaceFromSwitcher(_ workspaceListID: UUID) {
+    guard let workspace = workspaces.first(where: { $0.id == workspaceListID }) else { return }
+    deleteWorkspace(workspace)
+  }
+
   func saveSettings() {
     try? settingsStore.save(settings)
+  }
+
+  func resetSettings() {
+    settings = .defaults
+    saveSettings()
+  }
+
+  func openSettingsWindow() {
+    if let window = settingsWindowController?.window {
+      applySettingsWindowAppearance(to: window)
+      window.makeKeyAndOrderFront(nil)
+      NSApp.activate(ignoringOtherApps: true)
+      return
+    }
+
+    let controller = NSHostingController(
+      rootView: SettingsView()
+        .environmentObject(self)
+        .preferredColorScheme(appColorScheme)
+    )
+    let window = NSWindow(contentViewController: controller)
+    window.title = "Settings"
+    window.styleMask = [.titled, .closable, .miniaturizable]
+    window.setContentSize(NSSize(width: 640, height: 520))
+    window.minSize = NSSize(width: 560, height: 460)
+    window.isReleasedWhenClosed = false
+    window.center()
+    window.toolbarStyle = .preference
+    applySettingsWindowAppearance(to: window)
+
+    let windowController = NSWindowController(window: window)
+    settingsWindowController = windowController
+    windowController.showWindow(nil)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  private func applyTerminalAppearance() {
+    surfaceRegistry.applyPalette(terminalPalette)
+    surfaceRegistry.applyFont(family: settings.fontFamily, size: CGFloat(settings.fontSize))
+    applyFocusedTerminalSurface()
+    for window in NSApp.windows where window !== settingsWindowController?.window {
+      ProGhosttyWindowAppearance.applyTerminalChrome(
+        to: window,
+        backgroundColor: terminalBackgroundColor,
+        usesDarkAppearance: usesDarkAppearance
+      )
+    }
+    if let window = settingsWindowController?.window {
+      applySettingsWindowAppearance(to: window)
+    }
+  }
+
+  private func applySettingsWindowAppearance(to window: NSWindow) {
+    window.appearance = NSAppearance(named: usesDarkAppearance ? .darkAqua : .aqua)
+    window.backgroundColor = .controlBackgroundColor
+    window.contentView?.wantsLayer = true
+    window.contentView?.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+  }
+
+  private func applyFocusedTerminalSurface() {
+    surfaceRegistry.setFocusedSession(selectedSessionID)
+  }
+
+  private func compactTitlebarTitle(_ title: String) -> String {
+    let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "ProGhostty" }
+    return compactPathComponent(trimmed) ?? trimmed
+  }
+
+  private func compactPathComponent(_ path: String?) -> String? {
+    guard let path, !path.isEmpty else { return nil }
+    if path == "/" { return "/" }
+    if path == NSHomeDirectory() { return "~" }
+    guard path.hasPrefix("/") || path.hasPrefix("~") else { return path }
+    let component = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath).lastPathComponent
+    return component.isEmpty ? path : component
+  }
+
+  private func displayPath(_ path: String?) -> String? {
+    guard let path, !path.isEmpty else { return nil }
+    let home = NSHomeDirectory()
+    if path == home { return "~" }
+    if path.hasPrefix(home + "/") {
+      return "~" + path.dropFirst(home.count)
+    }
+    return path
+  }
+
+  private var effectiveThemeName: String {
+    guard settings.followSystemAppearance else { return settings.themeName }
+    let appearance = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
+    return appearance == .aqua ? "light" : "dark"
   }
 
   func searchHistory() {
@@ -343,18 +525,103 @@ final class AppModel: ObservableObject {
       ?? []
   }
 
+  func openHistory(search query: String? = nil) {
+    if let query {
+      historySearch = query
+    }
+    isPluginManagerPresented = false
+    isWorkspaceSwitcherPresented = false
+    isHistoryPresented = true
+    searchHistory()
+  }
+
+  func closeHistory() {
+    isHistoryPresented = false
+  }
+
   func clearHistory() {
     try? historyStore?.deleteAll()
     historyResults = []
   }
 
-  func refreshPlugins() {
-    pluginReport = pluginScanner.scan()
+  func openPlugins(scan: Bool = false) {
+    if let window = settingsWindowController?.window {
+      window.close()
+      settingsWindowController = nil
+    }
+    isHistoryPresented = false
+    isWorkspaceSwitcherPresented = false
+    isPluginManagerPresented = true
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  func openPluginPlan(_ pack: String) {
+    openPlugins()
+    requestedPluginPlanID = pack
+  }
+
+  func closePlugins() {
+    isPluginManagerPresented = false
+  }
+
+  func closeUtilityOverlays() {
+    isHistoryPresented = false
+    isPluginManagerPresented = false
+    isWorkspaceSwitcherPresented = false
   }
 
   func resizePane(_ paneID: UUID, rows: Int, cols: Int) {
     guard let workspace = activeWorkspace else { return }
     paneWorkspaceController.resizePane(paneID, in: workspace.id, rows: rows, cols: cols)
+  }
+
+  func saveActiveLayoutSnapshot() {
+    guard let activeWorkspace else { return }
+    savedLayoutSnapshots[activeWorkspace.id] = activeWorkspace.layout
+    shellIntegrationState = "layout saved"
+  }
+
+  func restoreActiveLayoutSnapshot() {
+    guard
+      let activeWorkspaceID,
+      let saved = savedLayoutSnapshots[activeWorkspaceID],
+      let index = workspaceRuntimes.firstIndex(where: { $0.id == activeWorkspaceID })
+    else {
+      shellIntegrationState = "no saved layout"
+      return
+    }
+
+    let currentPanes = Set(PaneTreeReducer.listLeaves(in: workspaceRuntimes[index].layout.root).map(\.sessionId))
+    let restoredPanes = Set(PaneTreeReducer.listLeaves(in: saved.root).map(\.sessionId))
+    let removedSessions = currentPanes.subtracting(restoredPanes)
+    if !removedSessions.isEmpty, !confirmLayoutRestoreClosingPanes(count: removedSessions.count) {
+      return
+    }
+    for session in removedSessions {
+      sessionManager.closeSession(session)
+      workspaceRuntimes[index].outputBySession[session] = nil
+      workspaceRuntimes[index].cwdBySession[session] = nil
+      workspaceRuntimes[index].lastBlockBySession[session] = nil
+    }
+
+    workspaceRuntimes[index].layout = saved
+    paneWorkspaceController.replaceWorkspaceLayout(saved)
+    if let firstPane = PaneTreeReducer.listLeaves(in: saved.root).first {
+      focusStore.focusPane(firstPane.paneId, in: saved.id)
+    }
+    syncWorkspaceSwitcherState()
+    objectWillChange.send()
+    shellIntegrationState = "layout restored"
+  }
+
+  private func confirmLayoutRestoreClosingPanes(count: Int) -> Bool {
+    let alert = NSAlert()
+    alert.messageText = "Restore layout?"
+    alert.informativeText = "Restoring this layout will close \(count) pane session\(count == 1 ? "" : "s")."
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "Restore")
+    alert.addButton(withTitle: "Cancel")
+    return alert.runModal() == .alertFirstButtonReturn
   }
 
   func updateSplitRatio(_ splitID: UUID, ratio: Double) {
@@ -379,6 +646,8 @@ final class AppModel: ObservableObject {
   }
 
   func openWorkspaceSwitcher() {
+    isHistoryPresented = false
+    isPluginManagerPresented = false
     syncWorkspaceSwitcherState()
     isWorkspaceSwitcherPresented = true
   }
@@ -461,9 +730,15 @@ final class AppModel: ObservableObject {
       combined.append(workspace)
     }
     let activeID = activeWorkspace?.workspace?.id ?? activeWorkspaceID
-    var next = WorkspaceSwitcherState(workspaces: combined, activeWorkspaceID: activeID)
+    let runningIDs = Set(workspaceRuntimes.map { runtime in runtime.workspace?.id ?? runtime.id })
+    var next = WorkspaceSwitcherState(
+      workspaces: combined,
+      activeWorkspaceID: activeID,
+      runningWorkspaceIDs: runningIDs
+    )
     next.query = workspaceSwitcherState.query
     workspaceSwitcherState = next
+    applyFocusedTerminalSurface()
   }
 
   private func sessionConfig(workspace: Workspace?, workingDirectory: String?) -> TerminalSessionConfig {
@@ -492,8 +767,9 @@ final class AppModel: ObservableObject {
     case .cwdChanged(let session, let cwd):
       shellIntegrationState = "available"
       updateWorkspaceForSession(session) { workspace in workspace.cwdBySession[session] = cwd }
-    case .osc:
+    case .osc(let session, let sequence):
       shellIntegrationState = "available"
+      handleProGhosttyControlOsc(session: session, sequence: sequence)
     case .error(_, let message):
       shellIntegrationState = message
     default:
@@ -520,6 +796,20 @@ final class AppModel: ObservableObject {
       return
     }
     update(&workspaceRuntimes[index])
+  }
+
+  private func handleProGhosttyControlOsc(session: TerminalSessionID, sequence: OscSequence) {
+    guard settings.pgControlCommandsEnabled else { return }
+    guard let message = ProGhosttyControlOscParser.parse(sequence) else { return }
+    guard ProGhosttyControlAuthorizer.isAuthorized(
+      message,
+      sourceSessionId: session.description,
+      expectedToken: sessionManager.controlToken(for: session),
+      isEnabled: settings.pgControlCommandsEnabled
+    ) else {
+      return
+    }
+    terminalActionDispatcher.dispatch(message, in: self)
   }
 
   private static func openDatabase() -> HistoryDatabase? {

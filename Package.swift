@@ -13,6 +13,7 @@ let package = Package(
   products: [
     .library(name: "ProGhosttyCore", targets: ["ProGhosttyCore"]),
     .executable(name: "ProGhostty", targets: ["ProGhosttyApp"]),
+    .executable(name: "pg", targets: ["ProGhosttyPG"]),
   ],
   dependencies: [],
   targets: [
@@ -39,6 +40,10 @@ let package = Package(
     ),
     .executableTarget(
       name: "ProGhosttyApp",
+      dependencies: ["ProGhosttyCore"]
+    ),
+    .executableTarget(
+      name: "ProGhosttyPG",
       dependencies: ["ProGhosttyCore"]
     ),
     .testTarget(

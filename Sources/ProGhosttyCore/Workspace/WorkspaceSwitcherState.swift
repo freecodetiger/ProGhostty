@@ -1,6 +1,26 @@
 import Foundation
 
 public struct WorkspaceSwitcherState: Equatable, Sendable {
+  public enum WorkspaceStatus: Equatable, Sendable {
+    case active
+    case running
+    case saved
+  }
+
+  public struct DecoratedWorkspace: Identifiable, Equatable, Sendable {
+    public var workspace: Workspace
+    public var status: WorkspaceStatus
+
+    public var id: UUID {
+      workspace.id
+    }
+
+    public init(workspace: Workspace, status: WorkspaceStatus) {
+      self.workspace = workspace
+      self.status = status
+    }
+  }
+
   public var workspaces: [Workspace] {
     didSet {
       ensureSelection()
@@ -8,6 +28,7 @@ public struct WorkspaceSwitcherState: Equatable, Sendable {
   }
 
   public var activeWorkspaceID: UUID?
+  public var runningWorkspaceIDs: Set<UUID>
   public var selectedWorkspaceID: UUID?
   public var query: String = "" {
     didSet {
@@ -15,9 +36,14 @@ public struct WorkspaceSwitcherState: Equatable, Sendable {
     }
   }
 
-  public init(workspaces: [Workspace], activeWorkspaceID: UUID?) {
+  public init(
+    workspaces: [Workspace],
+    activeWorkspaceID: UUID?,
+    runningWorkspaceIDs: Set<UUID> = []
+  ) {
     self.workspaces = workspaces
     self.activeWorkspaceID = activeWorkspaceID
+    self.runningWorkspaceIDs = runningWorkspaceIDs
     selectedWorkspaceID = activeWorkspaceID ?? workspaces.first?.id
     ensureSelection()
   }
@@ -35,6 +61,20 @@ public struct WorkspaceSwitcherState: Equatable, Sendable {
     let name = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !name.isEmpty else { return false }
     return !workspaces.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+  }
+
+  public var decoratedWorkspaces: [DecoratedWorkspace] {
+    filteredWorkspaces.map { workspace in
+      let status: WorkspaceStatus
+      if workspace.id == activeWorkspaceID {
+        status = .active
+      } else if runningWorkspaceIDs.contains(workspace.id) {
+        status = .running
+      } else {
+        status = .saved
+      }
+      return DecoratedWorkspace(workspace: workspace, status: status)
+    }
   }
 
   public mutating func moveSelection(delta: Int) {

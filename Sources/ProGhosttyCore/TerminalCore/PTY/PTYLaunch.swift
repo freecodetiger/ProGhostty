@@ -66,11 +66,12 @@ public enum PTYLaunch {
     return nil
   }
 
-  private static func launchEnvironment(_ overrides: [String: String]) -> [String] {
+  static func launchEnvironment(_ overrides: [String: String]) -> [String] {
     var environment = ProcessInfo.processInfo.environment
     environment["TERM"] = environment["TERM"] ?? "xterm-256color"
     environment["COLORTERM"] = environment["COLORTERM"] ?? "truecolor"
     environment["PROGHOSTTY"] = "1"
+    environment["PROMPT_EOL_MARK"] = environment["PROMPT_EOL_MARK"] ?? ""
     for (key, value) in overrides {
       environment[key] = value
     }

@@ -6,57 +6,93 @@ struct RootView: View {
   @EnvironmentObject private var model: AppModel
 
   var body: some View {
-    VStack(spacing: 0) {
-      switch model.section {
-      case .terminals:
-        TerminalCanvasView()
-      case .history:
-        ToolPage(title: "History") { HistoryView() }
-      case .workspaces:
-        ToolPage(title: "Workspaces") { WorkspaceView() }
-      case .plugins:
-        ToolPage(title: "Plugins") { PluginManagerView() }
-      case .settings:
-        ToolPage(title: "Settings") { SettingsView() }
+    ZStack {
+      TerminalCanvasView()
+
+      if model.isWorkspaceSwitcherPresented {
+        WorkspaceSwitcherView()
+          .environmentObject(model)
+          .transition(.opacity.combined(with: .scale(scale: 0.98)))
+      }
+
+      if model.isHistoryPresented {
+        UtilityOverlay(
+          width: 820,
+          height: 560,
+          onClose: { model.closeHistory() }
+        ) {
+          HistoryView()
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.985)))
+      }
+
+      if model.isPluginManagerPresented {
+        UtilityOverlay(
+          width: 720,
+          height: 560,
+          showsCloseButton: false,
+          onClose: { model.closePlugins() }
+        ) {
+          PluginManagerView()
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.985)))
       }
     }
+    .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
+    .animation(.easeOut(duration: 0.12), value: model.isHistoryPresented)
+    .animation(.easeOut(duration: 0.12), value: model.isPluginManagerPresented)
+    .preferredColorScheme(model.appColorScheme)
+    .background(Color(nsColor: model.terminalBackgroundColor).ignoresSafeArea())
     .background(
       WorkspaceTitlebarView(
-        title: model.activeWorkspaceTitle,
-        workspaces: model.workspaceSwitcherState.workspaces,
-        activeWorkspaceID: model.workspaceSwitcherState.activeWorkspaceID,
-        onActivate: { model.activateWorkspaceFromSwitcher($0) },
-        onOpenSwitcher: { model.openWorkspaceSwitcher() },
-        onNewWorkspace: { model.createAndOpenWorkspace(name: "Workspace") },
-        onManageWorkspaces: { model.section = .workspaces },
-        onSettings: { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) }
+        title: model.activeTitlebarLabel,
+        tooltip: model.activeTitlebarTooltip,
+        backgroundColor: model.terminalBackgroundColor,
+        usesDarkAppearance: model.usesDarkAppearance,
+        onSettings: { model.openSettingsWindow() }
       )
       .frame(width: 0, height: 0)
     )
   }
 }
 
-private struct ToolPage<Content: View>: View {
+private struct UtilityOverlay<Content: View>: View {
   @EnvironmentObject private var model: AppModel
-  let title: String
+  let width: CGFloat
+  let height: CGFloat
+  var showsCloseButton = true
+  let onClose: () -> Void
   @ViewBuilder var content: Content
 
   var body: some View {
-    VStack(spacing: 0) {
-      HStack {
-        Button("Terminals") { model.section = .terminals }
+    ZStack {
+      Color.black.opacity(model.appColorScheme == .light ? 0.08 : 0.16)
+        .ignoresSafeArea()
+        .onTapGesture(perform: onClose)
+
+      ZStack(alignment: .topTrailing) {
+        content
+          .frame(width: width, height: height)
+          .background(.regularMaterial)
+          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+          .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+              .stroke(Color(nsColor: .separatorColor).opacity(0.45), lineWidth: 1)
+          )
+          .shadow(color: .black.opacity(0.20), radius: 24, x: 0, y: 18)
+
+        if showsCloseButton {
+          Button(action: onClose) {
+            Image(systemName: "xmark.circle.fill")
+              .font(.system(size: 18, weight: .medium))
+              .symbolRenderingMode(.hierarchical)
+              .foregroundStyle(.secondary)
+              .contentShape(Rectangle())
+          }
           .buttonStyle(.plain)
-          .padding(.horizontal, 10)
-          .padding(.vertical, 6)
-          .background(Color.primary.opacity(0.08))
-          .clipShape(RoundedRectangle(cornerRadius: 6))
-        Text(title)
-          .font(.headline)
-        Spacer()
+          .padding(12)
+        }
       }
-      .padding(10)
-      Divider()
-      content
     }
   }
 }

@@ -55,11 +55,15 @@ public enum TerminalEvent: Sendable {
   func closeSession(_ id: TerminalSessionID)
   func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int)
   func writeInput(_ data: Data, to id: TerminalSessionID)
+  func controlToken(for id: TerminalSessionID) -> String?
   var events: AsyncStream<TerminalEvent> { get }
 }
 
 @MainActor public protocol TerminalSurfaceRegistry: AnyObject {
   func viewForSession(_ id: TerminalSessionID) -> NSView?
+  func applyPalette(_ palette: TerminalSurfacePalette)
+  func applyFont(family: String, size: CGFloat)
+  func setFocusedSession(_ id: TerminalSessionID?)
   func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?)
   func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?)
 }

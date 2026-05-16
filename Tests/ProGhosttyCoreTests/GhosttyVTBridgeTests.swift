@@ -38,4 +38,16 @@ struct GhosttyVTBridgeTests {
     #expect(frame.cursorVisible)
     #expect(frame.cursorX > 0)
   }
+
+  @Test func zshEndOfLineMarkerClearsWithCarriageReturnOverwrite() throws {
+    let bridge = try GhosttyVTBridge(cols: 80, rows: 5)
+    let clearLineRemainder = String(repeating: " ", count: 78)
+    bridge.write(Data("\u{1B}[1m\u{1B}[7m%\u{1B}[27m\u{1B}[1m\u{1B}[0m\(clearLineRemainder)\r \rprompt % ".utf8))
+
+    let frame = try bridge.frame()
+    let firstLine = frame.cells.prefix(frame.cols).map { String($0.scalar) }.joined()
+
+    #expect(firstLine.hasPrefix("prompt % "))
+    #expect(!firstLine.hasPrefix("%"))
+  }
 }

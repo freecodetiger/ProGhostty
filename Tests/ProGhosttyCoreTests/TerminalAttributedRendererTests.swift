@@ -106,13 +106,87 @@ struct TerminalAttributedRendererTests {
           italic: false,
           faint: false,
           underline: false,
-          inverse: false
+          inverse: false,
+          usesDefaultForeground: true,
+          usesDefaultBackground: true
         )
       ])
 
     let rendered = TerminalAttributedRenderer().attributedString(for: frame)
 
     #expect(rendered.attribute(.backgroundColor, at: 0, effectiveRange: nil) == nil)
+  }
+
+  @Test func lightPaletteUsesDarkForegroundForDefaultForegroundCells() {
+    let frame = makeFrame(
+      cells: [
+        .init(
+          scalar: "a",
+          foreground: .init(r: 220, g: 220, b: 220),
+          background: .init(r: 0, g: 0, b: 0),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false,
+          usesDefaultForeground: true,
+          usesDefaultBackground: true
+        )
+      ])
+
+    let rendered = TerminalAttributedRenderer(palette: .light).attributedString(for: frame)
+
+    let foreground = rendered.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+    #expect((foreground?.usingColorSpace(.deviceRGB)?.redComponent ?? 1) < 0.20)
+  }
+
+  @Test func inactiveRenderingDimsForegroundWithoutPaintingBackground() {
+    let frame = makeFrame(
+      cells: [
+        .init(
+          scalar: "a",
+          foreground: .init(r: 20, g: 20, b: 20),
+          background: .init(r: 0, g: 0, b: 0),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false,
+          usesDefaultForeground: true,
+          usesDefaultBackground: true
+        )
+      ])
+
+    let active = TerminalAttributedRenderer(palette: .light, isFocused: true).attributedString(for: frame)
+    let inactive = TerminalAttributedRenderer(palette: .light, isFocused: false).attributedString(for: frame)
+
+    let activeForeground = active.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+    let inactiveForeground = inactive.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+    #expect((inactiveForeground?.lightness ?? 0) > (activeForeground?.lightness ?? 1))
+    #expect(inactive.attribute(.backgroundColor, at: 0, effectiveRange: nil) == nil)
+  }
+
+  @Test func inactiveRenderingDoesNotDimExplicitBackground() {
+    let frame = makeFrame(
+      cells: [
+        .init(
+          scalar: "i",
+          foreground: .init(r: 10, g: 20, b: 30),
+          background: .init(r: 210, g: 220, b: 230),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: true
+        )
+      ])
+
+    let active = TerminalAttributedRenderer(palette: .light, isFocused: true).attributedString(for: frame)
+    let inactive = TerminalAttributedRenderer(palette: .light, isFocused: false).attributedString(for: frame)
+
+    let activeBackground = active.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor
+    let inactiveBackground = inactive.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor
+    #expect(inactiveBackground?.sameRGB(as: activeBackground) == true)
   }
 
   @Test func nonDefaultBackgroundStillRenders() {
@@ -156,6 +230,27 @@ struct TerminalAttributedRendererTests {
     #expect((obliqueness ?? 0) > 0)
   }
 
+  @Test func rendererUsesConfiguredFontSize() {
+    let frame = makeFrame(
+      cells: [
+        .init(
+          scalar: "f",
+          foreground: .init(r: 200, g: 200, b: 200),
+          background: .init(r: 10, g: 10, b: 10),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false
+        )
+      ])
+
+    let rendered = TerminalAttributedRenderer(fontFamily: "Menlo", fontSize: 19).attributedString(for: frame)
+
+    let font = rendered.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+    #expect(font?.pointSize == 19)
+  }
+
   private func makeFrame(
     cursorVisible: Bool = false,
     cursorX: Int = 0,
@@ -176,5 +271,24 @@ struct TerminalAttributedRendererTests {
 private extension CGFloat {
   func isApproximately(_ other: CGFloat) -> Bool {
     abs(self - other) < 0.01
+  }
+}
+
+private extension NSColor {
+  var lightness: CGFloat {
+    guard let rgb = usingColorSpace(.deviceRGB) else { return 0 }
+    return (rgb.redComponent + rgb.greenComponent + rgb.blueComponent) / 3
+  }
+
+  func sameRGB(as other: NSColor?) -> Bool {
+    guard
+      let lhs = usingColorSpace(.deviceRGB),
+      let rhs = other?.usingColorSpace(.deviceRGB)
+    else {
+      return false
+    }
+    return abs(lhs.redComponent - rhs.redComponent) < 0.001
+      && abs(lhs.greenComponent - rhs.greenComponent) < 0.001
+      && abs(lhs.blueComponent - rhs.blueComponent) < 0.001
   }
 }

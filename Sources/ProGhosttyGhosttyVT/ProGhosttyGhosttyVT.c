@@ -74,6 +74,8 @@ static ProGhosttyVTCell blank_cell(GhosttyRenderStateColors *colors) {
   cell.bg_r = colors->background.r;
   cell.bg_g = colors->background.g;
   cell.bg_b = colors->background.b;
+  cell.fg_default = true;
+  cell.bg_default = true;
   cell.bold = false;
   cell.italic = false;
   cell.faint = false;
@@ -85,18 +87,26 @@ static ProGhosttyVTCell blank_cell(GhosttyRenderStateColors *colors) {
 static void apply_style(ProGhosttyVTCell *cell, GhosttyRenderStateRowCells cells, GhosttyRenderStateColors *colors) {
   GhosttyColorRgb fg = colors->foreground;
   GhosttyColorRgb bg = colors->background;
+  bool fg_default = true;
+  bool bg_default = true;
   GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
 
   GhosttyResult result = ghostty_render_state_row_cells_get(
     cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR, &fg);
   if (result != GHOSTTY_SUCCESS) {
     fg = colors->foreground;
+    fg_default = true;
+  } else {
+    fg_default = false;
   }
 
   result = ghostty_render_state_row_cells_get(
     cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &bg);
   if (result != GHOSTTY_SUCCESS) {
     bg = colors->background;
+    bg_default = true;
+  } else {
+    bg_default = false;
   }
 
   result = ghostty_render_state_row_cells_get(
@@ -113,6 +123,9 @@ static void apply_style(ProGhosttyVTCell *cell, GhosttyRenderStateRowCells cells
     GhosttyColorRgb tmp = fg;
     fg = bg;
     bg = tmp;
+    bool tmp_default = fg_default;
+    fg_default = bg_default;
+    bg_default = tmp_default;
   }
 
   cell->fg_r = fg.r;
@@ -121,6 +134,8 @@ static void apply_style(ProGhosttyVTCell *cell, GhosttyRenderStateRowCells cells
   cell->bg_r = bg.r;
   cell->bg_g = bg.g;
   cell->bg_b = bg.b;
+  cell->fg_default = fg_default;
+  cell->bg_default = bg_default;
 }
 
 int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {

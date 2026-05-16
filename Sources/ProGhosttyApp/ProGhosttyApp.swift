@@ -12,28 +12,18 @@ struct ProGhosttyApp: App {
         .frame(minWidth: 980, minHeight: 640)
     }
     .commands {
+      CommandGroup(replacing: .appSettings) {
+        Button(model.appText.settings + "...") {
+          model.openSettingsWindow()
+        }
+        .keyboardShortcut(",", modifiers: [.command])
+      }
+
       CommandMenu("Workspace") {
         Button("Switch Workspace...") {
           model.openWorkspaceSwitcher()
         }
         .keyboardShortcut("o", modifiers: [.command, .shift])
-
-        Button("New Workspace") {
-          model.createAndOpenWorkspace(name: "Workspace")
-        }
-        .keyboardShortcut("n", modifiers: [.command, .option])
-
-        Divider()
-
-        Button("Previous Workspace") {
-          model.focusWorkspaceNeighbor(offset: -1)
-        }
-        .keyboardShortcut(.leftArrow, modifiers: [.command, .option, .shift])
-
-        Button("Next Workspace") {
-          model.focusWorkspaceNeighbor(offset: 1)
-        }
-        .keyboardShortcut(.rightArrow, modifiers: [.command, .option, .shift])
       }
 
       CommandMenu("Pane") {
@@ -70,6 +60,7 @@ struct ProGhosttyApp: App {
     Settings {
       SettingsView()
         .environmentObject(model)
+        .preferredColorScheme(model.appColorScheme)
     }
   }
 }

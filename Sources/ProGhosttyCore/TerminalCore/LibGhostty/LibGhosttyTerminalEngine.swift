@@ -22,7 +22,11 @@ public final class LibGhosttyTerminalEngine: TerminalSessionManager, TerminalSur
   public func closeSession(_ id: TerminalSessionID) {}
   public func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int) {}
   public func writeInput(_ data: Data, to id: TerminalSessionID) {}
+  public func controlToken(for id: TerminalSessionID) -> String? { nil }
   public func viewForSession(_ id: TerminalSessionID) -> NSView? { nil }
+  public func applyPalette(_ palette: TerminalSurfacePalette) {}
+  public func applyFont(family: String, size: CGFloat) {}
+  public func setFocusedSession(_ id: TerminalSessionID?) {}
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {}
   public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {}
 }

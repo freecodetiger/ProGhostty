@@ -10,6 +10,9 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
   }
 
   private var sessions: [TerminalSessionID: SessionState] = [:]
+  private var palette = TerminalSurfacePalette.dark
+  private var fontFamily = FontManager.defaultMonospacedFontName()
+  private var fontSize: CGFloat = 14
   private let continuation: AsyncStream<TerminalEvent>.Continuation
   private var inputHandler: (@MainActor (TerminalSessionID, Data) -> Void)?
   private var activationHandler: (@MainActor (TerminalSessionID) -> Void)?
@@ -25,8 +28,9 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
     let id = TerminalSessionID()
     let textView = NSTextView()
     textView.isEditable = false
-    textView.isSelectable = false
-    textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    textView.isSelectable = true
+    textView.font = terminalFont()
+    TerminalSurfaceStyle.configureTextView(textView, palette: palette)
     textView.string =
       "ProGhostty mock terminal\n\(config.workingDirectory ?? FileManager.default.currentDirectoryPath) $ "
     sessions[id] = SessionState(config: config, view: textView)
@@ -69,6 +73,10 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
     }
   }
 
+  public func controlToken(for id: TerminalSessionID) -> String? {
+    nil
+  }
+
   public func viewForSession(_ id: TerminalSessionID) -> NSView? {
     guard let textView = sessions[id]?.view else {
       return nil
@@ -77,11 +85,28 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
     let scrollView = NSScrollView()
     TerminalSurfaceStyle.configureScrollView(
       scrollView,
-      backgroundColor: NSColor(calibratedWhite: 0.08, alpha: 1)
+      backgroundColor: palette.background
     )
     scrollView.documentView = textView
     return scrollView
   }
+
+  public func applyPalette(_ palette: TerminalSurfacePalette) {
+    self.palette = palette
+    for state in sessions.values {
+      TerminalSurfaceStyle.configureTextView(state.view, palette: palette)
+    }
+  }
+
+  public func applyFont(family: String, size: CGFloat) {
+    fontFamily = family
+    fontSize = size
+    for state in sessions.values {
+      state.view.font = terminalFont()
+    }
+  }
+
+  public func setFocusedSession(_ id: TerminalSessionID?) {}
 
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {
     inputHandler = handler
@@ -144,5 +169,10 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
   private func append(_ text: String, to view: NSTextView) {
     view.textStorage?.append(NSAttributedString(string: text))
     view.scrollToEndOfDocument(nil)
+  }
+
+  private func terminalFont() -> NSFont {
+    NSFont(name: fontFamily, size: fontSize)
+      ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
   }
 }

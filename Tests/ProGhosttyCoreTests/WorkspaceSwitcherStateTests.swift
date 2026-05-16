@@ -43,4 +43,22 @@ struct WorkspaceSwitcherStateTests {
 
     #expect(state.canCreateWorkspaceFromQuery == true)
   }
+
+  @Test func decoratedWorkspacesMarkActiveAndRunningWorkspaces() {
+    let active = Workspace(id: UUID(), name: "Active", rootPath: "/active")
+    let running = Workspace(id: UUID(), name: "Running", rootPath: "/running")
+    let saved = Workspace(id: UUID(), name: "Saved", rootPath: "/saved")
+    let state = WorkspaceSwitcherState(
+      workspaces: [active, running, saved],
+      activeWorkspaceID: active.id,
+      runningWorkspaceIDs: [active.id, running.id]
+    )
+
+    let items = state.decoratedWorkspaces
+
+    #expect(items.map(\.workspace.id) == [active.id, running.id, saved.id])
+    #expect(items[0].status == .active)
+    #expect(items[1].status == .running)
+    #expect(items[2].status == .saved)
+  }
 }

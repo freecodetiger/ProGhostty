@@ -33,8 +33,24 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
     sessionManager.writeInput(data, to: id)
   }
 
+  public func controlToken(for id: TerminalSessionID) -> String? {
+    sessionManager.controlToken(for: id)
+  }
+
   public func viewForSession(_ id: TerminalSessionID) -> NSView? {
     surfaceRegistry.viewForSession(id)
+  }
+
+  public func applyPalette(_ palette: TerminalSurfacePalette) {
+    surfaceRegistry.applyPalette(palette)
+  }
+
+  public func applyFont(family: String, size: CGFloat) {
+    surfaceRegistry.applyFont(family: family, size: size)
+  }
+
+  public func setFocusedSession(_ id: TerminalSessionID?) {
+    surfaceRegistry.setFocusedSession(id)
   }
 
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {
@@ -56,6 +72,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     var waitTimer: DispatchSourceTimer
     var oscParser: OscParser
     var vtBridge: GhosttyVTBridge
+    var controlToken: String
   }
 
   private let surfaceRegistry: PTYTerminalSurfaceRegistry
@@ -72,19 +89,27 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   public func createSession(config: TerminalSessionConfig) throws -> TerminalSessionID {
     let id = TerminalSessionID()
-    let result = try PTYLaunch.spawn(config: config)
+    let token = UUID().uuidString
+    var launchConfig = config
+    launchConfig.environment = Self.controlEnvironment(
+      base: config.environment,
+      session: id,
+      token: token
+    )
+    let result = try PTYLaunch.spawn(config: launchConfig)
     surfaceRegistry.createSurface(session: id)
-    let vtBridge = try GhosttyVTBridge(cols: config.cols, rows: config.rows)
+    let vtBridge = try GhosttyVTBridge(cols: launchConfig.cols, rows: launchConfig.rows)
     let readSource = makeReadSource(session: id, fileDescriptor: result.fileDescriptor)
     let waitTimer = makeWaitTimer(session: id, pid: result.pid)
     sessions[id] = SessionState(
-      config: config,
+      config: launchConfig,
       pid: result.pid,
       fileDescriptor: result.fileDescriptor,
       readSource: readSource,
       waitTimer: waitTimer,
       oscParser: OscParser(),
-      vtBridge: vtBridge
+      vtBridge: vtBridge,
+      controlToken: token
     )
     readSource.resume()
     waitTimer.resume()
@@ -120,6 +145,44 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       guard let base = bytes.baseAddress else { return }
       _ = Darwin.write(fd, base, bytes.count)
     }
+  }
+
+  public func controlToken(for id: TerminalSessionID) -> String? {
+    sessions[id]?.controlToken
+  }
+
+  nonisolated static func controlEnvironment(
+    base: [String: String],
+    session id: TerminalSessionID,
+    token: String,
+    helperSearchPath: String = helperSearchPath()
+  ) -> [String: String] {
+    var environment = base
+    environment["TERM_PROGRAM"] = "ProGhostty"
+    environment["PROGHOSTTY_SESSION_ID"] = id.description
+    environment["PROGHOSTTY_SESSION_TOKEN"] = token
+    let existingPath = environment["PATH"] ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
+    let pathPrefix = helperSearchPath.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !pathPrefix.isEmpty {
+      environment["PATH"] = existingPath.isEmpty ? pathPrefix : "\(pathPrefix):\(existingPath)"
+    }
+    return environment
+  }
+
+  private nonisolated static func helperSearchPath() -> String {
+    guard let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent().path else {
+      return ""
+    }
+    let packageBuildDirectory = URL(fileURLWithPath: executableDirectory)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .standardized
+      .path
+    if packageBuildDirectory != executableDirectory {
+      return "\(executableDirectory):\(packageBuildDirectory)"
+    }
+    return executableDirectory
   }
 
   private func makeReadSource(session id: TerminalSessionID, fileDescriptor fd: Int32)
@@ -183,9 +246,14 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   private struct SurfaceState {
     var scrollView: NSScrollView
     var textView: PTYTextView
+    var lastFrame: GhosttyTerminalFrame? = nil
   }
 
   private var surfaces: [TerminalSessionID: SurfaceState] = [:]
+  private var palette = TerminalSurfacePalette.dark
+  private var fontFamily = FontManager.defaultMonospacedFontName()
+  private var fontSize: CGFloat = 14
+  private var focusedSessionID: TerminalSessionID?
   private var inputHandler: (@MainActor (TerminalSessionID, Data) -> Void)?
   private var activationHandler: (@MainActor (TerminalSessionID) -> Void)?
 
@@ -201,22 +269,16 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       self?.activationHandler?(id)
     }
     textView.isEditable = false
-    textView.isSelectable = false
-    textView.selectedTextAttributes = [
-      .backgroundColor: NSColor.clear,
-      .foregroundColor: NSColor(calibratedWhite: 0.86, alpha: 1),
-    ]
-    textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    textView.textColor = NSColor(calibratedWhite: 0.86, alpha: 1)
-    textView.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 1)
+    textView.isSelectable = true
+    textView.font = terminalFont(weight: .regular)
+    TerminalSurfaceStyle.configureTextView(textView, palette: palette)
     textView.autoresizingMask = [.width, .height]
     textView.isVerticallyResizable = false
     textView.isHorizontallyResizable = false
     textView.textContainerInset = NSSize(width: 14, height: 12)
-    textView.insertionPointColor = NSColor(calibratedWhite: 0.9, alpha: 1)
 
     let scrollView = NSScrollView()
-    TerminalSurfaceStyle.configureScrollView(scrollView, backgroundColor: textView.backgroundColor)
+    TerminalSurfaceStyle.configureScrollView(scrollView, backgroundColor: palette.background)
     scrollView.documentView = textView
     surfaces[id] = SurfaceState(scrollView: scrollView, textView: textView)
   }
@@ -229,6 +291,38 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     surfaces[id]?.scrollView
   }
 
+  public func applyPalette(_ palette: TerminalSurfacePalette) {
+    self.palette = palette
+    for (sessionID, surface) in surfaces {
+      TerminalSurfaceStyle.configureTextView(surface.textView, palette: palette)
+      TerminalSurfaceStyle.configureScrollView(surface.scrollView, backgroundColor: palette.background)
+      if let frame = surface.lastFrame {
+        render(frame, in: surface.textView, isFocused: isFocused(sessionID), scrollToEnd: false)
+      }
+    }
+  }
+
+  public func applyFont(family: String, size: CGFloat) {
+    fontFamily = family
+    fontSize = size
+    for (sessionID, surface) in surfaces {
+      surface.textView.font = terminalFont(weight: .regular)
+      if let frame = surface.lastFrame {
+        render(frame, in: surface.textView, isFocused: isFocused(sessionID), scrollToEnd: false)
+      }
+      surface.textView.window?.invalidateCursorRects(for: surface.textView)
+    }
+  }
+
+  public func setFocusedSession(_ id: TerminalSessionID?) {
+    guard focusedSessionID != id else { return }
+    focusedSessionID = id
+    for (sessionID, surface) in surfaces {
+      guard let frame = surface.lastFrame else { continue }
+      render(frame, in: surface.textView, isFocused: isFocused(sessionID), scrollToEnd: false)
+    }
+  }
+
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {
     inputHandler = handler
   }
@@ -238,19 +332,51 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   }
 
   public func render(_ bridge: GhosttyVTBridge, session id: TerminalSessionID) {
-    guard let textView = surfaces[id]?.textView else { return }
-    render(bridge, in: textView)
+    guard var surface = surfaces[id] else { return }
+    render(bridge, in: surface.textView, session: id, lastFrame: &surface.lastFrame)
+    surfaces[id] = surface
   }
 
-  private func render(_ bridge: GhosttyVTBridge, in view: NSTextView) {
+  private func render(
+    _ bridge: GhosttyVTBridge,
+    in view: NSTextView,
+    session id: TerminalSessionID,
+    lastFrame: inout GhosttyTerminalFrame?
+  ) {
     if let frame = try? bridge.frame() {
-      view.textStorage?.setAttributedString(TerminalAttributedRenderer().attributedString(for: frame))
+      lastFrame = frame
+      render(frame, in: view, isFocused: isFocused(id), scrollToEnd: true)
     } else if let attributed = try? attributedTerminalSnapshot(from: bridge) {
+      lastFrame = nil
       view.textStorage?.setAttributedString(attributed)
+      view.window?.invalidateCursorRects(for: view)
+      view.scrollToEndOfDocument(nil)
     } else if let text = try? bridge.plainText() {
+      lastFrame = nil
       view.string = text
+      view.window?.invalidateCursorRects(for: view)
+      view.scrollToEndOfDocument(nil)
     }
-    view.scrollToEndOfDocument(nil)
+  }
+
+  private func render(_ frame: GhosttyTerminalFrame, in view: NSTextView, isFocused: Bool, scrollToEnd: Bool) {
+    view.textStorage?.setAttributedString(
+      TerminalAttributedRenderer(
+        fontFamily: fontFamily,
+        fontSize: fontSize,
+        palette: palette,
+        isFocused: isFocused
+      )
+        .attributedString(for: frame)
+    )
+    view.window?.invalidateCursorRects(for: view)
+    if scrollToEnd {
+      view.scrollToEndOfDocument(nil)
+    }
+  }
+
+  private func isFocused(_ id: TerminalSessionID) -> Bool {
+    focusedSessionID.map { $0 == id } ?? true
   }
 
   private func attributedTerminalSnapshot(from bridge: GhosttyVTBridge) throws -> NSAttributedString {
@@ -264,10 +390,10 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       <style>
       body {
         margin: 0;
-        background: #141416;
-        color: #dbdbdb;
-        font-family: -apple-system-monospaced, Menlo, monospace;
-        font-size: 13px;
+        background: \(Self.hexString(for: palette.background));
+        color: \(Self.hexString(for: palette.foreground));
+        font-family: "\(fontFamily)", -apple-system-monospaced, Menlo, monospace;
+        font-size: \(Int(fontSize))px;
         white-space: pre;
       }
       pre { margin: 0; }
@@ -284,25 +410,82 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     let rendered = try NSMutableAttributedString(data: data, options: options, documentAttributes: nil)
     rendered.addAttributes(
       [
-        .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+        .font: terminalFont(weight: .regular),
         .backgroundColor: NSColor(calibratedWhite: 0.08, alpha: 1),
       ],
       range: NSRange(location: 0, length: rendered.length)
     )
     return rendered
   }
+
+  private func terminalFont(weight: NSFont.Weight) -> NSFont {
+    if let named = NSFont(name: fontFamily, size: fontSize) {
+      if weight == .semibold {
+        return NSFontManager.shared.convert(named, toHaveTrait: .boldFontMask)
+      }
+      return named
+    }
+    return NSFont.monospacedSystemFont(ofSize: fontSize, weight: weight)
+  }
+
+  private static func hexString(for color: NSColor) -> String {
+    let rgb = color.usingColorSpace(.deviceRGB) ?? color
+    return String(
+      format: "#%02X%02X%02X",
+      Int(round(rgb.redComponent * 255)),
+      Int(round(rgb.greenComponent * 255)),
+      Int(round(rgb.blueComponent * 255))
+    )
+  }
 }
 
-private final class PTYTextView: NSTextView {
+final class PTYTextView: NSTextView {
   var inputHandler: ((Data) -> Void)?
   var activationHandler: (() -> Void)?
+  private var isHandlingTextSelection = false
+  private var backgroundDragSelectionAnchor: Int?
 
   override var acceptsFirstResponder: Bool { true }
+
+  override func resetCursorRects() {
+    registerSelectableTextCursorRects()
+  }
 
   override func mouseDown(with event: NSEvent) {
     activationHandler?()
     window?.makeFirstResponder(self)
+    let location = convert(event.locationInWindow, from: nil)
+    guard isSelectableTextPoint(location) else {
+      isHandlingTextSelection = false
+      backgroundDragSelectionAnchor = characterIndexForSelectionBoundary(at: location)
+      clearSelectionForTerminalBackgroundClick()
+      return
+    }
+    isHandlingTextSelection = true
+    backgroundDragSelectionAnchor = nil
     super.mouseDown(with: event)
+  }
+
+  override func mouseDragged(with event: NSEvent) {
+    if isHandlingTextSelection {
+      super.mouseDragged(with: event)
+      return
+    }
+    guard
+      let anchor = backgroundDragSelectionAnchor,
+      let current = characterIndexForSelectionBoundary(at: convert(event.locationInWindow, from: nil))
+    else {
+      return
+    }
+    setSelectionRange(from: anchor, to: current)
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    if isHandlingTextSelection {
+      super.mouseUp(with: event)
+    }
+    isHandlingTextSelection = false
+    backgroundDragSelectionAnchor = nil
   }
 
   override func keyDown(with event: NSEvent) {
@@ -329,6 +512,112 @@ private final class PTYTextView: NSTextView {
       return
     }
     inputHandler?(Data(text.utf8))
+  }
+
+  func isSelectableTextPoint(_ point: NSPoint) -> Bool {
+    guard
+      let textContainer,
+      let layoutManager,
+      layoutManager.numberOfGlyphs > 0
+    else {
+      return false
+    }
+
+    layoutManager.ensureLayout(for: textContainer)
+    let containerPoint = NSPoint(
+      x: point.x - textContainerOrigin.x,
+      y: point.y - textContainerOrigin.y
+    )
+    var fraction: CGFloat = 0
+    let glyphIndex = layoutManager.glyphIndex(
+      for: containerPoint,
+      in: textContainer,
+      fractionOfDistanceThroughGlyph: &fraction
+    )
+    guard glyphIndex < layoutManager.numberOfGlyphs else { return false }
+
+    let glyphRect = layoutManager.boundingRect(
+      forGlyphRange: NSRange(location: glyphIndex, length: 1),
+      in: textContainer
+    ).insetBy(dx: -1, dy: -1)
+    guard glyphRect.contains(containerPoint) else { return false }
+
+    let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+    return isSelectableCharacter(at: characterIndex)
+  }
+
+  private func registerSelectableTextCursorRects() {
+    guard
+      let textContainer,
+      let layoutManager,
+      layoutManager.numberOfGlyphs > 0
+    else {
+      return
+    }
+
+    layoutManager.ensureLayout(for: textContainer)
+    for glyphIndex in 0..<layoutManager.numberOfGlyphs {
+      let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+      guard isSelectableCharacter(at: characterIndex) else { continue }
+      var rect = layoutManager.boundingRect(
+        forGlyphRange: NSRange(location: glyphIndex, length: 1),
+        in: textContainer
+      )
+      rect.origin.x += textContainerOrigin.x
+      rect.origin.y += textContainerOrigin.y
+      addCursorRect(rect.insetBy(dx: -1, dy: -1), cursor: .iBeam)
+    }
+  }
+
+  private func isSelectableCharacter(at characterIndex: Int) -> Bool {
+    let nsString = string as NSString
+    guard characterIndex >= 0, characterIndex < nsString.length else { return false }
+    guard let scalar = UnicodeScalar(Int(nsString.character(at: characterIndex))) else { return false }
+    return !CharacterSet.whitespacesAndNewlines.contains(scalar)
+  }
+
+  private func characterIndexForSelectionBoundary(at point: NSPoint) -> Int? {
+    guard
+      let textContainer,
+      let layoutManager,
+      layoutManager.numberOfGlyphs > 0
+    else {
+      return nil
+    }
+
+    layoutManager.ensureLayout(for: textContainer)
+    let containerPoint = NSPoint(
+      x: point.x - textContainerOrigin.x,
+      y: point.y - textContainerOrigin.y
+    )
+    let textLength = (string as NSString).length
+    let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+    guard glyphIndex < layoutManager.numberOfGlyphs else {
+      return textLength
+    }
+    let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+    let glyphRect = layoutManager.boundingRect(
+      forGlyphRange: NSRange(location: glyphIndex, length: 1),
+      in: textContainer
+    )
+    if containerPoint.x > glyphRect.midX {
+      return min(textLength, characterIndex + 1)
+    }
+    return characterIndex
+  }
+
+  private func setSelectionRange(from anchor: Int, to current: Int) {
+    let lower = min(anchor, current)
+    let upper = max(anchor, current)
+    guard upper > lower else { return }
+    setSelectedRange(NSRange(location: lower, length: upper - lower))
+    needsDisplay = true
+  }
+
+  private func clearSelectionForTerminalBackgroundClick() {
+    guard selectedRange().length > 0 else { return }
+    setSelectedRange(NSRange(location: 0, length: 0))
+    needsDisplay = true
   }
 
   private func encodedInput(for event: NSEvent) -> Data? {

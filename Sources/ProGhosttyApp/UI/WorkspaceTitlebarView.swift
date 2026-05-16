@@ -4,22 +4,13 @@ import SwiftUI
 
 struct WorkspaceTitlebarView: NSViewRepresentable {
   let title: String
-  let workspaces: [Workspace]
-  let activeWorkspaceID: UUID?
-  let onActivate: (UUID) -> Void
-  let onOpenSwitcher: () -> Void
-  let onNewWorkspace: () -> Void
-  let onManageWorkspaces: () -> Void
+  let tooltip: String?
+  let backgroundColor: NSColor
+  let usesDarkAppearance: Bool
   let onSettings: () -> Void
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(
-      onActivate: onActivate,
-      onOpenSwitcher: onOpenSwitcher,
-      onNewWorkspace: onNewWorkspace,
-      onManageWorkspaces: onManageWorkspaces,
-      onSettings: onSettings
-    )
+    Coordinator(onSettings: onSettings)
   }
 
   func makeNSView(context: Context) -> NSView {
@@ -28,55 +19,59 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
 
   func updateNSView(_ view: NSView, context: Context) {
     context.coordinator.title = title
-    context.coordinator.workspaces = workspaces
-    context.coordinator.activeWorkspaceID = activeWorkspaceID
-    context.coordinator.onActivate = onActivate
-    context.coordinator.onOpenSwitcher = onOpenSwitcher
-    context.coordinator.onNewWorkspace = onNewWorkspace
-    context.coordinator.onManageWorkspaces = onManageWorkspaces
+    context.coordinator.tooltip = tooltip
+    context.coordinator.backgroundColor = backgroundColor
+    context.coordinator.usesDarkAppearance = usesDarkAppearance
     context.coordinator.onSettings = onSettings
 
-    DispatchQueue.main.async {
-      guard let window = view.window else { return }
-      context.coordinator.installIfNeeded(in: window)
-      context.coordinator.updateTitle(in: window)
+    if let window = view.window {
+      apply(to: window, context: context)
+    } else {
+      DispatchQueue.main.async {
+        guard let window = view.window else { return }
+        apply(to: window, context: context)
+      }
     }
+  }
+
+  private func apply(to window: NSWindow, context: Context) {
+    context.coordinator.installIfNeeded(in: window)
+    context.coordinator.updateTitle(in: window)
+    context.coordinator.updateWindowAppearance(window)
   }
 
   @MainActor final class Coordinator: NSObject {
     var title: String = "ProGhostty"
-    var workspaces: [Workspace] = []
-    var activeWorkspaceID: UUID?
-    var onActivate: (UUID) -> Void
-    var onOpenSwitcher: () -> Void
-    var onNewWorkspace: () -> Void
-    var onManageWorkspaces: () -> Void
+    var tooltip: String?
+    var backgroundColor: NSColor = .black
+    var usesDarkAppearance = true
     var onSettings: () -> Void
 
     private weak var installedWindow: NSWindow?
     private var accessory: NSTitlebarAccessoryViewController?
     private let button = NSButton(title: "ProGhostty", target: nil, action: nil)
+    private let titlebarBackgroundView = TitlebarBackgroundView()
+    private var titlebarBackgroundConstraints: [NSLayoutConstraint] = []
+    private let notificationObservers = NotificationObserverBag()
 
-    init(
-      onActivate: @escaping (UUID) -> Void,
-      onOpenSwitcher: @escaping () -> Void,
-      onNewWorkspace: @escaping () -> Void,
-      onManageWorkspaces: @escaping () -> Void,
-      onSettings: @escaping () -> Void
-    ) {
-      self.onActivate = onActivate
-      self.onOpenSwitcher = onOpenSwitcher
-      self.onNewWorkspace = onNewWorkspace
-      self.onManageWorkspaces = onManageWorkspaces
+    init(onSettings: @escaping () -> Void) {
       self.onSettings = onSettings
       super.init()
+      titlebarBackgroundView.identifier = ProGhosttyWindowAppearance.titlebarBackgroundIdentifier
       button.target = self
-      button.action = #selector(showMenu)
+      button.action = #selector(openSettings)
       button.bezelStyle = .inline
       button.isBordered = false
+      button.wantsLayer = true
+      button.layer?.backgroundColor = NSColor.clear.cgColor
       button.font = .systemFont(ofSize: 12, weight: .medium)
       button.contentTintColor = .secondaryLabelColor
+      button.lineBreakMode = .byTruncatingMiddle
+      button.cell?.lineBreakMode = .byTruncatingMiddle
+      button.cell?.wraps = false
       button.setContentHuggingPriority(.required, for: .horizontal)
+      button.widthAnchor.constraint(lessThanOrEqualToConstant: 360).isActive = true
+      titlebarBackgroundView.wantsLayer = true
     }
 
     func installIfNeeded(in window: NSWindow) {
@@ -88,65 +83,213 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       }
 
       installedWindow = window
+      updateWindowAppearance(window)
       let controller = NSTitlebarAccessoryViewController()
       controller.layoutAttribute = .right
       controller.view = button
       accessory = controller
       window.addTitlebarAccessoryViewController(controller)
+      installTitlebarBackground(in: window)
+      installWindowObservers(for: window)
     }
 
     func updateTitle(in window: NSWindow) {
       window.title = title
       button.title = title
+      button.toolTip = tooltip
     }
 
-    @objc private func showMenu() {
-      let menu = NSMenu()
-      menu.addItem(TitlebarMenuItem(title: "Switch Workspace...") { [weak self] in
-        self?.onOpenSwitcher()
-      })
-      menu.addItem(TitlebarMenuItem(title: "New Workspace") { [weak self] in
-        self?.onNewWorkspace()
-      })
+    func updateWindowAppearance(_ window: NSWindow) {
+      ProGhosttyWindowAppearance.applyTerminalChrome(
+        to: window,
+        backgroundColor: backgroundColor,
+        usesDarkAppearance: usesDarkAppearance
+      )
+      titlebarBackgroundView.layer?.backgroundColor = backgroundColor.cgColor
+      window.isMovableByWindowBackground = false
+      installTitlebarBackground(in: window)
+      harmonizeTitlebarMaterials(in: window)
+      keepTitlebarBackgroundOrdered(in: window)
+    }
 
-      if !workspaces.isEmpty {
-        menu.addItem(.separator())
-        for workspace in workspaces {
-          let item = TitlebarMenuItem(title: workspace.name) { [weak self] in
-            self?.onActivate(workspace.id)
-          }
-          item.state = workspace.id == activeWorkspaceID ? .on : .off
-          menu.addItem(item)
-        }
+    private func installTitlebarBackground(in window: NSWindow) {
+      guard let titlebarHost = titlebarHost(in: window) else { return }
+
+      if titlebarBackgroundView.superview !== titlebarHost {
+        NSLayoutConstraint.deactivate(titlebarBackgroundConstraints)
+        titlebarBackgroundConstraints.removeAll()
+        titlebarBackgroundView.removeFromSuperview()
+        titlebarBackgroundView.translatesAutoresizingMaskIntoConstraints = false
+        titlebarHost.addSubview(titlebarBackgroundView, positioned: .above, relativeTo: nil)
+        titlebarBackgroundConstraints = [
+          titlebarBackgroundView.leadingAnchor.constraint(equalTo: titlebarHost.leadingAnchor),
+          titlebarBackgroundView.trailingAnchor.constraint(equalTo: titlebarHost.trailingAnchor),
+          titlebarBackgroundView.topAnchor.constraint(equalTo: titlebarHost.topAnchor),
+          titlebarBackgroundView.bottomAnchor.constraint(equalTo: titlebarHost.bottomAnchor),
+        ]
+        NSLayoutConstraint.activate(titlebarBackgroundConstraints)
       }
 
-      menu.addItem(.separator())
-      menu.addItem(TitlebarMenuItem(title: "Manage Workspaces...") { [weak self] in
-        self?.onManageWorkspaces()
-      })
-      menu.addItem(TitlebarMenuItem(title: "Settings...") { [weak self] in
-        self?.onSettings()
-      })
+      keepTitlebarBackgroundOrdered(in: window)
+    }
 
-      menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 4), in: button)
+    private func installWindowObservers(for window: NSWindow) {
+      notificationObservers.removeAll()
+
+      let notifications: [Notification.Name] = [
+        NSWindow.didBecomeKeyNotification,
+        NSWindow.didResignKeyNotification,
+        NSWindow.didBecomeMainNotification,
+        NSWindow.didResignMainNotification,
+      ]
+      for name in notifications {
+        let observer = NotificationCenter.default.addObserver(
+          forName: name,
+          object: window,
+          queue: .main
+        ) { [weak self, weak window] _ in
+          DispatchQueue.main.async {
+            guard let self, let window else { return }
+            self.updateWindowAppearance(window)
+          }
+        }
+        notificationObservers.append(observer)
+      }
+    }
+
+    private func harmonizeTitlebarMaterials(in window: NSWindow) {
+      guard let titlebarHost = titlebarHost(in: window) else { return }
+      for visualEffectView in titlebarHost.descendants(of: NSVisualEffectView.self) {
+        visualEffectView.blendingMode = .withinWindow
+        visualEffectView.material = .windowBackground
+        visualEffectView.state = .active
+        visualEffectView.wantsLayer = true
+        visualEffectView.layer?.backgroundColor = backgroundColor.cgColor
+      }
+    }
+
+    private func keepTitlebarBackgroundOrdered(in window: NSWindow) {
+      guard
+        let titlebarHost = titlebarHost(in: window),
+        titlebarBackgroundView.superview === titlebarHost
+      else {
+        return
+      }
+
+      titlebarHost.addSubview(titlebarBackgroundView, positioned: .above, relativeTo: nil)
+
+      let controlsToPreserve = [
+        window.standardWindowButton(.closeButton),
+        window.standardWindowButton(.miniaturizeButton),
+        window.standardWindowButton(.zoomButton),
+        button,
+      ].compactMap { $0 }
+
+      for control in controlsToPreserve {
+        guard let directChild = titlebarHost.directChild(containing: control),
+          directChild !== titlebarBackgroundView
+        else {
+          continue
+        }
+        titlebarHost.addSubview(directChild, positioned: .above, relativeTo: titlebarBackgroundView)
+      }
+    }
+
+    private func titlebarHost(in window: NSWindow) -> NSView? {
+      window.standardWindowButton(.closeButton)?.superview
+        ?? window.contentView?.superview
+    }
+
+    @objc private func openSettings() {
+      onSettings()
     }
   }
 }
 
-@MainActor private final class TitlebarMenuItem: NSMenuItem {
-  private let handler: () -> Void
+private final class TitlebarBackgroundView: NSView {
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    nil
+  }
+}
 
-  init(title: String, handler: @escaping () -> Void) {
-    self.handler = handler
-    super.init(title: title, action: #selector(run), keyEquivalent: "")
-    target = self
+@MainActor
+enum ProGhosttyWindowAppearance {
+  static let titlebarBackgroundIdentifier = NSUserInterfaceItemIdentifier("ProGhosttyTitlebarBackground")
+
+  static func applyTerminalChrome(
+    to window: NSWindow,
+    backgroundColor: NSColor,
+    usesDarkAppearance: Bool
+  ) {
+    window.appearance = NSAppearance(named: usesDarkAppearance ? .darkAqua : .aqua)
+    window.titleVisibility = .hidden
+    window.titlebarAppearsTransparent = true
+    window.titlebarSeparatorStyle = .none
+    window.styleMask.insert(.fullSizeContentView)
+    window.isOpaque = true
+    window.backgroundColor = backgroundColor
+
+    let background = backgroundColor.cgColor
+    window.contentView?.wantsLayer = true
+    window.contentView?.layer?.backgroundColor = background
+    window.contentView?.superview?.wantsLayer = true
+    window.contentView?.superview?.layer?.backgroundColor = background
+
+    for view in window.contentView?.superview?.descendants(matchingIdentifier: titlebarBackgroundIdentifier) ?? [] {
+      view.wantsLayer = true
+      view.layer?.backgroundColor = background
+    }
+  }
+}
+
+private final class NotificationObserverBag {
+  private var observers: [NSObjectProtocol] = []
+
+  func append(_ observer: NSObjectProtocol) {
+    observers.append(observer)
   }
 
-  required init(coder: NSCoder) {
-    fatalError("init(coder:) has not been implemented")
+  func removeAll() {
+    for observer in observers {
+      NotificationCenter.default.removeObserver(observer)
+    }
+    observers.removeAll()
   }
 
-  @objc private func run() {
-    handler()
+  deinit {
+    removeAll()
+  }
+}
+
+private extension NSView {
+  func directChild(containing descendant: NSView) -> NSView? {
+    for subview in subviews {
+      if subview === descendant || descendant.isDescendant(of: subview) {
+        return subview
+      }
+    }
+    return nil
+  }
+
+  func descendants<T: NSView>(of type: T.Type) -> [T] {
+    var result: [T] = []
+    for subview in subviews {
+      if let match = subview as? T {
+        result.append(match)
+      }
+      result.append(contentsOf: subview.descendants(of: type))
+    }
+    return result
+  }
+
+  func descendants(matchingIdentifier identifier: NSUserInterfaceItemIdentifier) -> [NSView] {
+    var result: [NSView] = []
+    for subview in subviews {
+      if subview.identifier == identifier {
+        result.append(subview)
+      }
+      result.append(contentsOf: subview.descendants(matchingIdentifier: identifier))
+    }
+    return result
   }
 }

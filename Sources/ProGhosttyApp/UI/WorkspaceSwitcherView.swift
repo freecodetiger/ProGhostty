@@ -7,6 +7,8 @@ struct WorkspaceSwitcherView: View {
   @FocusState private var isSearchFocused: Bool
 
   var body: some View {
+    let text = model.appText
+
     ZStack {
       Color.black.opacity(0.18)
         .ignoresSafeArea()
@@ -15,7 +17,7 @@ struct WorkspaceSwitcherView: View {
         }
 
       VStack(spacing: 0) {
-        TextField("Search workspaces", text: Binding(
+        TextField(text.searchWorkspaces, text: Binding(
           get: { model.workspaceSwitcherState.query },
           set: { model.updateWorkspaceSwitcherQuery($0) }
         ))
@@ -29,14 +31,17 @@ struct WorkspaceSwitcherView: View {
           .opacity(0.45)
 
         VStack(spacing: 2) {
-          ForEach(model.workspaceSwitcherState.filteredWorkspaces) { workspace in
+          ForEach(model.workspaceSwitcherState.decoratedWorkspaces) { item in
             WorkspaceSwitcherRow(
-              workspace: workspace,
-              isActive: model.workspaceSwitcherState.activeWorkspaceID == workspace.id,
-              isSelected: model.workspaceSwitcherState.selectedWorkspaceID == workspace.id,
-              sessionCount: model.sessionCount(forWorkspaceListID: workspace.id)
+              item: item,
+              isSelected: model.workspaceSwitcherState.selectedWorkspaceID == item.workspace.id,
+              sessionCount: model.sessionCount(forWorkspaceListID: item.workspace.id),
+              canDelete: item.status == .saved,
+              text: text
             ) {
-              model.activateWorkspaceFromSwitcher(workspace.id)
+              model.activateWorkspaceFromSwitcher(item.workspace.id)
+            } deleteAction: {
+              model.deleteWorkspaceFromSwitcher(item.workspace.id)
             }
           }
 
@@ -48,7 +53,7 @@ struct WorkspaceSwitcherView: View {
               HStack(spacing: 10) {
                 Image(systemName: "plus")
                   .font(.system(size: 13, weight: .medium))
-                Text("Create \"\(model.workspaceSwitcherState.query.trimmingCharacters(in: .whitespacesAndNewlines))\"")
+                Text(text.createWorkspace(model.workspaceSwitcherState.query.trimmingCharacters(in: .whitespacesAndNewlines)))
                   .lineLimit(1)
                 Spacer()
               }
@@ -82,47 +87,102 @@ struct WorkspaceSwitcherView: View {
 }
 
 private struct WorkspaceSwitcherRow: View {
-  let workspace: Workspace
-  let isActive: Bool
+  let item: WorkspaceSwitcherState.DecoratedWorkspace
   let isSelected: Bool
   let sessionCount: Int
+  let canDelete: Bool
+  let text: AppText
   let action: () -> Void
+  let deleteAction: () -> Void
 
   var body: some View {
-    Button(action: action) {
-      HStack(spacing: 10) {
-        Image(systemName: isActive ? "checkmark" : "")
-          .font(.system(size: 12, weight: .semibold))
-          .frame(width: 14)
+    HStack(spacing: 10) {
+      Image(systemName: iconName)
+        .font(.system(size: 12, weight: .semibold))
+        .frame(width: 14)
+        .foregroundStyle(iconColor)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(item.workspace.name)
+          .font(.system(size: 13, weight: .medium))
+          .lineLimit(1)
+        Text(subtitle)
+          .font(.system(size: 11))
           .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
 
-        VStack(alignment: .leading, spacing: 2) {
-          Text(workspace.name)
-            .font(.system(size: 13, weight: .medium))
-            .lineLimit(1)
-          Text(subtitle)
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
+      Spacer()
 
-        Spacer()
-
-        Text("\(sessionCount)")
+      HStack(spacing: 8) {
+        Text(statusTitle)
           .font(.system(size: 11, weight: .medium))
           .foregroundStyle(.secondary)
-          .monospacedDigit()
+
+        if sessionCount > 0 {
+          Text("\(sessionCount)")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+        }
+
+        if canDelete {
+          Button(role: .destructive) {
+            deleteAction()
+          } label: {
+            Image(systemName: "trash")
+              .font(.system(size: 11, weight: .medium))
+              .frame(width: 20, height: 20)
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(.secondary)
+          .opacity(isSelected ? 1 : 0.38)
+        }
       }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 8)
-      .background(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
-      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
-    .buttonStyle(.plain)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .background(background)
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .contentShape(Rectangle())
+    .onTapGesture(perform: action)
   }
 
   private var subtitle: String {
-    workspace.rootPath ?? "No root path"
+    item.workspace.rootPath ?? "No root path"
+  }
+
+  private var iconName: String {
+    switch item.status {
+    case .active:
+      return "checkmark"
+    case .running:
+      return "circle.fill"
+    case .saved:
+      return ""
+    }
+  }
+
+  private var iconColor: Color {
+    item.status == .active ? .primary : .secondary
+  }
+
+  private var statusTitle: String {
+    switch item.status {
+    case .active:
+      return text.current
+    case .running:
+      return text.running
+    case .saved:
+      return text.savedStatus
+    }
+  }
+
+  private var background: Color {
+    if item.status == .active {
+      return Color.primary.opacity(0.10)
+    }
+    return isSelected ? Color.primary.opacity(0.06) : Color.clear
   }
 }
 

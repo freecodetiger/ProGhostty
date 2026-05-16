@@ -15,6 +15,8 @@ typedef struct {
   uint8_t bg_r;
   uint8_t bg_g;
   uint8_t bg_b;
+  bool fg_default;
+  bool bg_default;
   bool bold;
   bool italic;
   bool faint;

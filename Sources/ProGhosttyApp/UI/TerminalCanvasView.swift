@@ -6,17 +6,8 @@ struct TerminalCanvasView: View {
   @EnvironmentObject private var model: AppModel
 
   var body: some View {
-    ZStack {
-      TerminalView()
-
-      if model.isWorkspaceSwitcherPresented {
-        WorkspaceSwitcherView()
-          .environmentObject(model)
-          .transition(.opacity.combined(with: .scale(scale: 0.98)))
-      }
-    }
-    .background(Color(red: 0.08, green: 0.08, blue: 0.085))
-    .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
+    TerminalView()
+      .background(Color(nsColor: model.terminalBackgroundColor))
   }
 }
 
@@ -34,7 +25,7 @@ struct TerminalView: View {
           .padding(12)
           .textSelection(.enabled)
       }
-      .background(Color(nsColor: .textBackgroundColor))
+      .background(Color(nsColor: model.terminalBackgroundColor))
     }
   }
 
@@ -63,14 +54,12 @@ private struct TerminalTreeLayoutView: NSViewControllerRepresentable {
       onSelect: { model.selectPane($0) },
       onSplit: { paneID, axis in model.splitPane(paneID, axis: axis) },
       onClose: { paneID in model.closePane(paneID) },
+      menuText: model.appText,
+      palette: model.terminalPalette,
       onResize: { paneID, rows, cols in model.resizePane(paneID, rows: rows, cols: cols) },
       onRatioChanged: { splitID, ratio in model.updateSplitRatio(splitID, ratio: ratio) },
       onWorkspaceSwitcher: { model.openWorkspaceSwitcher() },
-      onNewWorkspace: { model.createAndOpenWorkspace(name: "Workspace") },
-      onManageWorkspaces: { model.section = .workspaces },
-      onSettings: {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-      },
+      onSettings: { model.openSettingsWindow() },
       viewForSession: { model.surfaceView(for: $0) }
     )
   }
@@ -86,19 +75,19 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
   private var onSelect: ((UUID) -> Void)?
   private var onSplit: ((UUID, SplitAxis) -> Void)?
   private var onClose: ((UUID) -> Void)?
+  private var menuText = AppText(language: "system")
+  private var palette = TerminalSurfacePalette.dark
   private var onResize: ((UUID, Int, Int) -> Void)?
   private var onRatioChanged: ((UUID, Double) -> Void)?
   private var onWorkspaceSwitcher: (() -> Void)?
-  private var onNewWorkspace: (() -> Void)?
-  private var onManageWorkspaces: (() -> Void)?
   private var onSettings: (() -> Void)?
   private var viewForSession: ((TerminalSessionID) -> NSView?)?
   private let minimumPaneLength = CGFloat(SplitRatioLayout.minimumPaneLength)
+  private var hasMultiplePanes = false
 
   override func loadView() {
     view = NSView()
     view.wantsLayer = true
-    view.layer?.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 1).cgColor
   }
 
   func update(
@@ -107,24 +96,27 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     onSelect: @escaping (UUID) -> Void,
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
+    menuText: AppText,
+    palette: TerminalSurfacePalette,
     onResize: @escaping (UUID, Int, Int) -> Void,
     onRatioChanged: @escaping (UUID, Double) -> Void,
     onWorkspaceSwitcher: @escaping () -> Void,
-    onNewWorkspace: @escaping () -> Void,
-    onManageWorkspaces: @escaping () -> Void,
     onSettings: @escaping () -> Void,
     viewForSession: @escaping (TerminalSessionID) -> NSView?
   ) {
-    DebugLog.write("SplitContainer update rootLeaves=\(PaneTreeReducer.listLeaves(in: root).count)")
+    let leafCount = PaneTreeReducer.listLeaves(in: root).count
+    DebugLog.write("SplitContainer update rootLeaves=\(leafCount)")
+    hasMultiplePanes = leafCount > 1
     self.selectedPaneID = selectedPaneID
     self.onSelect = onSelect
     self.onSplit = onSplit
     self.onClose = onClose
+    self.menuText = menuText
+    self.palette = palette
+    view.layer?.backgroundColor = palette.background.cgColor
     self.onResize = onResize
     self.onRatioChanged = onRatioChanged
     self.onWorkspaceSwitcher = onWorkspaceSwitcher
-    self.onNewWorkspace = onNewWorkspace
-    self.onManageWorkspaces = onManageWorkspaces
     self.onSettings = onSettings
     self.viewForSession = viewForSession
 
@@ -136,7 +128,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     }
 
     guard currentRoot != root else {
-      updateSelection(in: self, selectedPaneID: selectedPaneID)
+      updatePaneAppearance(in: self, selectedPaneID: selectedPaneID)
       return
     }
 
@@ -211,10 +203,10 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
         onSelect: { [weak self] paneID in self?.onSelect?(paneID) },
         onSplit: { [weak self] paneID, axis in self?.onSplit?(paneID, axis) },
         onClose: { [weak self] paneID in self?.onClose?(paneID) },
+        menuText: menuText,
+        palette: palette,
         onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
         onWorkspaceSwitcher: { [weak self] in self?.onWorkspaceSwitcher?() },
-        onNewWorkspace: { [weak self] in self?.onNewWorkspace?() },
-        onManageWorkspaces: { [weak self] in self?.onManageWorkspaces?() },
         onSettings: { [weak self] in self?.onSettings?() }
       )
       return controller
@@ -226,14 +218,18 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       controller.onSelect = onSelect
       controller.onSplit = onSplit
       controller.onClose = onClose
+      controller.menuText = menuText
+      controller.palette = palette
+      controller.hasMultiplePanes = hasMultiplePanes
       controller.onResize = onResize
       controller.onRatioChanged = onRatioChanged
       controller.onWorkspaceSwitcher = onWorkspaceSwitcher
-      controller.onNewWorkspace = onNewWorkspace
-      controller.onManageWorkspaces = onManageWorkspaces
       controller.onSettings = onSettings
       controller.viewForSession = viewForSession
       let splitView = TerminalSplitView()
+      splitView.customDividerColor = palette.splitDivider
+      splitView.wantsLayer = true
+      splitView.layer?.backgroundColor = palette.background.cgColor
       splitView.isVertical = split.axis == .horizontal
       splitView.dividerStyle = .thin
       splitView.delegate = controller
@@ -332,12 +328,20 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     onRatioChanged?(splitId, value)
   }
 
-  private func updateSelection(in controller: NSViewController, selectedPaneID: UUID?) {
+  private func updatePaneAppearance(in controller: NSViewController, selectedPaneID: UUID?) {
+    controller.view.layer?.backgroundColor = palette.background.cgColor
+    if let split = controller.view as? TerminalSplitView {
+      split.customDividerColor = palette.splitDivider
+    }
     if let pane = controller as? TerminalPaneViewController {
-      pane.setSelected(pane.pane.paneId == selectedPaneID)
+      updateLeaf(
+        pane,
+        isSelected: pane.pane.paneId == selectedPaneID,
+        selectedPaneID: selectedPaneID
+      )
     }
     for child in controller.children {
-      updateSelection(in: child, selectedPaneID: selectedPaneID)
+      updatePaneAppearance(in: child, selectedPaneID: selectedPaneID)
     }
   }
 
@@ -345,7 +349,11 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     switch node {
     case .leaf(let pane):
       guard let leaf = controller as? TerminalPaneViewController else { return false }
-      leaf.setSelected(pane.paneId == selectedPaneID)
+      updateLeaf(
+        leaf,
+        isSelected: pane.paneId == selectedPaneID,
+        selectedPaneID: selectedPaneID
+      )
       return true
     case .split(let split):
       guard let splitController = controller as? SplitContainerViewController else { return false }
@@ -353,6 +361,10 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       splitController.splitId = split.id
       splitController.targetRatio = split.ratio
       splitController.selectedPaneID = selectedPaneID
+      splitController.palette = palette
+      splitController.hasMultiplePanes = hasMultiplePanes
+      splitController.view.layer?.backgroundColor = palette.background.cgColor
+      (splitController.view as? TerminalSplitView)?.customDividerColor = palette.splitDivider
       guard
         sync(node: split.first, with: splitController.children[0], selectedPaneID: selectedPaneID),
         sync(node: split.second, with: splitController.children[1], selectedPaneID: selectedPaneID)
@@ -375,6 +387,25 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     default:
       return false
     }
+  }
+
+  private func updateLeaf(
+    _ leaf: TerminalPaneViewController,
+    isSelected: Bool,
+    selectedPaneID: UUID?
+  ) {
+    leaf.update(
+      isSelected: isSelected,
+      onSelect: { [weak self] paneID in self?.onSelect?(paneID) },
+      onSplit: { [weak self] paneID, axis in self?.onSplit?(paneID, axis) },
+      onClose: { [weak self] paneID in self?.onClose?(paneID) },
+      menuText: menuText,
+      palette: palette,
+      dimsWhenInactive: hasMultiplePanes,
+      onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
+      onWorkspaceSwitcher: { [weak self] in self?.onWorkspaceSwitcher?() },
+      onSettings: { [weak self] in self?.onSettings?() }
+    )
   }
 
   func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool {
@@ -415,6 +446,27 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
 private final class TerminalSplitView: NSSplitView {
   var isUserResizingDivider = false
   var onUserResizeFinished: (() -> Void)?
+  private let dividerInteractionOutset: CGFloat = 4
+  var customDividerColor = TerminalSurfacePalette.dark.splitDivider {
+    didSet {
+      needsDisplay = true
+    }
+  }
+
+  override var dividerColor: NSColor {
+    customDividerColor
+  }
+
+  override func drawDivider(in rect: NSRect) {
+    customDividerColor.setFill()
+    rect.fill()
+  }
+
+  override func resetCursorRects() {
+    for index in 0..<(max(0, arrangedSubviews.count - 1)) {
+      addCursorRect(dividerCursorRect(afterSubviewAt: index), cursor: dividerCursor)
+    }
+  }
 
   override func mouseDown(with event: NSEvent) {
     guard dividerIndex(at: event) != nil else {
@@ -440,25 +492,43 @@ private final class TerminalSplitView: NSSplitView {
   }
 
   private func dividerHitRect(afterSubviewAt index: Int) -> NSRect {
+    dividerInteractionRect(afterSubviewAt: index)
+  }
+
+  private func dividerCursorRect(afterSubviewAt index: Int) -> NSRect {
+    dividerInteractionRect(afterSubviewAt: index)
+  }
+
+  private var dividerCursor: NSCursor {
+    isVertical ? .resizeLeftRight : .resizeUpDown
+  }
+
+  private func dividerRect(afterSubviewAt index: Int) -> NSRect {
     let subviewFrame = arrangedSubviews[index].frame
     let thickness = max(1, dividerThickness)
-    let dividerRect: NSRect
     if isVertical {
-      dividerRect = NSRect(
+      return NSRect(
         x: subviewFrame.maxX,
         y: bounds.minY,
         width: thickness,
         height: bounds.height
       )
     } else {
-      dividerRect = NSRect(
+      return NSRect(
         x: bounds.minX,
         y: subviewFrame.maxY,
         width: bounds.width,
         height: thickness
       )
     }
-    return dividerRect.insetBy(dx: isVertical ? -3 : 0, dy: isVertical ? 0 : -3)
+  }
+
+  private func dividerInteractionRect(afterSubviewAt index: Int) -> NSRect {
+    dividerRect(afterSubviewAt: index)
+      .insetBy(
+        dx: isVertical ? -dividerInteractionOutset : 0,
+        dy: isVertical ? 0 : -dividerInteractionOutset
+      )
   }
 }
 
@@ -484,7 +554,6 @@ final class TerminalPaneViewController: NSViewController {
   override func loadView() {
     view = TerminalPaneHostView()
     view.wantsLayer = true
-    view.layer?.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 1).cgColor
     if let contentView {
       setContentView(contentView)
     }
@@ -495,29 +564,38 @@ final class TerminalPaneViewController: NSViewController {
     onSelect: @escaping (UUID) -> Void,
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
+    menuText: AppText,
+    palette: TerminalSurfacePalette,
+    dimsWhenInactive: Bool = true,
     onResize: @escaping (UUID, Int, Int) -> Void,
     onWorkspaceSwitcher: @escaping () -> Void,
-    onNewWorkspace: @escaping () -> Void,
-    onManageWorkspaces: @escaping () -> Void,
     onSettings: @escaping () -> Void
   ) {
     self.onSelect = onSelect
     self.onResize = onResize
-    setSelected(isSelected)
+    applyAppearance(isSelected: isSelected, palette: palette, dimsWhenInactive: dimsWhenInactive)
     install(menu: menu(
       onSelect: onSelect,
       onSplit: onSplit,
       onClose: onClose,
+      text: menuText,
       onWorkspaceSwitcher: onWorkspaceSwitcher,
-      onNewWorkspace: onNewWorkspace,
-      onManageWorkspaces: onManageWorkspaces,
       onSettings: onSettings
     ), in: view)
   }
 
   func setSelected(_ isSelected: Bool) {
-    view.layer?.borderWidth = isSelected ? 1 : 0
-    view.layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.24).cgColor
+    applyAppearance(isSelected: isSelected, palette: .dark, dimsWhenInactive: false)
+  }
+
+  func applyAppearance(
+    isSelected: Bool,
+    palette: TerminalSurfacePalette,
+    dimsWhenInactive: Bool
+  ) {
+    view.layer?.backgroundColor = palette.background.cgColor
+    view.layer?.borderWidth = 0
+    view.layer?.borderColor = nil
   }
 
   override func viewDidLayout() {
@@ -597,41 +675,34 @@ final class TerminalPaneViewController: NSViewController {
     onSelect: @escaping (UUID) -> Void,
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
+    text: AppText,
     onWorkspaceSwitcher: @escaping () -> Void,
-    onNewWorkspace: @escaping () -> Void,
-    onManageWorkspaces: @escaping () -> Void,
     onSettings: @escaping () -> Void
   ) -> NSMenu {
     let menu = NSMenu()
     let paneId = pane.paneId
-    menu.addItem(ClosureMenuItem(title: "Split Right") { [weak self] in
+    menu.addItem(ClosureMenuItem(title: text.splitRight) { [weak self] in
       DebugLog.write("context menu Split Right pane=\(paneId)")
       self?.performSplitIfPossible(axis: .horizontal, onSelect: onSelect, onSplit: onSplit)
     } isEnabled: { [weak self] in
       self?.canSplit(axis: .horizontal) == true
     })
-    menu.addItem(ClosureMenuItem(title: "Split Down") { [weak self] in
+    menu.addItem(ClosureMenuItem(title: text.splitDown) { [weak self] in
       DebugLog.write("context menu Split Down pane=\(paneId)")
       self?.performSplitIfPossible(axis: .vertical, onSelect: onSelect, onSplit: onSplit)
     } isEnabled: { [weak self] in
       self?.canSplit(axis: .vertical) == true
     })
     menu.addItem(.separator())
-    menu.addItem(ClosureMenuItem(title: "Close Pane") {
+    menu.addItem(ClosureMenuItem(title: text.closePane) {
       onClose(paneId)
     })
     menu.addItem(.separator())
-    menu.addItem(ClosureMenuItem(title: "Switch Workspace...") {
+    menu.addItem(ClosureMenuItem(title: text.workspaces) {
       onWorkspaceSwitcher()
     })
-    menu.addItem(ClosureMenuItem(title: "New Workspace") {
-      onNewWorkspace()
-    })
-    menu.addItem(ClosureMenuItem(title: "Manage Workspaces...") {
-      onManageWorkspaces()
-    })
     menu.addItem(.separator())
-    menu.addItem(ClosureMenuItem(title: "Settings...") {
+    menu.addItem(ClosureMenuItem(title: text.settings + "...") {
       onSettings()
     })
     return menu

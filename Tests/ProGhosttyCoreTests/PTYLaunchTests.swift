@@ -14,6 +14,27 @@ struct PTYLaunchTests {
     #expect(PTYLaunch.shellArguments(shellPath: "zsh") == ["zsh"])
   }
 
+  @Test func launchEnvironmentSuppressesZshEndOfLineMarkerByDefault() {
+    let environment = PTYLaunch.launchEnvironment([:])
+
+    #expect(environment.contains("PROMPT_EOL_MARK="))
+  }
+
+  @Test func controlEnvironmentInjectsSessionIdentityAndHelperPath() {
+    let session = TerminalSessionID(UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!)
+    let environment = PTYTerminalSessionManager.controlEnvironment(
+      base: ["PATH": "/usr/bin"],
+      session: session,
+      token: "secret-token",
+      helperSearchPath: "/Applications/ProGhostty.app/Contents/MacOS"
+    )
+
+    #expect(environment["TERM_PROGRAM"] == "ProGhostty")
+    #expect(environment["PROGHOSTTY_SESSION_ID"] == "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
+    #expect(environment["PROGHOSTTY_SESSION_TOKEN"] == "secret-token")
+    #expect(environment["PATH"] == "/Applications/ProGhostty.app/Contents/MacOS:/usr/bin")
+  }
+
   @Test func ptyCanRunShellCommand() throws {
     let config = TerminalSessionConfig(
       shellPath: "/bin/sh",
