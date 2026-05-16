@@ -26,6 +26,8 @@ struct AppSettingsTests {
     #expect(settings.followSystemAppearance == false)
     #expect(settings.themeName == "dark")
     #expect(settings.pgControlCommandsEnabled == true)
+    #expect(settings.keyboardShortcuts.shortcut(for: .openSettings).key == ",")
+    #expect(settings.keyboardShortcuts.shortcut(for: .splitRight).modifiers == [.command])
   }
 
   @Test func legacySystemThemeBecomesFollowSystemAppearance() throws {
@@ -47,5 +49,41 @@ struct AppSettingsTests {
 
     #expect(settings.followSystemAppearance == true)
     #expect(settings.themeName == "dark")
+  }
+
+  @Test func keyboardShortcutsDetectConflicts() {
+    var shortcuts = KeyboardShortcutSettings.defaults
+    shortcuts.set(KeyboardShortcutBinding(key: "d", modifiers: [.command]), for: .splitDown)
+
+    #expect(shortcuts.conflict(for: .splitDown) == .splitRight)
+    #expect(shortcuts.conflict(for: .splitRight) == .splitDown)
+    #expect(shortcuts.conflict(for: .openSettings) == nil)
+  }
+
+  @Test func keyboardShortcutDisplayUsesMacModifierSymbols() {
+    let binding = KeyboardShortcutBinding(key: "leftArrow", modifiers: [.command, .option])
+
+    #expect(binding.displayString == "⌘⌥←")
+  }
+
+  @Test func defaultTerminalWorkingDirectoryFallsBackToHomeDirectory() {
+    #expect(
+      AppSettings.terminalWorkingDirectory(
+        workspaceRootPath: nil,
+        defaultWorkingDirectory: nil,
+        homeDirectory: "/Users/example",
+        processDirectory: "/"
+      ) == "/Users/example"
+    )
+  }
+
+  @Test func newWorkspaceRootPathUsesResolvedWorkingDirectoryWhenUnset() {
+    #expect(
+      AppSettings.workspaceRootPathForNewWorkspace(
+        requestedRootPath: nil,
+        defaultWorkingDirectory: nil,
+        homeDirectory: "/Users/example"
+      ) == "/Users/example"
+    )
   }
 }

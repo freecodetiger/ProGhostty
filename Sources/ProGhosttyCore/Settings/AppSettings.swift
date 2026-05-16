@@ -15,6 +15,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
   public var maxOutputPreviewKB: Int
   public var rerunAutoEnter: Bool
   public var pgControlCommandsEnabled: Bool
+  public var keyboardShortcuts: KeyboardShortcutSettings
 
   public static let defaults = AppSettings(
     defaultShell: "/bin/zsh",
@@ -29,7 +30,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     saveOutputPreview: true,
     maxOutputPreviewKB: 64,
     rerunAutoEnter: false,
-    pgControlCommandsEnabled: true
+    pgControlCommandsEnabled: true,
+    keyboardShortcuts: .defaults
   )
 
   enum CodingKeys: String, CodingKey {
@@ -46,6 +48,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     case maxOutputPreviewKB
     case rerunAutoEnter
     case pgControlCommandsEnabled
+    case keyboardShortcuts
   }
 
   public init(
@@ -61,7 +64,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     saveOutputPreview: Bool,
     maxOutputPreviewKB: Int,
     rerunAutoEnter: Bool,
-    pgControlCommandsEnabled: Bool
+    pgControlCommandsEnabled: Bool,
+    keyboardShortcuts: KeyboardShortcutSettings
   ) {
     self.defaultShell = defaultShell
     self.defaultWorkingDirectory = defaultWorkingDirectory
@@ -76,6 +80,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     self.maxOutputPreviewKB = maxOutputPreviewKB
     self.rerunAutoEnter = rerunAutoEnter
     self.pgControlCommandsEnabled = pgControlCommandsEnabled
+    self.keyboardShortcuts = keyboardShortcuts.mergedWithDefaults()
   }
 
   public init(from decoder: Decoder) throws {
@@ -96,6 +101,150 @@ public struct AppSettings: Codable, Equatable, Sendable {
     maxOutputPreviewKB = try container.decodeIfPresent(Int.self, forKey: .maxOutputPreviewKB) ?? Self.defaults.maxOutputPreviewKB
     rerunAutoEnter = try container.decodeIfPresent(Bool.self, forKey: .rerunAutoEnter) ?? Self.defaults.rerunAutoEnter
     pgControlCommandsEnabled = try container.decodeIfPresent(Bool.self, forKey: .pgControlCommandsEnabled) ?? Self.defaults.pgControlCommandsEnabled
+    keyboardShortcuts = (
+      try container.decodeIfPresent(KeyboardShortcutSettings.self, forKey: .keyboardShortcuts) ?? Self.defaults.keyboardShortcuts
+    ).mergedWithDefaults()
+  }
+}
+
+public enum KeyboardShortcutAction: String, CaseIterable, Codable, Sendable, Identifiable {
+  case openSettings
+  case openWorkspaceSwitcher
+  case splitRight
+  case splitDown
+  case closePane
+  case focusPreviousPane
+  case focusNextPane
+
+  public var id: String { rawValue }
+}
+
+public enum KeyboardShortcutModifier: String, CaseIterable, Codable, Sendable, Comparable {
+  case command
+  case control
+  case option
+  case shift
+
+  public static func < (lhs: KeyboardShortcutModifier, rhs: KeyboardShortcutModifier) -> Bool {
+    lhs.sortOrder < rhs.sortOrder
+  }
+
+  public var symbol: String {
+    switch self {
+    case .command:
+      return "⌘"
+    case .control:
+      return "⌃"
+    case .option:
+      return "⌥"
+    case .shift:
+      return "⇧"
+    }
+  }
+
+  private var sortOrder: Int {
+    switch self {
+    case .command:
+      return 0
+    case .control:
+      return 1
+    case .option:
+      return 2
+    case .shift:
+      return 3
+    }
+  }
+}
+
+public struct KeyboardShortcutBinding: Codable, Equatable, Sendable {
+  public var key: String
+  public var modifiers: Set<KeyboardShortcutModifier>
+
+  public init(key: String, modifiers: Set<KeyboardShortcutModifier>) {
+    self.key = key
+    self.modifiers = modifiers
+  }
+
+  public var displayString: String {
+    let modifierText = modifiers.sorted().map(\.symbol).joined()
+    return modifierText + Self.displayKey(key)
+  }
+
+  public var isValidGlobalShortcut: Bool {
+    !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !modifiers.isEmpty
+  }
+
+  private static func displayKey(_ key: String) -> String {
+    switch key {
+    case "leftArrow":
+      return "←"
+    case "rightArrow":
+      return "→"
+    case "upArrow":
+      return "↑"
+    case "downArrow":
+      return "↓"
+    case "escape":
+      return "Esc"
+    case "delete":
+      return "Delete"
+    case "return":
+      return "Return"
+    case "tab":
+      return "Tab"
+    case "space":
+      return "Space"
+    default:
+      return key.count == 1 ? key.uppercased() : key
+    }
+  }
+}
+
+public struct KeyboardShortcutSettings: Codable, Equatable, Sendable {
+  private var bindings: [KeyboardShortcutAction: KeyboardShortcutBinding]
+
+  public static let defaults = KeyboardShortcutSettings(bindings: [
+    .openSettings: KeyboardShortcutBinding(key: ",", modifiers: [.command]),
+    .openWorkspaceSwitcher: KeyboardShortcutBinding(key: "o", modifiers: [.command, .shift]),
+    .splitRight: KeyboardShortcutBinding(key: "d", modifiers: [.command]),
+    .splitDown: KeyboardShortcutBinding(key: "d", modifiers: [.command, .shift]),
+    .closePane: KeyboardShortcutBinding(key: "w", modifiers: [.command]),
+    .focusPreviousPane: KeyboardShortcutBinding(key: "leftArrow", modifiers: [.command, .option]),
+    .focusNextPane: KeyboardShortcutBinding(key: "rightArrow", modifiers: [.command, .option]),
+  ])
+
+  public init(bindings: [KeyboardShortcutAction: KeyboardShortcutBinding]) {
+    self.bindings = bindings
+  }
+
+  public func shortcut(for action: KeyboardShortcutAction) -> KeyboardShortcutBinding {
+    bindings[action] ?? Self.defaults.bindings[action]!
+  }
+
+  public mutating func set(_ binding: KeyboardShortcutBinding, for action: KeyboardShortcutAction) {
+    bindings[action] = binding
+  }
+
+  public mutating func reset(_ action: KeyboardShortcutAction) {
+    bindings[action] = Self.defaults.shortcut(for: action)
+  }
+
+  public func conflict(for action: KeyboardShortcutAction) -> KeyboardShortcutAction? {
+    let binding = shortcut(for: action)
+    guard binding.isValidGlobalShortcut else { return nil }
+    return KeyboardShortcutAction.allCases.first { candidate in
+      candidate != action && shortcut(for: candidate) == binding
+    }
+  }
+
+  public func mergedWithDefaults() -> KeyboardShortcutSettings {
+    var merged = Self.defaults
+    for action in KeyboardShortcutAction.allCases {
+      if let binding = bindings[action], binding.isValidGlobalShortcut {
+        merged.bindings[action] = binding
+      }
+    }
+    return merged
   }
 }
 
@@ -151,5 +300,42 @@ public enum AppLanguageManager {
 
   public static func normalizedLanguage(_ language: String) -> String {
     builtInLanguages.contains(language) ? language : "system"
+  }
+}
+
+public extension AppSettings {
+  static func terminalWorkingDirectory(
+    workspaceRootPath: String?,
+    defaultWorkingDirectory: String?,
+    homeDirectory: String = FileManager.default.homeDirectoryForCurrentUser.path,
+    processDirectory: String = FileManager.default.currentDirectoryPath
+  ) -> String {
+    if let workspaceRootPath = nonEmptyPath(workspaceRootPath) {
+      return workspaceRootPath
+    }
+    if let defaultWorkingDirectory = nonEmptyPath(defaultWorkingDirectory) {
+      return defaultWorkingDirectory
+    }
+    if let homeDirectory = nonEmptyPath(homeDirectory) {
+      return homeDirectory
+    }
+    return processDirectory
+  }
+
+  static func workspaceRootPathForNewWorkspace(
+    requestedRootPath: String?,
+    defaultWorkingDirectory: String?,
+    homeDirectory: String = FileManager.default.homeDirectoryForCurrentUser.path
+  ) -> String {
+    terminalWorkingDirectory(
+      workspaceRootPath: requestedRootPath,
+      defaultWorkingDirectory: defaultWorkingDirectory,
+      homeDirectory: homeDirectory
+    )
+  }
+
+  private static func nonEmptyPath(_ path: String?) -> String? {
+    let trimmed = path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
   }
 }

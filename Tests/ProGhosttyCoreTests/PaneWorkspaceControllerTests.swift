@@ -64,6 +64,46 @@ struct PaneWorkspaceControllerTests {
     #expect(PaneTreeReducer.listLeaves(in: updated.root) == [opened.pane])
   }
 
+  @Test func closeWorkspaceClosesAllSessionsInRequestedWorkspaceOnly() throws {
+    let manager = RecordingSessionManager()
+    let focusStore = TerminalFocusStore()
+    let controller = PaneWorkspaceController(sessionManager: manager, focusStore: focusStore)
+    let first = try controller.openTerminal(title: "work", config: makeConfig(cwd: "/a"), paneTitle: "zsh", cwd: "/a")
+    let split = try controller.splitPane(
+      workspaceID: first.workspace.id,
+      paneID: first.pane.paneId,
+      axis: .horizontal,
+      config: makeConfig(cwd: "/a"),
+      paneTitle: "zsh",
+      cwd: "/a"
+    )
+    let second = try controller.openTerminal(title: "other", config: makeConfig(cwd: "/b"), paneTitle: "zsh", cwd: "/b")
+
+    let closed = try #require(controller.closeWorkspace(workspaceID: first.workspace.id))
+
+    #expect(closed.workspaceID == first.workspace.id)
+    #expect(closed.panes.map(\.sessionId) == [first.pane.sessionId, split.pane.sessionId])
+    #expect(manager.closedSessions == [first.pane.sessionId, split.pane.sessionId])
+    #expect(controller.workspaceLayouts.map(\.id) == [second.workspace.id])
+    #expect(controller.activeWorkspaceID == second.workspace.id)
+    #expect(focusStore.focusedPaneId(in: first.workspace.id) == nil)
+  }
+
+  @Test func closeActiveWorkspaceMovesFocusToLastRemainingWorkspace() throws {
+    let manager = RecordingSessionManager()
+    let controller = PaneWorkspaceController(sessionManager: manager, focusStore: TerminalFocusStore())
+    let first = try controller.openTerminal(title: "work", config: makeConfig(cwd: "/a"), paneTitle: "zsh", cwd: "/a")
+    let second = try controller.openTerminal(title: "other", config: makeConfig(cwd: "/b"), paneTitle: "zsh", cwd: "/b")
+
+    let closed = try #require(controller.closeWorkspace(workspaceID: second.workspace.id))
+
+    #expect(closed.workspaceID == second.workspace.id)
+    #expect(closed.panes == [second.pane])
+    #expect(manager.closedSessions == [second.pane.sessionId])
+    #expect(controller.workspaceLayouts.map(\.id) == [first.workspace.id])
+    #expect(controller.activeWorkspaceID == first.workspace.id)
+  }
+
   private func makeConfig(cwd: String) -> TerminalSessionConfig {
     TerminalSessionConfig(shellPath: "/bin/sh", workingDirectory: cwd, environment: [:], rows: 24, cols: 80)
   }

@@ -61,6 +61,7 @@ final class AppModel: ObservableObject {
   @Published var isHistoryPresented = false
   @Published var isPluginManagerPresented = false
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
+  @Published var titlebarToast: TitlebarToast?
   @Published var commandLine = ""
   @Published var historySearch = ""
   @Published var historyResults: [CommandBlock] = []
@@ -84,6 +85,16 @@ final class AppModel: ObservableObject {
   private let terminalActionDispatcher = TerminalActionDispatcher()
   private var settingsWindowController: NSWindowController?
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
+  private var titlebarToastTask: Task<Void, Never>?
+
+  struct TitlebarToast: Equatable, Sendable {
+    var message: String
+    var style: Style
+
+    enum Style: Equatable, Sendable {
+      case success
+    }
+  }
 
   init() {
     DebugLog.write("AppModel init")
@@ -118,9 +129,10 @@ final class AppModel: ObservableObject {
   }
 
   func createAndActivateWorkspace(workspace: Workspace? = nil) {
-    let cwd =
-      workspace?.rootPath ?? settings.defaultWorkingDirectory
-      ?? FileManager.default.currentDirectoryPath
+    let cwd = AppSettings.terminalWorkingDirectory(
+      workspaceRootPath: workspace?.rootPath,
+      defaultWorkingDirectory: settings.defaultWorkingDirectory
+    )
 
     do {
       let opened = try paneWorkspaceController.openTerminal(
@@ -275,7 +287,6 @@ final class AppModel: ObservableObject {
 
   func openWorkspaceCreation(named name: String) {
     syncWorkspaceSwitcherState()
-    workspaceSwitcherState.query = name
     isWorkspaceSwitcherPresented = true
   }
 
@@ -319,8 +330,10 @@ final class AppModel: ObservableObject {
     var runtime = workspaceRuntimes[index]
     DebugLog.write("splitPane before leaves=\(PaneTreeReducer.listLeaves(in: runtime.layout.root).count)")
     let workspace = runtime.workspace
-    let cwd = runtime.selectedCwd(focusStore: focusStore) ?? workspace?.rootPath ?? settings.defaultWorkingDirectory
-      ?? FileManager.default.currentDirectoryPath
+    let cwd = runtime.selectedCwd(focusStore: focusStore) ?? AppSettings.terminalWorkingDirectory(
+      workspaceRootPath: workspace?.rootPath,
+      defaultWorkingDirectory: settings.defaultWorkingDirectory
+    )
 
     do {
       let split = try paneWorkspaceController.splitPane(
@@ -400,36 +413,114 @@ final class AppModel: ObservableObject {
   }
 
   func createAndOpenWorkspace(name: String, rootPath: String? = nil) {
-    let workspace = Workspace(name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Workspace" : name, rootPath: rootPath)
+    let resolvedRootPath = AppSettings.workspaceRootPathForNewWorkspace(
+      requestedRootPath: rootPath,
+      defaultWorkingDirectory: settings.defaultWorkingDirectory
+    )
+    let workspace = Workspace(name: normalizedWorkspaceName(name), rootPath: resolvedRootPath)
     try? workspaceStore?.save(workspace)
     refreshWorkspaces()
     createAndActivateWorkspace(workspace: workspace)
   }
 
   func deleteWorkspace(_ workspace: Workspace) {
-    let isRunning = workspaceRuntimes.contains { runtime in
+    let runtime = workspaceRuntimes.first { runtime in
       runtime.workspace?.id == workspace.id || runtime.id == workspace.id
     }
-    guard !isRunning else {
-      shellIntegrationState = "running workspace cannot be deleted while its sessions are alive"
-      return
+    let paneCount = runtime.map { PaneTreeReducer.listLeaves(in: $0.layout.root).count } ?? 0
+    guard confirmWorkspaceDeletion(workspace, runningPaneCount: paneCount) else { return }
+
+    if let runtime {
+      closeWorkspaceRuntime(id: runtime.id)
     }
     try? workspaceStore?.delete(id: workspace.id)
     refreshWorkspaces()
   }
 
   func deleteWorkspaceFromSwitcher(_ workspaceListID: UUID) {
-    guard let workspace = workspaces.first(where: { $0.id == workspaceListID }) else { return }
-    deleteWorkspace(workspace)
+    let runtime = workspaceRuntimes.first { runtime in
+      runtime.workspace?.id == workspaceListID || runtime.id == workspaceListID
+    }
+    let workspace = workspaces.first { $0.id == workspaceListID } ?? runtime?.workspace
+      ?? runtime.map { Workspace(id: workspaceListID, name: $0.title, rootPath: $0.displayPath) }
+    guard let workspace else { return }
+
+    let paneCount = runtime.map { PaneTreeReducer.listLeaves(in: $0.layout.root).count } ?? 0
+    guard confirmWorkspaceDeletion(workspace, runningPaneCount: paneCount) else { return }
+
+    if let runtime {
+      closeWorkspaceRuntime(id: runtime.id)
+    }
+    try? workspaceStore?.delete(id: workspace.id)
+    refreshWorkspaces()
+  }
+
+  func createWorkspaceFromSwitcher() {
+    createAndOpenWorkspace(name: "")
+    closeWorkspaceSwitcher()
+  }
+
+  func renameWorkspaceFromSwitcher(_ workspaceListID: UUID, to name: String) {
+    let nextName = normalizedWorkspaceName(name)
+    if let runtimeIndex = workspaceRuntimes.firstIndex(where: { runtime in
+      runtime.workspace?.id == workspaceListID || runtime.id == workspaceListID
+    }) {
+      var runtime = workspaceRuntimes[runtimeIndex]
+      runtime.layout.title = nextName
+      if var workspace = runtime.workspace {
+        workspace.name = nextName
+        workspace.updatedAt = Date()
+        try? workspaceStore?.save(workspace)
+        runtime.workspace = workspace
+      } else {
+        let workspace = Workspace(
+          id: runtime.id,
+          name: nextName,
+          rootPath: runtime.displayPath
+        )
+        try? workspaceStore?.save(workspace)
+        runtime.workspace = workspace
+      }
+      workspaceRuntimes[runtimeIndex] = runtime
+      paneWorkspaceController.replaceWorkspaceLayout(runtime.layout)
+      refreshWorkspaces()
+      return
+    }
+
+    guard var workspace = workspaces.first(where: { $0.id == workspaceListID }) else { return }
+    workspace.name = nextName
+    workspace.updatedAt = Date()
+    try? workspaceStore?.save(workspace)
+    refreshWorkspaces()
   }
 
   func saveSettings() {
     try? settingsStore.save(settings)
+    showTitlebarToast(appText.settingsSavedToast, style: .success)
   }
 
   func resetSettings() {
     settings = .defaults
     saveSettings()
+  }
+
+  func closeSettingsWindow() {
+    settingsWindowController?.window?.close()
+  }
+
+  func appVersionString() -> String {
+    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+    switch (version?.isEmpty == false ? version : nil, build?.isEmpty == false ? build : nil) {
+    case (.some(let version), .some(let build)):
+      return "\(version) (\(build))"
+    case (.some(let version), .none):
+      return version
+    case (.none, .some(let build)):
+      return build
+    case (.none, .none):
+      return "0.1.0"
+    }
   }
 
   func openSettingsWindow() {
@@ -488,6 +579,24 @@ final class AppModel: ObservableObject {
     surfaceRegistry.setFocusedSession(selectedSessionID)
   }
 
+  private func restoreTerminalKeyboardFocus() {
+    let session = selectedSessionID
+    DispatchQueue.main.async { [weak self] in
+      self?.surfaceRegistry.focusSessionView(session)
+    }
+  }
+
+  private func showTitlebarToast(_ message: String, style: TitlebarToast.Style) {
+    titlebarToastTask?.cancel()
+    titlebarToast = TitlebarToast(message: message, style: style)
+    titlebarToastTask = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: 1_800_000_000)
+      await MainActor.run {
+        self?.titlebarToast = nil
+      }
+    }
+  }
+
   private func compactTitlebarTitle(_ title: String) -> String {
     let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return "ProGhostty" }
@@ -511,6 +620,11 @@ final class AppModel: ObservableObject {
       return "~" + path.dropFirst(home.count)
     }
     return path
+  }
+
+  private func normalizedWorkspaceName(_ name: String) -> String {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? "Workspace" : trimmed
   }
 
   private var effectiveThemeName: String {
@@ -624,6 +738,43 @@ final class AppModel: ObservableObject {
     return alert.runModal() == .alertFirstButtonReturn
   }
 
+  private func confirmWorkspaceDeletion(_ workspace: Workspace, runningPaneCount: Int) -> Bool {
+    let text = appText
+    let alert = NSAlert()
+    alert.messageText = text.deleteWorkspaceConfirmationTitle
+    alert.informativeText = text.deleteWorkspaceConfirmationMessage(
+      workspace.name,
+      runningPaneCount: runningPaneCount
+    )
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: text.deleteWorkspace)
+    alert.addButton(withTitle: text.cancel)
+    alert.buttons.first?.keyEquivalent = "\r"
+    return alert.runModal() == .alertFirstButtonReturn
+  }
+
+  @discardableResult
+  private func closeWorkspaceRuntime(id runtimeID: UUID) -> [TerminalPane] {
+    let runtimePanes = workspaceRuntimes
+      .first { $0.id == runtimeID }
+      .map { PaneTreeReducer.listLeaves(in: $0.layout.root) } ?? []
+    guard let closed = paneWorkspaceController.closeWorkspace(workspaceID: runtimeID) else {
+      for pane in runtimePanes {
+        sessionManager.closeSession(pane.sessionId)
+      }
+      workspaceRuntimes.removeAll { $0.id == runtimeID }
+      savedLayoutSnapshots[runtimeID] = nil
+      activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
+      syncWorkspaceSwitcherState()
+      return runtimePanes
+    }
+    workspaceRuntimes.removeAll { $0.id == closed.workspaceID }
+    savedLayoutSnapshots[closed.workspaceID] = nil
+    activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
+    syncWorkspaceSwitcherState()
+    return closed.panes
+  }
+
   func updateSplitRatio(_ splitID: UUID, ratio: Double) {
     guard let activeWorkspaceID, let index = workspaceRuntimes.firstIndex(where: { $0.id == activeWorkspaceID }) else {
       return
@@ -654,14 +805,15 @@ final class AppModel: ObservableObject {
 
   func closeWorkspaceSwitcher() {
     isWorkspaceSwitcherPresented = false
-  }
-
-  func updateWorkspaceSwitcherQuery(_ query: String) {
-    workspaceSwitcherState.query = query
+    restoreTerminalKeyboardFocus()
   }
 
   func moveWorkspaceSwitcherSelection(delta: Int) {
     workspaceSwitcherState.moveSelection(delta: delta)
+  }
+
+  func selectWorkspaceCreationCard() {
+    workspaceSwitcherState.selectCreateWorkspace()
   }
 
   func activateWorkspaceFromSwitcher(_ workspaceListID: UUID) {
@@ -682,10 +834,7 @@ final class AppModel: ObservableObject {
 
   func activateWorkspaceSwitcherSelection() {
     guard let selected = workspaceSwitcherState.selectedWorkspaceID else {
-      if workspaceSwitcherState.canCreateWorkspaceFromQuery {
-        createAndOpenWorkspace(name: workspaceSwitcherState.query)
-        closeWorkspaceSwitcher()
-      }
+      createWorkspaceFromSwitcher()
       return
     }
 
@@ -719,7 +868,13 @@ final class AppModel: ObservableObject {
 
   private func syncWorkspaceSwitcherState() {
     let runtimeWorkspaces = workspaceRuntimes.map { runtime in
-      runtime.workspace ?? Workspace(
+      if var workspace = runtime.workspace {
+        if workspace.rootPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+          workspace.rootPath = runtime.displayPath
+        }
+        return workspace
+      }
+      return Workspace(
         id: runtime.id,
         name: runtime.title,
         rootPath: runtime.displayPath
@@ -731,12 +886,11 @@ final class AppModel: ObservableObject {
     }
     let activeID = activeWorkspace?.workspace?.id ?? activeWorkspaceID
     let runningIDs = Set(workspaceRuntimes.map { runtime in runtime.workspace?.id ?? runtime.id })
-    var next = WorkspaceSwitcherState(
+    let next = WorkspaceSwitcherState(
       workspaces: combined,
       activeWorkspaceID: activeID,
       runningWorkspaceIDs: runningIDs
     )
-    next.query = workspaceSwitcherState.query
     workspaceSwitcherState = next
     applyFocusedTerminalSurface()
   }

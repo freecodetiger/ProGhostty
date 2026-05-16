@@ -27,6 +27,7 @@ public final class LibGhosttyTerminalEngine: TerminalSessionManager, TerminalSur
   public func applyPalette(_ palette: TerminalSurfacePalette) {}
   public func applyFont(family: String, size: CGFloat) {}
   public func setFocusedSession(_ id: TerminalSessionID?) {}
+  public func focusSessionView(_ id: TerminalSessionID?) {}
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {}
   public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {}
 }

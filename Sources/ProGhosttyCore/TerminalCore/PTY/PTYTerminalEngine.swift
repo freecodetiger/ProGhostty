@@ -53,6 +53,10 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
     surfaceRegistry.setFocusedSession(id)
   }
 
+  public func focusSessionView(_ id: TerminalSessionID?) {
+    surfaceRegistry.focusSessionView(id)
+  }
+
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {
     surfaceRegistry.setInputHandler(handler)
   }
@@ -77,6 +81,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   private let surfaceRegistry: PTYTerminalSurfaceRegistry
   private var sessions: [TerminalSessionID: SessionState] = [:]
+  private var reapTimers: [pid_t: DispatchSourceTimer] = [:]
   private let continuation: AsyncStream<TerminalEvent>.Continuation
   public let events: AsyncStream<TerminalEvent>
 
@@ -125,7 +130,8 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     state.readSource.cancel()
     state.waitTimer.cancel()
     surfaceRegistry.removeSurface(session: id)
-    _ = Darwin.kill(state.pid, SIGHUP)
+    sendHangup(to: state.pid)
+    scheduleReap(pid: state.pid)
     continuation.yield(.sessionClosed(id))
   }
 
@@ -218,6 +224,46 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       }
     }
     return timer
+  }
+
+  private func sendHangup(to pid: pid_t) {
+    if Darwin.kill(-pid, SIGHUP) != 0 {
+      _ = Darwin.kill(pid, SIGHUP)
+    }
+  }
+
+  private func scheduleReap(pid: pid_t) {
+    reapTimers[pid]?.cancel()
+
+    final class ReapState {
+      var attempts = 0
+    }
+
+    let state = ReapState()
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
+    timer.setEventHandler { [weak self] in
+      guard let self else { return }
+      if PTYLaunch.wait(pid: pid) != nil {
+        self.reapTimers[pid]?.cancel()
+        self.reapTimers[pid] = nil
+        return
+      }
+
+      state.attempts += 1
+      if state.attempts == 5 {
+        _ = Darwin.kill(-pid, SIGTERM)
+        _ = Darwin.kill(pid, SIGTERM)
+      } else if state.attempts == 20 {
+        _ = Darwin.kill(-pid, SIGKILL)
+        _ = Darwin.kill(pid, SIGKILL)
+      } else if state.attempts > 40 {
+        self.reapTimers[pid]?.cancel()
+        self.reapTimers[pid] = nil
+      }
+    }
+    reapTimers[pid] = timer
+    timer.resume()
   }
 
   private func handleOutput(_ data: Data, session id: TerminalSessionID) {
@@ -321,6 +367,11 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       guard let frame = surface.lastFrame else { continue }
       render(frame, in: surface.textView, isFocused: isFocused(sessionID), scrollToEnd: false)
     }
+  }
+
+  public func focusSessionView(_ id: TerminalSessionID?) {
+    guard let id, let textView = surfaces[id]?.textView else { return }
+    textView.window?.makeFirstResponder(textView)
   }
 
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {

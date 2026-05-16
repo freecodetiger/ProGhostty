@@ -42,6 +42,14 @@ struct AppText {
   var pgControlCommands: String { text("Enable pg control commands", "启用 pg 控制命令") }
   var shellEnhancements: String { text("Shell Enhancements", "Shell 增强") }
   var shellEnhancementsCaption: String { text("Inspect shell tools without changing your terminal until a plan is reviewed.", "检查 Shell 工具；只有在确认计划后才会修改环境。") }
+  var shortcuts: String { text("Shortcuts", "快捷键") }
+  var shortcutConflict: String { text("Shortcut is already used.", "快捷键已被占用。") }
+  var recordShortcut: String { text("Record", "录制") }
+  var recordingShortcut: String { text("Press shortcut", "按下快捷键") }
+  var resetShortcut: String { text("Reset", "重置") }
+  var openWorkspaceSwitcher: String { text("Switch Workspace", "切换工作区") }
+  var focusPreviousPane: String { text("Focus Previous Pane", "聚焦上一个分屏") }
+  var focusNextPane: String { text("Focus Next Pane", "聚焦下一个分屏") }
   var shellTools: String { text("Shell tools", "Shell 工具") }
   var shellToolsCaption: String { text("Detect-only by default; installs require an explicit plan.", "默认仅检测；安装需要明确的计划。") }
   var refresh: String { text("Refresh", "刷新") }
@@ -87,10 +95,40 @@ struct AppText {
   var ohMyZsh: String { text("Oh My Zsh", "Oh My Zsh") }
   var open: String { text("Open", "打开") }
   var restoreDefaults: String { text("Restore Defaults", "恢复默认") }
+  var restoreDefaultsTitle: String { text("Restore default settings?", "恢复默认设置？") }
+  var restoreDefaultsMessage: String {
+    text(
+      "This will reset terminal, appearance, history, shortcut, and shell tool settings.",
+      "这会重置终端、外观、历史、快捷键和 Shell 工具设置。"
+    )
+  }
+  var about: String { text("About", "关于") }
+  var version: String { text("Version", "版本") }
+  var settingsSavedToast: String { text("Settings saved", "设置已保存") }
   var save: String { text("Save", "保存") }
   var saved: String { text("Saved.", "已保存。") }
   var defaultsRestored: String { text("Defaults restored.", "已恢复默认设置。") }
-  var searchWorkspaces: String { text("Search workspaces", "搜索工作区") }
+  var newWorkspace: String { text("New Workspace", "新建工作区") }
+  var newWorkspaceName: String { text("Workspace name", "工作区名称") }
+  var createWorkspaceCaption: String { text("Name it before the first terminal opens.", "命名后再打开第一个终端。") }
+  var renameWorkspace: String { text("Rename Workspace", "重命名工作区") }
+  var deleteWorkspace: String { text("Delete Workspace", "删除工作区") }
+  var deleteWorkspaceConfirmationTitle: String { text("Delete workspace?", "删除工作区？") }
+  func deleteWorkspaceConfirmationMessage(_ name: String, runningPaneCount: Int) -> String {
+    if runningPaneCount > 0 {
+      return text(
+        "\"\(name)\" will be deleted. \(runningPaneCount) running terminal session\(runningPaneCount == 1 ? "" : "s") in this workspace will be closed.",
+        "“\(name)”将被删除。这个工作区中的 \(runningPaneCount) 个运行中终端会话会被关闭。"
+      )
+    }
+    return text(
+      "\"\(name)\" will be removed from saved workspaces.",
+      "“\(name)”将从已保存工作区中移除。"
+    )
+  }
+  var renameShortcutHint: String { text("Space to rename", "空格重命名") }
+  var enterWorkspaceHint: String { text("Return or Tab to enter", "回车或 Tab 进入") }
+  var deleteWorkspaceHint: String { text("Delete to delete workspace", "Delete 删除工作区") }
   var create: String { text("Create", "创建") }
   var current: String { text("Current", "当前") }
   var running: String { text("Running", "运行中") }
@@ -107,10 +145,6 @@ struct AppText {
       "The quick brown fox jumps over 0123456789",
       "字体预览会随着字体和字号实时变化 0123456789"
     )
-  }
-
-  func createWorkspace(_ name: String) -> String {
-    text("Create \"\(name)\"", "创建“\(name)”")
   }
 
   func availability(_ isAvailable: Bool) -> String {

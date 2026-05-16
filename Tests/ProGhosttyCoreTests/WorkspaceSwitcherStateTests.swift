@@ -5,14 +5,14 @@ import Testing
 
 @Suite("Workspace switcher state")
 struct WorkspaceSwitcherStateTests {
-  @Test func filtersWorkspacesByNameAndPath() {
+  @Test func queryDoesNotFilterWorkspaces() {
     let project = Workspace(id: UUID(), name: "Project", rootPath: "/Users/zpc/projects/proghostty")
     let notes = Workspace(id: UUID(), name: "Notes", rootPath: "/Users/zpc/notes")
     var state = WorkspaceSwitcherState(workspaces: [project, notes], activeWorkspaceID: project.id)
 
     state.query = "ghost"
 
-    #expect(state.filteredWorkspaces.map(\.id) == [project.id])
+    #expect(state.filteredWorkspaces.map(\.id) == [project.id, notes.id])
   }
 
   @Test func selectionMovesWithinFilteredResults() {
@@ -25,23 +25,55 @@ struct WorkspaceSwitcherStateTests {
     #expect(state.selectedWorkspaceID == second.id)
   }
 
-  @Test func changingQuerySelectsFirstFilteredWorkspace() {
+  @Test func selectionCanMoveOntoCreateWorkspaceCard() {
+    let first = Workspace(id: UUID(), name: "Alpha", rootPath: "/a")
+    let second = Workspace(id: UUID(), name: "Beta", rootPath: "/b")
+    var state = WorkspaceSwitcherState(workspaces: [first, second], activeWorkspaceID: first.id)
+
+    state.moveSelection(delta: 1)
+    state.moveSelection(delta: 1)
+
+    #expect(state.selectedWorkspaceID == nil)
+    #expect(state.isCreateWorkspaceSelected == true)
+  }
+
+  @Test func createWorkspaceCardWrapsToFirstWorkspace() {
+    let first = Workspace(id: UUID(), name: "Alpha", rootPath: "/a")
+    var state = WorkspaceSwitcherState(workspaces: [first], activeWorkspaceID: first.id)
+
+    state.moveSelection(delta: -1)
+    state.moveSelection(delta: 1)
+
+    #expect(state.selectedWorkspaceID == first.id)
+  }
+
+  @Test func canExplicitlySelectCreateWorkspaceCard() {
+    let first = Workspace(id: UUID(), name: "Alpha", rootPath: "/a")
+    var state = WorkspaceSwitcherState(workspaces: [first], activeWorkspaceID: first.id)
+
+    state.selectCreateWorkspace()
+
+    #expect(state.selectedWorkspaceID == nil)
+    #expect(state.isCreateWorkspaceSelected == true)
+  }
+
+  @Test func changingQueryDoesNotMoveSelection() {
     let first = Workspace(id: UUID(), name: "Alpha", rootPath: "/a")
     let second = Workspace(id: UUID(), name: "Beta", rootPath: "/b")
     var state = WorkspaceSwitcherState(workspaces: [first, second], activeWorkspaceID: first.id)
 
     state.query = "bet"
 
-    #expect(state.selectedWorkspaceID == second.id)
+    #expect(state.selectedWorkspaceID == first.id)
   }
 
-  @Test func canCreateWorkspaceWhenQueryHasNoExactMatch() {
+  @Test func queryDoesNotCreateWorkspaceNames() {
     let first = Workspace(id: UUID(), name: "Alpha", rootPath: "/a")
     var state = WorkspaceSwitcherState(workspaces: [first], activeWorkspaceID: first.id)
 
     state.query = "New Project"
 
-    #expect(state.canCreateWorkspaceFromQuery == true)
+    #expect(state.canCreateWorkspaceFromQuery == false)
   }
 
   @Test func decoratedWorkspacesMarkActiveAndRunningWorkspaces() {

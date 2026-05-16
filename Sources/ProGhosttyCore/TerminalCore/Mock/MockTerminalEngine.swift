@@ -107,6 +107,7 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
   }
 
   public func setFocusedSession(_ id: TerminalSessionID?) {}
+  public func focusSessionView(_ id: TerminalSessionID?) {}
 
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {
     inputHandler = handler

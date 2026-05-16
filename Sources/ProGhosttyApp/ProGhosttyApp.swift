@@ -16,45 +16,45 @@ struct ProGhosttyApp: App {
         Button(model.appText.settings + "...") {
           model.openSettingsWindow()
         }
-        .keyboardShortcut(",", modifiers: [.command])
+        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .openSettings).swiftUIShortcut)
       }
 
       CommandMenu("Workspace") {
         Button("Switch Workspace...") {
           model.openWorkspaceSwitcher()
         }
-        .keyboardShortcut("o", modifiers: [.command, .shift])
+        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .openWorkspaceSwitcher).swiftUIShortcut)
       }
 
       CommandMenu("Pane") {
         Button("Split Right") {
           model.splitSelectedTerminal(axis: .horizontal)
         }
-        .keyboardShortcut("d", modifiers: [.command])
+        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .splitRight).swiftUIShortcut)
 
         Button("Split Down") {
           model.splitSelectedTerminal(axis: .vertical)
         }
-        .keyboardShortcut("d", modifiers: [.command, .shift])
+        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .splitDown).swiftUIShortcut)
 
         Divider()
 
         Button("Close Pane") {
           model.closeSelectedPane()
         }
-        .keyboardShortcut("w", modifiers: [.command])
+        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .closePane).swiftUIShortcut)
 
         Divider()
 
         Button("Focus Previous Pane") {
           model.focusNeighbor(offset: -1)
         }
-        .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .focusPreviousPane).swiftUIShortcut)
 
         Button("Focus Next Pane") {
           model.focusNeighbor(offset: 1)
         }
-        .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .focusNextPane).swiftUIShortcut)
       }
     }
     Settings {

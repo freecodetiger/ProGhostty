@@ -37,10 +37,19 @@ struct RootView: View {
         }
         .transition(.opacity.combined(with: .scale(scale: 0.985)))
       }
+
+      if let toast = model.titlebarToast {
+        TitlebarToastView(toast: toast)
+          .padding(.top, 9)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+          .transition(.opacity.combined(with: .scale(scale: 0.98)))
+          .allowsHitTesting(false)
+      }
     }
     .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
     .animation(.easeOut(duration: 0.12), value: model.isHistoryPresented)
     .animation(.easeOut(duration: 0.12), value: model.isPluginManagerPresented)
+    .animation(.easeOut(duration: 0.14), value: model.titlebarToast)
     .preferredColorScheme(model.appColorScheme)
     .background(Color(nsColor: model.terminalBackgroundColor).ignoresSafeArea())
     .background(
@@ -53,6 +62,46 @@ struct RootView: View {
       )
       .frame(width: 0, height: 0)
     )
+  }
+}
+
+private struct TitlebarToastView: View {
+  let toast: AppModel.TitlebarToast
+
+  var body: some View {
+    Text(toast.message)
+      .font(.system(size: 12, weight: .semibold))
+      .foregroundStyle(foreground)
+      .padding(.horizontal, 11)
+      .padding(.vertical, 5)
+      .background(background)
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+          .stroke(border, lineWidth: 1)
+      )
+      .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
+  }
+
+  private var foreground: Color {
+    switch toast.style {
+    case .success:
+      return Color(nsColor: .labelColor)
+    }
+  }
+
+  private var background: Color {
+    switch toast.style {
+    case .success:
+      return Color.green.opacity(0.22)
+    }
+  }
+
+  private var border: Color {
+    switch toast.style {
+    case .success:
+      return Color.green.opacity(0.38)
+    }
   }
 }
 

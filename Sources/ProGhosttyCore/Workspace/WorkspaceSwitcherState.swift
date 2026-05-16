@@ -30,11 +30,7 @@ public struct WorkspaceSwitcherState: Equatable, Sendable {
   public var activeWorkspaceID: UUID?
   public var runningWorkspaceIDs: Set<UUID>
   public var selectedWorkspaceID: UUID?
-  public var query: String = "" {
-    didSet {
-      selectedWorkspaceID = filteredWorkspaces.first?.id
-    }
-  }
+  public var query: String = ""
 
   public init(
     workspaces: [Workspace],
@@ -49,18 +45,15 @@ public struct WorkspaceSwitcherState: Equatable, Sendable {
   }
 
   public var filteredWorkspaces: [Workspace] {
-    let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    guard !needle.isEmpty else { return workspaces }
-    return workspaces.filter { workspace in
-      workspace.name.lowercased().contains(needle)
-        || (workspace.rootPath?.lowercased().contains(needle) == true)
-    }
+    workspaces
   }
 
   public var canCreateWorkspaceFromQuery: Bool {
-    let name = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !name.isEmpty else { return false }
-    return !workspaces.contains { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    false
+  }
+
+  public var isCreateWorkspaceSelected: Bool {
+    selectedWorkspaceID == nil
   }
 
   public var decoratedWorkspaces: [DecoratedWorkspace] {
@@ -79,16 +72,21 @@ public struct WorkspaceSwitcherState: Equatable, Sendable {
 
   public mutating func moveSelection(delta: Int) {
     let items = filteredWorkspaces
-    guard !items.isEmpty else {
+    let createIndex = items.count
+    guard createIndex > 0 else {
       selectedWorkspaceID = nil
       return
     }
 
     let currentIndex = selectedWorkspaceID.flatMap { selected in
       items.firstIndex { $0.id == selected }
-    } ?? 0
-    let nextIndex = (currentIndex + delta + items.count) % items.count
-    selectedWorkspaceID = items[nextIndex].id
+    } ?? createIndex
+    let nextIndex = (currentIndex + delta + createIndex + 1) % (createIndex + 1)
+    selectedWorkspaceID = nextIndex == createIndex ? nil : items[nextIndex].id
+  }
+
+  public mutating func selectCreateWorkspace() {
+    selectedWorkspaceID = nil
   }
 
   private mutating func ensureSelection() {

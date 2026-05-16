@@ -4,7 +4,7 @@ import SwiftUI
 
 struct SettingsView: View {
   @EnvironmentObject private var model: AppModel
-  @State private var saveMessage = ""
+  @State private var shortcutRecorderState = ShortcutRecorderState(settings: .defaults)
 
   var body: some View {
     let text = model.appText
@@ -87,17 +87,18 @@ struct SettingsView: View {
               fontSize: model.settings.fontSize
             )
 
-            Toggle(text.followSystem, isOn: $model.settings.followSystemAppearance)
-
             SettingsRow(text.theme) {
-              Picker("", selection: $model.settings.themeName) {
-                Text(text.light).tag("light")
-                Text(text.dark).tag("dark")
+              VStack(alignment: .leading, spacing: 8) {
+                Toggle(text.followSystem, isOn: $model.settings.followSystemAppearance)
+                Picker("", selection: $model.settings.themeName) {
+                  Text(text.light).tag("light")
+                  Text(text.dark).tag("dark")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(model.settings.followSystemAppearance)
+                .opacity(model.settings.followSystemAppearance ? 0.55 : 1)
               }
-              .pickerStyle(.segmented)
-              .labelsHidden()
-              .disabled(model.settings.followSystemAppearance)
-              .opacity(model.settings.followSystemAppearance ? 0.55 : 1)
             }
           }
 
@@ -119,6 +120,32 @@ struct SettingsView: View {
             Toggle(text.rerunCommandsWithReturn, isOn: $model.settings.rerunAutoEnter)
           }
 
+          SettingsSection(text.shortcuts) {
+            ForEach(KeyboardShortcutAction.allCases) { action in
+              ShortcutSettingsRow(
+                title: shortcutTitle(action, text: text),
+                binding: shortcutRecorderState.settings.shortcut(for: action),
+                isRecording: shortcutRecorderState.recordingAction == action,
+                text: text,
+                beginRecording: {
+                  shortcutRecorderState.settings = model.settings.keyboardShortcuts
+                  shortcutRecorderState.beginRecording(action)
+                },
+                reset: {
+                  shortcutRecorderState.settings = model.settings.keyboardShortcuts
+                  shortcutRecorderState.reset(action)
+                  model.settings.keyboardShortcuts = shortcutRecorderState.settings
+                }
+              )
+            }
+
+            if let conflict = shortcutRecorderState.conflictAction {
+              Text("\(text.shortcutConflict) \(shortcutTitle(conflict, text: text))")
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+            }
+          }
+
           SettingsSection(text.shellEnhancements) {
             Toggle(text.pgControlCommands, isOn: $model.settings.pgControlCommandsEnabled)
 
@@ -136,6 +163,24 @@ struct SettingsView: View {
               }
             }
           }
+
+          SettingsSection(text.about) {
+            SettingsRow(text.version) {
+              Text(model.appVersionString())
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(.secondary)
+            }
+
+            HStack {
+              Spacer()
+              Button(text.restoreDefaults, role: .destructive) {
+                if confirmRestoreDefaults(text: text) {
+                  model.resetSettings()
+                  shortcutRecorderState = ShortcutRecorderState(settings: model.settings.keyboardShortcuts)
+                }
+              }
+            }
+          }
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 22)
@@ -146,17 +191,10 @@ struct SettingsView: View {
         .opacity(0.5)
 
       HStack(spacing: 10) {
-        Text(saveMessage)
-          .font(.system(size: 12))
-          .foregroundStyle(.secondary)
         Spacer()
-        Button(text.restoreDefaults) {
-          model.resetSettings()
-          saveMessage = text.defaultsRestored
-        }
         Button(text.save) {
           model.saveSettings()
-          saveMessage = text.saved
+          model.closeSettingsWindow()
         }
         .keyboardShortcut(.defaultAction)
       }
@@ -167,6 +205,19 @@ struct SettingsView: View {
     .frame(minWidth: 560, minHeight: 460)
     .preferredColorScheme(model.appColorScheme)
     .background(Color(nsColor: .windowBackgroundColor))
+    .background(SettingsFocusResetHost())
+    .background(ShortcutRecorderHost(
+      isActive: shortcutRecorderState.recordingAction != nil,
+      onRecord: { binding in
+        commitShortcut(binding)
+      },
+      onCancel: {
+        shortcutRecorderState.cancelRecording()
+      }
+    ))
+    .onAppear {
+      shortcutRecorderState = ShortcutRecorderState(settings: model.settings.keyboardShortcuts)
+    }
   }
 
   private func chooseWorkingDirectory() {
@@ -179,6 +230,237 @@ struct SettingsView: View {
     }
     guard panel.runModal() == .OK, let url = panel.url else { return }
     model.settings.defaultWorkingDirectory = url.path
+  }
+
+  private func commitShortcut(_ binding: KeyboardShortcutBinding) {
+    shortcutRecorderState.settings = model.settings.keyboardShortcuts
+    if shortcutRecorderState.record(binding) {
+      model.settings.keyboardShortcuts = shortcutRecorderState.settings
+    } else {
+      NSSound.beep()
+    }
+  }
+
+  private func confirmRestoreDefaults(text: AppText) -> Bool {
+    let alert = NSAlert()
+    alert.messageText = text.restoreDefaultsTitle
+    alert.informativeText = text.restoreDefaultsMessage
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: text.restoreDefaults)
+    alert.addButton(withTitle: text.cancel)
+    return alert.runModal() == .alertFirstButtonReturn
+  }
+
+  private func shortcutTitle(_ action: KeyboardShortcutAction, text: AppText) -> String {
+    switch action {
+    case .openSettings:
+      return text.settings
+    case .openWorkspaceSwitcher:
+      return text.openWorkspaceSwitcher
+    case .splitRight:
+      return text.splitRight
+    case .splitDown:
+      return text.splitDown
+    case .closePane:
+      return text.closePane
+    case .focusPreviousPane:
+      return text.focusPreviousPane
+    case .focusNextPane:
+      return text.focusNextPane
+    }
+  }
+}
+
+private struct SettingsFocusResetHost: NSViewRepresentable {
+  func makeNSView(context: Context) -> FocusResetView {
+    let view = FocusResetView()
+    view.installMonitor()
+    return view
+  }
+
+  func updateNSView(_ view: FocusResetView, context: Context) {
+    view.installMonitor()
+  }
+
+  final class FocusResetView: NSView {
+    private var monitor: Any?
+
+    func installMonitor() {
+      guard monitor == nil else { return }
+      monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+        guard
+          let self,
+          let window,
+          event.window === window,
+          let contentView = window.contentView
+        else {
+          return event
+        }
+
+        let point = contentView.convert(event.locationInWindow, from: nil)
+        let hitView = contentView.hitTest(point)
+        if hitView?.hasTextInputAncestor == true {
+          return event
+        }
+        window.makeFirstResponder(nil)
+        return event
+      }
+    }
+
+    deinit {
+      MainActor.assumeIsolated {
+        if let monitor {
+          NSEvent.removeMonitor(monitor)
+        }
+      }
+    }
+  }
+}
+
+private extension NSView {
+  var hasTextInputAncestor: Bool {
+    if self is NSTextView || self is NSTextField {
+      return true
+    }
+    return superview?.hasTextInputAncestor ?? false
+  }
+}
+
+private struct ShortcutSettingsRow: View {
+  let title: String
+  let binding: KeyboardShortcutBinding
+  let isRecording: Bool
+  let text: AppText
+  let beginRecording: () -> Void
+  let reset: () -> Void
+
+  var body: some View {
+    SettingsRow(title) {
+      HStack(spacing: 8) {
+        Text(isRecording ? text.recordingShortcut : binding.displayString)
+          .font(.system(size: 12, weight: .medium, design: .monospaced))
+          .foregroundStyle(isRecording ? .primary : .secondary)
+          .frame(minWidth: 84, alignment: .leading)
+          .padding(.horizontal, 9)
+          .padding(.vertical, 5)
+          .background(Color(nsColor: .textBackgroundColor))
+          .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+          .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+              .stroke(Color(nsColor: .separatorColor).opacity(isRecording ? 0.72 : 0.36), lineWidth: 1)
+          )
+
+        Button(text.recordShortcut, action: beginRecording)
+        Button(text.resetShortcut, action: reset)
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+}
+
+private struct ShortcutRecorderHost: NSViewRepresentable {
+  let isActive: Bool
+  let onRecord: (KeyboardShortcutBinding) -> Void
+  let onCancel: () -> Void
+
+  func makeNSView(context: Context) -> RecorderView {
+    let view = RecorderView()
+    view.onRecord = onRecord
+    view.onCancel = onCancel
+    view.isActive = isActive
+    view.installMonitor()
+    return view
+  }
+
+  func updateNSView(_ view: RecorderView, context: Context) {
+    view.onRecord = onRecord
+    view.onCancel = onCancel
+    view.isActive = isActive
+    view.installMonitor()
+  }
+
+  final class RecorderView: NSView {
+    var isActive = false
+    var onRecord: ((KeyboardShortcutBinding) -> Void)?
+    var onCancel: (() -> Void)?
+    private var monitor: Any?
+
+    func installMonitor() {
+      guard monitor == nil else { return }
+      monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        guard let self, isActive else { return event }
+        if event.keyCode == 53 {
+          onCancel?()
+          return nil
+        }
+        guard let binding = KeyboardShortcutBinding(event: event) else {
+          NSSound.beep()
+          return nil
+        }
+        onRecord?(binding)
+        return nil
+      }
+    }
+
+    deinit {
+      MainActor.assumeIsolated {
+        if let monitor {
+          NSEvent.removeMonitor(monitor)
+        }
+      }
+    }
+  }
+}
+
+private extension KeyboardShortcutBinding {
+  init?(event: NSEvent) {
+    let modifiers = event.proGhosttyShortcutModifiers
+    guard !modifiers.isEmpty, let key = event.proGhosttyShortcutKey else { return nil }
+    self.init(key: key, modifiers: modifiers)
+  }
+}
+
+private extension NSEvent {
+  var proGhosttyShortcutModifiers: Set<KeyboardShortcutModifier> {
+    var result: Set<KeyboardShortcutModifier> = []
+    if modifierFlags.contains(.command) {
+      result.insert(.command)
+    }
+    if modifierFlags.contains(.control) {
+      result.insert(.control)
+    }
+    if modifierFlags.contains(.option) {
+      result.insert(.option)
+    }
+    if modifierFlags.contains(.shift) {
+      result.insert(.shift)
+    }
+    return result
+  }
+
+  var proGhosttyShortcutKey: String? {
+    switch keyCode {
+    case 36, 76:
+      return "return"
+    case 48:
+      return "tab"
+    case 49:
+      return "space"
+    case 51, 117:
+      return "delete"
+    case 53:
+      return "escape"
+    case 123:
+      return "leftArrow"
+    case 124:
+      return "rightArrow"
+    case 125:
+      return "downArrow"
+    case 126:
+      return "upArrow"
+    default:
+      return charactersIgnoringModifiers?.lowercased()
+    }
   }
 }
 

@@ -12,6 +12,11 @@ public final class PaneWorkspaceController {
     public var pane: TerminalPane
   }
 
+  public struct CloseWorkspaceResult: Equatable {
+    public var workspaceID: UUID
+    public var panes: [TerminalPane]
+  }
+
   private let sessionManager: TerminalSessionManager
   private let focusStore: TerminalFocusStore
   public private(set) var workspaceLayouts: [WorkspaceLayout] = []
@@ -47,17 +52,27 @@ public final class PaneWorkspaceController {
   }
 
   public func closeSelectedTerminal() -> (workspaceID: UUID, panes: [TerminalPane])? {
-    guard let activeWorkspaceID, let index = workspaceLayouts.firstIndex(where: { $0.id == activeWorkspaceID }) else {
+    guard let activeWorkspaceID else {
       return nil
     }
+    return closeWorkspace(workspaceID: activeWorkspaceID).map { ($0.workspaceID, $0.panes) }
+  }
+
+  public func closeWorkspace(workspaceID: UUID) -> CloseWorkspaceResult? {
+    guard let index = workspaceLayouts.firstIndex(where: { $0.id == workspaceID }) else {
+      return nil
+    }
+
     let workspace = workspaceLayouts.remove(at: index)
     let panes = PaneTreeReducer.listLeaves(in: workspace.root)
     for pane in panes {
       sessionManager.closeSession(pane.sessionId)
     }
     focusStore.removeFocus(for: workspace.id)
-    self.activeWorkspaceID = workspaceLayouts.last?.id
-    return (workspace.id, panes)
+    if activeWorkspaceID == workspace.id {
+      activeWorkspaceID = workspaceLayouts.last?.id
+    }
+    return CloseWorkspaceResult(workspaceID: workspace.id, panes: panes)
   }
 
   public func selectPane(_ paneID: UUID, in workspaceID: UUID) -> Bool {
