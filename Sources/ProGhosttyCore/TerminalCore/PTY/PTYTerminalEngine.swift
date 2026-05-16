@@ -41,6 +41,10 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
     surfaceRegistry.viewForSession(id)
   }
 
+  public func selectedText(for id: TerminalSessionID) -> String? {
+    surfaceRegistry.selectedText(for: id)
+  }
+
   public func applyPalette(_ palette: TerminalSurfacePalette) {
     surfaceRegistry.applyPalette(palette)
   }
@@ -293,6 +297,8 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     var scrollView: NSScrollView
     var textView: PTYTextView
     var lastFrame: GhosttyTerminalFrame? = nil
+    var lastHTMLSnapshot: String? = nil
+    var lastCursorFrame: GhosttyTerminalFrame? = nil
   }
 
   private var surfaces: [TerminalSessionID: SurfaceState] = [:]
@@ -314,13 +320,20 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     textView.activationHandler = { [weak self] in
       self?.activationHandler?(id)
     }
+    textView.scrollToBottomHandler = { [weak textView] in
+      textView?.scrollToEndOfDocument(nil)
+    }
     textView.isEditable = false
     textView.isSelectable = true
     textView.font = terminalFont(weight: .regular)
     TerminalSurfaceStyle.configureTextView(textView, palette: palette)
     textView.autoresizingMask = [.width, .height]
-    textView.isVerticallyResizable = false
+    textView.isVerticallyResizable = true
     textView.isHorizontallyResizable = false
+    textView.minSize = NSSize(width: 0, height: 0)
+    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+    textView.textContainer?.widthTracksTextView = true
+    textView.textContainer?.heightTracksTextView = false
     textView.textContainerInset = NSSize(width: 14, height: 12)
 
     let scrollView = NSScrollView()
@@ -337,12 +350,27 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     surfaces[id]?.scrollView
   }
 
+  public func selectedText(for id: TerminalSessionID) -> String? {
+    guard let textView = surfaces[id]?.textView else { return nil }
+    let range = textView.selectedRange()
+    guard range.length > 0 else { return nil }
+    return (textView.string as NSString).substring(with: range)
+  }
+
   public func applyPalette(_ palette: TerminalSurfacePalette) {
     self.palette = palette
     for (sessionID, surface) in surfaces {
       TerminalSurfaceStyle.configureTextView(surface.textView, palette: palette)
       TerminalSurfaceStyle.configureScrollView(surface.scrollView, backgroundColor: palette.background)
-      if let frame = surface.lastFrame {
+      if let html = surface.lastHTMLSnapshot,
+        let attributed = try? attributedTerminalSnapshot(
+          fromHTML: html,
+          cursorFrame: surface.lastCursorFrame,
+          isFocused: isFocused(sessionID)
+        )
+      {
+        replaceText(in: surface.textView, with: attributed, scrollView: surface.scrollView, scrollToEnd: false)
+      } else if let frame = surface.lastFrame {
         render(frame, in: surface.textView, isFocused: isFocused(sessionID), scrollToEnd: false)
       }
     }
@@ -353,7 +381,15 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     fontSize = size
     for (sessionID, surface) in surfaces {
       surface.textView.font = terminalFont(weight: .regular)
-      if let frame = surface.lastFrame {
+      if let html = surface.lastHTMLSnapshot,
+        let attributed = try? attributedTerminalSnapshot(
+          fromHTML: html,
+          cursorFrame: surface.lastCursorFrame,
+          isFocused: isFocused(sessionID)
+        )
+      {
+        replaceText(in: surface.textView, with: attributed, scrollView: surface.scrollView, scrollToEnd: false)
+      } else if let frame = surface.lastFrame {
         render(frame, in: surface.textView, isFocused: isFocused(sessionID), scrollToEnd: false)
       }
       surface.textView.window?.invalidateCursorRects(for: surface.textView)
@@ -364,8 +400,17 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     guard focusedSessionID != id else { return }
     focusedSessionID = id
     for (sessionID, surface) in surfaces {
-      guard let frame = surface.lastFrame else { continue }
-      render(frame, in: surface.textView, isFocused: isFocused(sessionID), scrollToEnd: false)
+      if let html = surface.lastHTMLSnapshot,
+        let attributed = try? attributedTerminalSnapshot(
+          fromHTML: html,
+          cursorFrame: surface.lastCursorFrame,
+          isFocused: isFocused(sessionID)
+        )
+      {
+        replaceText(in: surface.textView, with: attributed, scrollView: surface.scrollView, scrollToEnd: false)
+      } else if let frame = surface.lastFrame {
+        render(frame, in: surface.textView, isFocused: isFocused(sessionID), scrollToEnd: false)
+      }
     }
   }
 
@@ -384,29 +429,44 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   public func render(_ bridge: GhosttyVTBridge, session id: TerminalSessionID) {
     guard var surface = surfaces[id] else { return }
-    render(bridge, in: surface.textView, session: id, lastFrame: &surface.lastFrame)
+    render(bridge, surface: &surface, session: id)
     surfaces[id] = surface
   }
 
-  private func render(
-    _ bridge: GhosttyVTBridge,
-    in view: NSTextView,
-    session id: TerminalSessionID,
-    lastFrame: inout GhosttyTerminalFrame?
-  ) {
-    if let frame = try? bridge.frame() {
-      lastFrame = frame
-      render(frame, in: view, isFocused: isFocused(id), scrollToEnd: true)
-    } else if let attributed = try? attributedTerminalSnapshot(from: bridge) {
-      lastFrame = nil
-      view.textStorage?.setAttributedString(attributed)
-      view.window?.invalidateCursorRects(for: view)
-      view.scrollToEndOfDocument(nil)
+  private func render(_ bridge: GhosttyVTBridge, surface: inout SurfaceState, session id: TerminalSessionID) {
+    let shouldFollowOutput = isScrolledToBottom(surface.scrollView)
+    let cursorFrame = try? bridge.frame()
+    if let html = try? bridge.htmlText(),
+      let attributed = try? attributedTerminalSnapshot(fromHTML: html, cursorFrame: cursorFrame, isFocused: isFocused(id))
+    {
+      surface.lastHTMLSnapshot = html
+      surface.lastFrame = nil
+      surface.lastCursorFrame = cursorFrame
+      replaceText(
+        in: surface.textView,
+        with: attributed,
+        scrollView: surface.scrollView,
+        scrollToEnd: shouldFollowOutput
+      )
+    } else if let frame = try? bridge.frame() {
+      surface.lastHTMLSnapshot = nil
+      surface.lastFrame = frame
+      surface.lastCursorFrame = nil
+      render(frame, in: surface.textView, isFocused: isFocused(id), scrollToEnd: shouldFollowOutput)
     } else if let text = try? bridge.plainText() {
-      lastFrame = nil
-      view.string = text
-      view.window?.invalidateCursorRects(for: view)
-      view.scrollToEndOfDocument(nil)
+      surface.lastHTMLSnapshot = nil
+      surface.lastFrame = nil
+      surface.lastCursorFrame = nil
+      replaceText(
+        in: surface.textView,
+        with: NSAttributedString(string: text, attributes: [
+          .font: terminalFont(weight: .regular),
+          .foregroundColor: palette.foreground,
+          .backgroundColor: palette.background,
+        ]),
+        scrollView: surface.scrollView,
+        scrollToEnd: shouldFollowOutput
+      )
     }
   }
 
@@ -426,47 +486,103 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     }
   }
 
+  private func replaceText(
+    in textView: NSTextView,
+    with attributed: NSAttributedString,
+    scrollView: NSScrollView,
+    scrollToEnd: Bool
+  ) {
+    let previousOrigin = scrollView.contentView.bounds.origin
+    textView.textStorage?.setAttributedString(attributed)
+    textView.window?.invalidateCursorRects(for: textView)
+    if scrollToEnd {
+      textView.scrollToEndOfDocument(nil)
+    } else {
+      scrollView.contentView.scroll(to: previousOrigin)
+      scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+  }
+
+  private func isScrolledToBottom(_ scrollView: NSScrollView) -> Bool {
+    guard let documentView = scrollView.documentView else { return true }
+    let visibleMaxY = scrollView.contentView.bounds.maxY
+    let documentMaxY = documentView.bounds.maxY
+    return documentMaxY - visibleMaxY < 2
+  }
+
   private func isFocused(_ id: TerminalSessionID) -> Bool {
     focusedSessionID.map { $0 == id } ?? true
   }
 
   private func attributedTerminalSnapshot(from bridge: GhosttyVTBridge) throws -> NSAttributedString {
-    let html = try bridge.htmlText()
-    let wrapped =
-      """
-      <!doctype html>
-      <html>
-      <head>
-      <meta charset="utf-8">
-      <style>
-      body {
-        margin: 0;
-        background: \(Self.hexString(for: palette.background));
-        color: \(Self.hexString(for: palette.foreground));
-        font-family: "\(fontFamily)", -apple-system-monospaced, Menlo, monospace;
-        font-size: \(Int(fontSize))px;
-        white-space: pre;
-      }
-      pre { margin: 0; }
-      </style>
-      </head>
-      <body><pre>\(html)</pre></body>
-      </html>
-      """
-    let data = Data(wrapped.utf8)
-    let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
-      .documentType: NSAttributedString.DocumentType.html,
-      .characterEncoding: String.Encoding.utf8.rawValue,
-    ]
-    let rendered = try NSMutableAttributedString(data: data, options: options, documentAttributes: nil)
-    rendered.addAttributes(
+    try attributedTerminalSnapshot(fromHTML: bridge.htmlText(), cursorFrame: try? bridge.frame(), isFocused: true)
+  }
+
+  private func attributedTerminalSnapshot(
+    fromHTML html: String,
+    cursorFrame: GhosttyTerminalFrame?,
+    isFocused: Bool
+  ) throws -> NSAttributedString {
+    let attributed = try GhosttyHTMLAttributedAdapter(
+      palette: palette,
+      fontFamily: fontFamily,
+      fontSize: fontSize
+    ).attributedString(fromHTML: html, isFocused: isFocused)
+    return attributedWithCursor(attributed, cursorFrame: cursorFrame, isFocused: isFocused)
+  }
+
+  private func attributedWithCursor(
+    _ attributed: NSAttributedString,
+    cursorFrame: GhosttyTerminalFrame?,
+    isFocused: Bool
+  ) -> NSAttributedString {
+    guard isFocused, let cursorFrame, cursorFrame.cursorVisible else {
+      return attributed
+    }
+    let mutable = NSMutableAttributedString(attributedString: attributed)
+    let cursorIndex = textIndexForCursor(frame: cursorFrame, text: mutable.string as NSString)
+    ensureCursorIndex(cursorIndex, in: mutable)
+    guard mutable.length > 0 else { return mutable }
+    let safeIndex = min(cursorIndex, mutable.length - 1)
+    mutable.addAttributes(
       [
         .font: terminalFont(weight: .regular),
-        .backgroundColor: NSColor(calibratedWhite: 0.08, alpha: 1),
+        .foregroundColor: palette.cursorForeground,
+        .backgroundColor: palette.cursorBackground,
       ],
-      range: NSRange(location: 0, length: rendered.length)
+      range: NSRange(location: safeIndex, length: 1)
     )
-    return rendered
+    return mutable
+  }
+
+  private func ensureCursorIndex(_ cursorIndex: Int, in attributed: NSMutableAttributedString) {
+    guard cursorIndex >= attributed.length else { return }
+    let missing = cursorIndex - attributed.length + 1
+    let filler = String(repeating: " ", count: missing)
+    attributed.append(NSAttributedString(string: filler, attributes: [
+      .font: terminalFont(weight: .regular),
+      .foregroundColor: palette.foreground,
+      .backgroundColor: palette.background,
+    ]))
+  }
+
+  private func textIndexForCursor(frame: GhosttyTerminalFrame, text: NSString) -> Int {
+    let targetRow = max(0, frame.cursorY)
+    var row = 0
+    var lineStart = 0
+    while row < targetRow {
+      let searchRange = NSRange(location: lineStart, length: max(0, text.length - lineStart))
+      let newline = text.range(of: "\n", options: [], range: searchRange)
+      guard newline.location != NSNotFound else {
+        return text.length
+      }
+      lineStart = newline.location + 1
+      row += 1
+    }
+    let lineEndRange = NSRange(location: lineStart, length: max(0, text.length - lineStart))
+    let newline = text.range(of: "\n", options: [], range: lineEndRange)
+    let lineEnd = newline.location == NSNotFound ? text.length : newline.location
+    return min(lineStart + max(0, frame.cursorX), lineEnd)
   }
 
   private func terminalFont(weight: NSFont.Weight) -> NSFont {
@@ -493,6 +609,8 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 final class PTYTextView: NSTextView {
   var inputHandler: ((Data) -> Void)?
   var activationHandler: (() -> Void)?
+  var scrollToBottomHandler: (() -> Void)?
+  var pasteboard = NSPasteboard.general
   private var isHandlingTextSelection = false
   private var backgroundDragSelectionAnchor: Int?
 
@@ -542,6 +660,7 @@ final class PTYTextView: NSTextView {
   override func keyDown(with event: NSEvent) {
     activationHandler?()
     if let data = encodedInput(for: event) {
+      scrollToBottomHandler?()
       inputHandler?(data)
     } else {
       super.keyDown(with: event)
@@ -557,12 +676,44 @@ final class PTYTextView: NSTextView {
     NSMenu.popUpContextMenu(menu, with: event, for: self)
   }
 
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+      let key = event.charactersIgnoringModifiers?.lowercased()
+    else {
+      return super.performKeyEquivalent(with: event)
+    }
+
+    switch key {
+    case "c":
+      copy(nil)
+      return true
+    case "v":
+      paste(nil)
+      return true
+    default:
+      return super.performKeyEquivalent(with: event)
+    }
+  }
+
+  override func copy(_ sender: Any?) {
+    guard let selectedText else { return }
+    pasteboard.clearContents()
+    pasteboard.setString(selectedText, forType: .string)
+  }
+
   override func paste(_ sender: Any?) {
     activationHandler?()
-    guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
+    guard let text = pasteboard.string(forType: .string), !text.isEmpty else {
       return
     }
+    scrollToBottomHandler?()
     inputHandler?(Data(text.utf8))
+  }
+
+  private var selectedText: String? {
+    let range = selectedRange()
+    guard range.length > 0, NSMaxRange(range) <= (string as NSString).length else { return nil }
+    return (string as NSString).substring(with: range)
   }
 
   func isSelectableTextPoint(_ point: NSPoint) -> Bool {

@@ -15,6 +15,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
   public var maxOutputPreviewKB: Int
   public var rerunAutoEnter: Bool
   public var pgControlCommandsEnabled: Bool
+  public var aliyunASRAPIKey: String?
   public var keyboardShortcuts: KeyboardShortcutSettings
 
   public static let defaults = AppSettings(
@@ -31,6 +32,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     maxOutputPreviewKB: 64,
     rerunAutoEnter: false,
     pgControlCommandsEnabled: true,
+    aliyunASRAPIKey: nil,
     keyboardShortcuts: .defaults
   )
 
@@ -48,6 +50,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     case maxOutputPreviewKB
     case rerunAutoEnter
     case pgControlCommandsEnabled
+    case aliyunASRAPIKey
     case keyboardShortcuts
   }
 
@@ -65,6 +68,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     maxOutputPreviewKB: Int,
     rerunAutoEnter: Bool,
     pgControlCommandsEnabled: Bool,
+    aliyunASRAPIKey: String?,
     keyboardShortcuts: KeyboardShortcutSettings
   ) {
     self.defaultShell = defaultShell
@@ -80,6 +84,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     self.maxOutputPreviewKB = maxOutputPreviewKB
     self.rerunAutoEnter = rerunAutoEnter
     self.pgControlCommandsEnabled = pgControlCommandsEnabled
+    self.aliyunASRAPIKey = aliyunASRAPIKey
     self.keyboardShortcuts = keyboardShortcuts.mergedWithDefaults()
   }
 
@@ -101,6 +106,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     maxOutputPreviewKB = try container.decodeIfPresent(Int.self, forKey: .maxOutputPreviewKB) ?? Self.defaults.maxOutputPreviewKB
     rerunAutoEnter = try container.decodeIfPresent(Bool.self, forKey: .rerunAutoEnter) ?? Self.defaults.rerunAutoEnter
     pgControlCommandsEnabled = try container.decodeIfPresent(Bool.self, forKey: .pgControlCommandsEnabled) ?? Self.defaults.pgControlCommandsEnabled
+    aliyunASRAPIKey = try container.decodeIfPresent(String.self, forKey: .aliyunASRAPIKey)
     keyboardShortcuts = (
       try container.decodeIfPresent(KeyboardShortcutSettings.self, forKey: .keyboardShortcuts) ?? Self.defaults.keyboardShortcuts
     ).mergedWithDefaults()

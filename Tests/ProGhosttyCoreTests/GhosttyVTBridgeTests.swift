@@ -26,6 +26,16 @@ struct GhosttyVTBridgeTests {
     #expect(html.contains("style") || html.contains("class") || html.contains("span"))
   }
 
+  @Test func formatsPaletteColorsAsConcreteRgbInHtml() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    bridge.write(Data("typed \u{1B}[38;5;8msuggestion\u{1B}[0m\r\n".utf8))
+
+    let html = try bridge.htmlText()
+
+    #expect(html.contains("rgb("))
+    #expect(!html.contains("var(--vt-palette-8)"))
+  }
+
   @Test func renderFramePreservesFaintStyleAndCursor() throws {
     let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
     bridge.write(Data("typed \u{1B}[2;90msuggestion\u{1B}[0m".utf8))
@@ -49,5 +59,17 @@ struct GhosttyVTBridgeTests {
 
     #expect(firstLine.hasPrefix("prompt % "))
     #expect(!firstLine.hasPrefix("%"))
+  }
+
+  @Test func formatterIncludesScrollbackHistory() throws {
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+    bridge.write(Data("hello".utf8))
+    bridge.write(Data("\u{1B}D\u{1B}D\u{1B}D".utf8))
+
+    let text = try bridge.plainText()
+    let html = try bridge.htmlText()
+
+    #expect(text.contains("hello"))
+    #expect(html.contains("hello"))
   }
 }

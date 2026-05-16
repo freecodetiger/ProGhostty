@@ -14,6 +14,10 @@ struct PTYLaunchTests {
     #expect(PTYLaunch.shellArguments(shellPath: "zsh") == ["zsh"])
   }
 
+  @Test func shellArgumentsRunLaunchCommandThroughLoginShell() {
+    #expect(PTYLaunch.shellArguments(shellPath: "/bin/zsh", launchCommand: "codex") == ["zsh", "-lc", "codex"])
+  }
+
   @Test func launchEnvironmentSuppressesZshEndOfLineMarkerByDefault() {
     let environment = PTYLaunch.launchEnvironment([:])
 

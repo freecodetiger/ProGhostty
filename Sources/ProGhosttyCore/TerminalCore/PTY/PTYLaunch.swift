@@ -19,14 +19,22 @@ public enum PTYLaunch {
   }
 
   public static func shellArguments(shellPath: String) -> [String] {
+    shellArguments(shellPath: shellPath, launchCommand: nil)
+  }
+
+  public static func shellArguments(shellPath: String, launchCommand: String?) -> [String] {
     let name = URL(fileURLWithPath: shellPath).lastPathComponent
-    return [name.isEmpty ? shellPath : name]
+    let argv0 = name.isEmpty ? shellPath : name
+    guard let launchCommand, !launchCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return [argv0]
+    }
+    return [argv0, "-lc", launchCommand]
   }
 
   static func spawn(config: TerminalSessionConfig) throws -> SpawnResult {
     var pid = pid_t()
     var fd: Int32 = -1
-    let arguments = shellArguments(shellPath: config.shellPath)
+    let arguments = shellArguments(shellPath: config.shellPath, launchCommand: config.launchCommand)
     let environment = launchEnvironment(config.environment)
 
     let result = try withCStringArray(arguments) { argv in

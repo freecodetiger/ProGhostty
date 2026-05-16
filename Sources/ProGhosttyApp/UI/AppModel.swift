@@ -73,10 +73,14 @@ final class AppModel: ObservableObject {
   }
   @Published var requestedPluginPlanID: String?
   @Published var shellIntegrationState = "partial"
+  @Published var isAICompanionPresented = false
+  @Published var activeAISession: AISession?
+  @Published var aiErrorMessage: String?
 
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
   private let paneWorkspaceController: PaneWorkspaceController
+  private let aiSessionManager: AISessionManager
   private let focusStore = TerminalFocusStore()
   private var indexer: CommandBlockIndexer
   private let historyStore: HistoryStore?
@@ -113,6 +117,12 @@ final class AppModel: ObservableObject {
     self.surfaceRegistry = surfaceRegistry
     self.sessionManager = sessionManager
     paneWorkspaceController = PaneWorkspaceController(sessionManager: sessionManager, focusStore: focusStore)
+    aiSessionManager = AISessionManager(
+      paneController: paneWorkspaceController,
+      terminalSessionManager: sessionManager,
+      focusStore: focusStore,
+      shellPathProvider: { loadedSettings.defaultShell }
+    )
     indexer = CommandBlockIndexer(maxPreviewBytes: loadedSettings.maxOutputPreviewKB * 1024)
 
     surfaceRegistry.setInputHandler { [weak self] sourceSession, data in
@@ -178,6 +188,11 @@ final class AppModel: ObservableObject {
 
   func surfaceView(for id: TerminalSessionID) -> NSView? {
     surfaceRegistry.viewForSession(id)
+  }
+
+  func selectedTerminalTextForPrompt() -> String? {
+    guard let selectedSessionID else { return nil }
+    return surfaceRegistry.selectedText(for: selectedSessionID)
   }
 
   var activeWorkspace: WorkspaceRuntime? {
@@ -682,6 +697,96 @@ final class AppModel: ObservableObject {
     isHistoryPresented = false
     isPluginManagerPresented = false
     isWorkspaceSwitcherPresented = false
+    isAICompanionPresented = false
+  }
+
+  func openAICompanion(profile: AICLIProfile = .codex, mode: AIOpenMode = .rightSplit) {
+    isHistoryPresented = false
+    isPluginManagerPresented = false
+    isWorkspaceSwitcherPresented = false
+    aiErrorMessage = nil
+    if activeAISession == nil {
+      launchAI(profile: profile, mode: mode)
+    }
+    isAICompanionPresented = true
+  }
+
+  func closeAICompanion() {
+    isAICompanionPresented = false
+  }
+
+  func launchAI(profile: AICLIProfile, mode: AIOpenMode) {
+    guard let workspace = aiWorkspaceContext else {
+      aiErrorMessage = "No active terminal pane is available for AI Companion."
+      return
+    }
+    do {
+      let session = try aiSessionManager.start(profile: profile, workspace: workspace, openMode: mode)
+      activeAISession = session
+      syncRuntimeLayout(for: workspace.id)
+      activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
+      syncWorkspaceSwitcherState()
+    } catch {
+      aiErrorMessage = "Unable to start \(profile.name): \(error.localizedDescription)"
+    }
+  }
+
+  func pastePromptToAI(_ prompt: String, send: Bool) {
+    guard let activeAISession else {
+      aiErrorMessage = "Start Codex or Claude Code before pasting a prompt."
+      return
+    }
+    do {
+      try aiSessionManager.sendPrompt(prompt, to: activeAISession.id, mode: send ? .bracketedPasteAndEnter : activeAISession.profile.defaultSendMode)
+      _ = aiSessionManager.focusAISession(id: activeAISession.id)
+      restoreTerminalKeyboardFocus()
+    } catch {
+      aiErrorMessage = "Unable to paste prompt: \(error.localizedDescription)"
+    }
+  }
+
+  var aiWorkspacePath: String? {
+    aiWorkspaceContext?.rootPath
+  }
+
+  func makeAIContext(includeDiff: Bool) -> AIPromptContext {
+    let workspacePath = aiWorkspacePath
+    var branch: String?
+    var status: String?
+    var diff: String?
+    var files: [GitModifiedFile] = []
+    if let workspacePath {
+      status = try? GitContextCollector.statusPorcelain(workspacePath: workspacePath)
+      branch = try? GitContextCollector.branch(workspacePath: workspacePath)
+      files = status.map(GitModifiedFile.parsePorcelain) ?? []
+      if includeDiff {
+        diff = try? GitContextCollector.diff(workspacePath: workspacePath)
+      }
+    }
+    return AIPromptContext(
+      workspacePath: workspacePath,
+      gitBranch: branch,
+      gitStatus: status,
+      gitDiff: diff,
+      selectedTerminalText: selectedTerminalTextForPrompt(),
+      changedFiles: files
+    )
+  }
+
+  func loadChangedFileContents(_ files: [GitModifiedFile]) -> String {
+    guard let root = aiWorkspacePath else { return "" }
+    return files.compactMap { file in
+      let url = URL(fileURLWithPath: root, isDirectory: true).appendingPathComponent(file.path)
+      guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+      return "File: \(file.path)\n```\n\(text)\n```"
+    }.joined(separator: "\n\n")
+  }
+
+  func makeASRService() -> AliyunASRService {
+    let configuredKey = settings.aliyunASRAPIKey
+    return AliyunASRService(apiKeyProvider: AliyunAPIKeyProvider(configuredKeyReader: {
+      configuredKey
+    }))
   }
 
   func resizePane(_ paneID: UUID, rows: Int, cols: Int) {
@@ -893,6 +998,24 @@ final class AppModel: ObservableObject {
     )
     workspaceSwitcherState = next
     applyFocusedTerminalSurface()
+  }
+
+  private var aiWorkspaceContext: AIWorkspace? {
+    guard let activeWorkspace, let selectedPaneID else { return nil }
+    let root = activeWorkspace.workspace?.rootPath ?? selectedCwd ?? activeWorkspace.displayPath ?? FileManager.default.currentDirectoryPath
+    return AIWorkspace(id: activeWorkspace.id, name: activeWorkspace.title, rootPath: root, currentPaneID: selectedPaneID)
+  }
+
+  private func syncRuntimeLayout(for workspaceID: UUID) {
+    guard let updated = paneWorkspaceController.workspaceLayout(id: workspaceID),
+      let index = workspaceRuntimes.firstIndex(where: { $0.id == workspaceID })
+    else { return }
+    workspaceRuntimes[index].layout = updated
+    for pane in PaneTreeReducer.listLeaves(in: updated.root) {
+      workspaceRuntimes[index].outputBySession[pane.sessionId] = workspaceRuntimes[index].outputBySession[pane.sessionId] ?? ""
+      workspaceRuntimes[index].cwdBySession[pane.sessionId] = workspaceRuntimes[index].cwdBySession[pane.sessionId] ?? pane.cwd ?? workspaceRuntimes[index].displayPath ?? ""
+      indexer.associate(session: pane.sessionId, workspaceId: workspaceRuntimes[index].workspace?.id)
+    }
   }
 
   private func sessionConfig(workspace: Workspace?, workingDirectory: String?) -> TerminalSessionConfig {

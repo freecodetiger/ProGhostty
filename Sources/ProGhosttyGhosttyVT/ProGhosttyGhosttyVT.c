@@ -266,6 +266,7 @@ static int proghostty_vt_format(ProGhosttyVT *vt, GhosttyFormatterFormat format,
   GhosttyFormatterTerminalOptions opts = GHOSTTY_INIT_SIZED(GhosttyFormatterTerminalOptions);
   opts.emit = format;
   opts.trim = true;
+  opts.extra.palette = format == GHOSTTY_FORMATTER_FORMAT_HTML;
 
   GhosttyFormatter formatter = NULL;
   GhosttyResult result = ghostty_formatter_terminal_new(NULL, &formatter, vt->terminal, opts);

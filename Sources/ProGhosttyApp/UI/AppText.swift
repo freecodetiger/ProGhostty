@@ -14,6 +14,8 @@ struct AppText {
   var settings: String { text("Settings", "设置") }
   var settingsCaption: String { text("Quiet defaults for terminal behavior, appearance, and shell tools.", "调整终端行为、外观和 Shell 工具的克制默认值。") }
   var workspaces: String { text("Workspaces...", "工作区...") }
+  var copy: String { text("Copy", "复制") }
+  var paste: String { text("Paste", "粘贴") }
   var splitRight: String { text("Split Right", "向右分屏") }
   var splitDown: String { text("Split Down", "向下分屏") }
   var closePane: String { text("Close Pane", "关闭分屏") }

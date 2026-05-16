@@ -681,6 +681,18 @@ final class TerminalPaneViewController: NSViewController {
   ) -> NSMenu {
     let menu = NSMenu()
     let paneId = pane.paneId
+    menu.addItem(ClosureMenuItem(title: text.copy) { [weak self] in
+      self?.terminalTextView(in: self?.contentView)?.copy(nil)
+    } isEnabled: { [weak self] in
+      guard let textView = self?.terminalTextView(in: self?.contentView) else { return false }
+      return textView.selectedRange().length > 0
+    })
+    menu.addItem(ClosureMenuItem(title: text.paste) { [weak self] in
+      self?.terminalTextView(in: self?.contentView)?.paste(nil)
+    } isEnabled: {
+      NSPasteboard.general.string(forType: .string)?.isEmpty == false
+    })
+    menu.addItem(.separator())
     menu.addItem(ClosureMenuItem(title: text.splitRight) { [weak self] in
       DebugLog.write("context menu Split Right pane=\(paneId)")
       self?.performSplitIfPossible(axis: .horizontal, onSelect: onSelect, onSplit: onSplit)

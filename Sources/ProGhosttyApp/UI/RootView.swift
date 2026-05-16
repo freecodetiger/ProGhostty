@@ -38,6 +38,17 @@ struct RootView: View {
         .transition(.opacity.combined(with: .scale(scale: 0.985)))
       }
 
+      if model.isAICompanionPresented {
+        UtilityOverlay(
+          width: 860,
+          height: 620,
+          onClose: { model.closeAICompanion() }
+        ) {
+          AICompanionView()
+        }
+        .transition(.opacity.combined(with: .scale(scale: 0.985)))
+      }
+
       if let toast = model.titlebarToast {
         TitlebarToastView(toast: toast)
           .padding(.top, 9)
@@ -49,6 +60,7 @@ struct RootView: View {
     .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
     .animation(.easeOut(duration: 0.12), value: model.isHistoryPresented)
     .animation(.easeOut(duration: 0.12), value: model.isPluginManagerPresented)
+    .animation(.easeOut(duration: 0.12), value: model.isAICompanionPresented)
     .animation(.easeOut(duration: 0.14), value: model.titlebarToast)
     .preferredColorScheme(model.appColorScheme)
     .background(Color(nsColor: model.terminalBackgroundColor).ignoresSafeArea())

@@ -91,6 +91,13 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
     return scrollView
   }
 
+  public func selectedText(for id: TerminalSessionID) -> String? {
+    guard let textView = sessions[id]?.view else { return nil }
+    let range = textView.selectedRange()
+    guard range.length > 0 else { return nil }
+    return (textView.string as NSString).substring(with: range)
+  }
+
   public func applyPalette(_ palette: TerminalSurfacePalette) {
     self.palette = palette
     for state in sessions.values {

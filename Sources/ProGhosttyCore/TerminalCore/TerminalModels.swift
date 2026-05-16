@@ -15,6 +15,7 @@ public struct TerminalSessionID: Hashable, Codable, Sendable, CustomStringConver
 
 public struct TerminalSessionConfig: Codable, Equatable, Sendable {
   public var shellPath: String
+  public var launchCommand: String?
   public var workingDirectory: String?
   public var environment: [String: String]
   public var rows: Int
@@ -23,6 +24,7 @@ public struct TerminalSessionConfig: Codable, Equatable, Sendable {
 
   public init(
     shellPath: String,
+    launchCommand: String? = nil,
     workingDirectory: String?,
     environment: [String: String],
     rows: Int,
@@ -30,6 +32,7 @@ public struct TerminalSessionConfig: Codable, Equatable, Sendable {
     workspaceId: UUID? = nil
   ) {
     self.shellPath = shellPath
+    self.launchCommand = launchCommand
     self.workingDirectory = workingDirectory
     self.environment = environment
     self.rows = rows
@@ -61,6 +64,7 @@ public enum TerminalEvent: Sendable {
 
 @MainActor public protocol TerminalSurfaceRegistry: AnyObject {
   func viewForSession(_ id: TerminalSessionID) -> NSView?
+  func selectedText(for id: TerminalSessionID) -> String?
   func applyPalette(_ palette: TerminalSurfacePalette)
   func applyFont(family: String, size: CGFloat)
   func setFocusedSession(_ id: TerminalSessionID?)

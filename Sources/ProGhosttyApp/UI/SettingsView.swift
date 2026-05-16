@@ -164,6 +164,21 @@ struct SettingsView: View {
             }
           }
 
+          SettingsSection("AI Companion") {
+            SettingsRow("DashScope API Key") {
+              SecureField("DASHSCOPE_API_KEY", text: Binding(
+                get: { model.settings.aliyunASRAPIKey ?? "" },
+                set: { model.settings.aliyunASRAPIKey = $0.isEmpty ? nil : $0 }
+              ))
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 13, design: .monospaced))
+            }
+
+            Text("Used for Aliyun Fun-ASR voice input. Keychain is checked first, then this setting, then DASHSCOPE_API_KEY.")
+              .font(.system(size: 12))
+              .foregroundStyle(.secondary)
+          }
+
           SettingsSection(text.about) {
             SettingsRow(text.version) {
               Text(model.appVersionString())
