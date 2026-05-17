@@ -88,6 +88,16 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
     diagnosticsState.styleStats = TerminalCellStyleStats(frame: frame)
   }
 
+  public func updateOverscanDiagnostics(topRows: Int, bottomRows: Int) {
+    diagnosticsState.overscanTopRows = max(0, topRows)
+    diagnosticsState.overscanBottomRows = max(0, bottomRows)
+    let hasOverscan = diagnosticsState.overscanTopRows > 0 || diagnosticsState.overscanBottomRows > 0
+    diagnosticsState.pixelSmoothScroll = hasOverscan && options.smoothPixelScrollingEnabled ? .experimental : .unavailable
+    diagnosticsState.pixelSmoothScrollReason = hasOverscan
+      ? TerminalRendererDiagnostics.overscanRowsAvailableReason
+      : TerminalRendererDiagnostics.missingOverscanRowsReason
+  }
+
   public func focus() {
     gridView.window?.makeFirstResponder(gridView)
   }

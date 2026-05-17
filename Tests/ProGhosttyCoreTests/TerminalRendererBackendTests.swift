@@ -141,6 +141,17 @@ struct TerminalRendererBackendTests {
     #expect(diagnostics.debugSummary.contains("overscan rows available from libghostty-vt snapshot"))
   }
 
+  @MainActor @Test func cellGridBackendKeepsPixelScrollUnavailableWhenOverscanExistsWithoutDebugFlag() {
+    let backend = GhosttyVTCellGridRendererBackend()
+
+    backend.updateOverscanDiagnostics(topRows: 1, bottomRows: 1)
+
+    #expect(backend.diagnostics.overscanTopRows == 1)
+    #expect(backend.diagnostics.overscanBottomRows == 1)
+    #expect(backend.diagnostics.pixelSmoothScroll == .unavailable)
+    #expect(backend.diagnostics.pixelSmoothScrollReason == TerminalRendererDiagnostics.overscanRowsAvailableReason)
+  }
+
   @Test func smoothScrollControllerIgnoresScrollPastEdges() {
     var topController = SmoothScrollController()
 

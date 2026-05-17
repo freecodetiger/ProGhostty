@@ -644,6 +644,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
         surface.gridView.window?.makeFirstResponder(surface.gridView)
       }
       render(frame, in: surface.cellGridBackend, isFocused: isFocused(id))
+      updateOverscanDiagnostics(from: bridge, in: surface.cellGridBackend)
       PTYRenderDebugLog.write("diagnostics session=\(id) \(surface.cellGridBackend.diagnostics.debugSummary)")
     } else if let html = try? bridge.htmlText(),
       let attributed = try? attributedTerminalSnapshot(fromHTML: html, cursorFrame: frame, isFocused: isFocused(id))
@@ -706,6 +707,20 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   ) {
     backend.setFocused(isFocused)
     backend.render(frame: frame)
+  }
+
+  private func updateOverscanDiagnostics(
+    from bridge: GhosttyVTBridge,
+    in backend: GhosttyVTCellGridRendererBackend
+  ) {
+    guard let scrollFrame = try? bridge.scrollFrame(overscanTop: 1, overscanBottom: 1) else {
+      backend.updateOverscanDiagnostics(topRows: 0, bottomRows: 0)
+      return
+    }
+    backend.updateOverscanDiagnostics(
+      topRows: scrollFrame.overscanTop.count,
+      bottomRows: scrollFrame.overscanBottom.count
+    )
   }
 
   private func render(
