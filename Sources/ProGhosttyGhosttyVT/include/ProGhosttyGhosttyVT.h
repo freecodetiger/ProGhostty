@@ -43,6 +43,17 @@ typedef struct {
   uint64_t length;
 } ProGhosttyVTScrollbar;
 
+typedef struct {
+  ProGhosttyVTSnapshot viewport;
+  ProGhosttyVTCell *overscan_top_cells;
+  size_t overscan_top_rows;
+  ProGhosttyVTCell *overscan_bottom_cells;
+  size_t overscan_bottom_rows;
+  uint16_t requested_overscan_top;
+  uint16_t requested_overscan_bottom;
+  uint64_t viewport_start_row;
+} ProGhosttyVTScrollSnapshot;
+
 int proghostty_vt_new(uint16_t cols, uint16_t rows, size_t max_scrollback, ProGhosttyVT **out);
 void proghostty_vt_free(ProGhosttyVT *vt);
 void proghostty_vt_write(ProGhosttyVT *vt, const uint8_t *data, size_t len);
@@ -51,6 +62,12 @@ void proghostty_vt_scroll_viewport(ProGhosttyVT *vt, intptr_t delta_rows);
 int proghostty_vt_scrollbar(ProGhosttyVT *vt, ProGhosttyVTScrollbar *out);
 int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out);
 void proghostty_vt_snapshot_free(ProGhosttyVTSnapshot *snapshot);
+int proghostty_vt_scroll_snapshot(
+  ProGhosttyVT *vt,
+  uint16_t overscan_top,
+  uint16_t overscan_bottom,
+  ProGhosttyVTScrollSnapshot *out);
+void proghostty_vt_scroll_snapshot_free(ProGhosttyVTScrollSnapshot *snapshot);
 int proghostty_vt_format_plain(ProGhosttyVT *vt, uint8_t **out, size_t *out_len);
 int proghostty_vt_format_html(ProGhosttyVT *vt, uint8_t **out, size_t *out_len);
 void proghostty_vt_free_bytes(uint8_t *ptr, size_t len);

@@ -104,6 +104,10 @@ public struct GhosttyTerminalScrollFrame: Sendable, Equatable {
     self.requestedOverscanBottom = requestedOverscanBottom
     self.viewportStartRow = viewportStartRow
   }
+
+  public var overscanAvailable: Bool {
+    !overscanTop.isEmpty || !overscanBottom.isEmpty
+  }
 }
 
 public final class GhosttyVTBridge {
@@ -173,15 +177,46 @@ public final class GhosttyVTBridge {
   }
 
   public func scrollFrame(overscanTop: Int, overscanBottom: Int) throws -> GhosttyTerminalScrollFrame {
-    let viewport = try frame()
-    let scrollbar = try? scrollbar()
+    guard let handle else {
+      return GhosttyTerminalScrollFrame(
+        viewport: GhosttyTerminalFrame(
+          cols: 0, rows: 0, cursorVisible: false, cursorX: 0, cursorY: 0, cells: []),
+        overscanTop: [],
+        overscanBottom: [],
+        requestedOverscanTop: max(0, overscanTop),
+        requestedOverscanBottom: max(0, overscanBottom),
+        viewportStartRow: nil
+      )
+    }
+
+    var snapshot = ProGhosttyVTScrollSnapshot()
+    let result = proghostty_vt_scroll_snapshot(
+      handle,
+      UInt16(max(0, min(overscanTop, Int(UInt16.max)))),
+      UInt16(max(0, min(overscanBottom, Int(UInt16.max)))),
+      &snapshot
+    )
+    guard result == 0 else {
+      throw BridgeError.formatFailed(result)
+    }
+    defer { proghostty_vt_scroll_snapshot_free(&snapshot) }
+
+    let viewport = Self.frame(from: snapshot.viewport)
     return GhosttyTerminalScrollFrame(
       viewport: viewport,
-      overscanTop: [],
-      overscanBottom: [],
-      requestedOverscanTop: max(0, overscanTop),
-      requestedOverscanBottom: max(0, overscanBottom),
-      viewportStartRow: scrollbar?.offset
+      overscanTop: Self.rows(
+        from: snapshot.overscan_top_cells,
+        rowCount: Int(snapshot.overscan_top_rows),
+        cols: viewport.cols
+      ),
+      overscanBottom: Self.rows(
+        from: snapshot.overscan_bottom_cells,
+        rowCount: Int(snapshot.overscan_bottom_rows),
+        cols: viewport.cols
+      ),
+      requestedOverscanTop: Int(snapshot.requested_overscan_top),
+      requestedOverscanBottom: Int(snapshot.requested_overscan_bottom),
+      viewportStartRow: snapshot.viewport_start_row
     )
   }
 
@@ -193,27 +228,20 @@ public final class GhosttyVTBridge {
 
     var snapshot = ProGhosttyVTSnapshot()
     let result = proghostty_vt_snapshot(handle, &snapshot)
-    guard result == 0, let rawCells = snapshot.cells else {
+    guard result == 0, snapshot.cells != nil else {
       throw BridgeError.formatFailed(result)
     }
     defer { proghostty_vt_snapshot_free(&snapshot) }
 
-    let count = Int(snapshot.cell_count)
-    let buffer = UnsafeBufferPointer(start: rawCells, count: count)
-    let cells = buffer.map { rawCell in
-      let scalar = UnicodeScalar(rawCell.codepoint) ?? " "
-      return GhosttyTerminalFrame.Cell(
-        scalar: scalar,
-        foreground: GhosttyTerminalFrame.RGB(r: rawCell.fg_r, g: rawCell.fg_g, b: rawCell.fg_b),
-        background: GhosttyTerminalFrame.RGB(r: rawCell.bg_r, g: rawCell.bg_g, b: rawCell.bg_b),
-        bold: rawCell.bold,
-        italic: rawCell.italic,
-        faint: rawCell.faint,
-        underline: rawCell.underline,
-        inverse: rawCell.inverse,
-        usesDefaultForeground: rawCell.fg_default,
-        usesDefaultBackground: rawCell.bg_default
-      )
+    return Self.frame(from: snapshot)
+  }
+
+  private static func frame(from snapshot: ProGhosttyVTSnapshot) -> GhosttyTerminalFrame {
+    let cells: [GhosttyTerminalFrame.Cell]
+    if let rawCells = snapshot.cells {
+      cells = UnsafeBufferPointer(start: rawCells, count: Int(snapshot.cell_count)).map(Self.cell(from:))
+    } else {
+      cells = []
     }
 
     return GhosttyTerminalFrame(
@@ -226,6 +254,39 @@ public final class GhosttyVTBridge {
       cursorBlinking: snapshot.cursor_blinking,
       isAlternateScreen: snapshot.alternate_screen,
       cells: cells
+    )
+  }
+
+  private static func rows(
+    from rawCells: UnsafeMutablePointer<ProGhosttyVTCell>?,
+    rowCount: Int,
+    cols: Int
+  ) -> [GhosttyTerminalCellRow] {
+    guard let rawCells, rowCount > 0, cols > 0 else {
+      return []
+    }
+
+    let cells = UnsafeBufferPointer(start: rawCells, count: rowCount * cols).map(Self.cell(from:))
+    return (0..<rowCount).map { row in
+      let lower = row * cols
+      let upper = lower + cols
+      return GhosttyTerminalCellRow(cells: Array(cells[lower..<upper]))
+    }
+  }
+
+  private static func cell(from rawCell: ProGhosttyVTCell) -> GhosttyTerminalFrame.Cell {
+    let scalar = UnicodeScalar(rawCell.codepoint) ?? " "
+    return GhosttyTerminalFrame.Cell(
+      scalar: scalar,
+      foreground: GhosttyTerminalFrame.RGB(r: rawCell.fg_r, g: rawCell.fg_g, b: rawCell.fg_b),
+      background: GhosttyTerminalFrame.RGB(r: rawCell.bg_r, g: rawCell.bg_g, b: rawCell.bg_b),
+      bold: rawCell.bold,
+      italic: rawCell.italic,
+      faint: rawCell.faint,
+      underline: rawCell.underline,
+      inverse: rawCell.inverse,
+      usesDefaultForeground: rawCell.fg_default,
+      usesDefaultBackground: rawCell.bg_default
     )
   }
 
