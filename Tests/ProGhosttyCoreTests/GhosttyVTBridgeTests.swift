@@ -123,4 +123,18 @@ struct GhosttyVTBridgeTests {
     #expect(scrolled.contains("first") || scrolled.contains("second"))
     #expect(try bridge.scrollbar().total >= bridge.scrollbar().length)
   }
+
+  @Test func scrollFrameReportsVisibleAndOverscanRowsSeparately() throws {
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 4, maxScrollback: 100)
+    bridge.write(Data("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix".utf8))
+
+    let frame = try bridge.scrollFrame(overscanTop: 1, overscanBottom: 1)
+
+    #expect(frame.viewport.cols == 20)
+    #expect(frame.viewport.rows == 4)
+    #expect(frame.overscanTop.count <= 1)
+    #expect(frame.overscanBottom.count <= 1)
+    #expect(frame.requestedOverscanTop == 1)
+    #expect(frame.requestedOverscanBottom == 1)
+  }
 }

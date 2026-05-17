@@ -12,8 +12,8 @@ public enum TerminalCursorShape: UInt8, Sendable {
   }
 }
 
-public struct GhosttyTerminalFrame: Sendable {
-  public struct Cell: Sendable {
+public struct GhosttyTerminalFrame: Sendable, Equatable {
+  public struct Cell: Sendable, Equatable {
     public var scalar: UnicodeScalar
     public var foreground: RGB
     public var background: RGB
@@ -71,6 +71,39 @@ public struct GhosttyTerminalScrollbar: Equatable, Sendable {
   public var total: UInt64
   public var offset: UInt64
   public var length: UInt64
+}
+
+public struct GhosttyTerminalCellRow: Sendable, Equatable {
+  public var cells: [GhosttyTerminalFrame.Cell]
+
+  public init(cells: [GhosttyTerminalFrame.Cell]) {
+    self.cells = cells
+  }
+}
+
+public struct GhosttyTerminalScrollFrame: Sendable, Equatable {
+  public var viewport: GhosttyTerminalFrame
+  public var overscanTop: [GhosttyTerminalCellRow]
+  public var overscanBottom: [GhosttyTerminalCellRow]
+  public var requestedOverscanTop: Int
+  public var requestedOverscanBottom: Int
+  public var viewportStartRow: UInt64?
+
+  public init(
+    viewport: GhosttyTerminalFrame,
+    overscanTop: [GhosttyTerminalCellRow],
+    overscanBottom: [GhosttyTerminalCellRow],
+    requestedOverscanTop: Int,
+    requestedOverscanBottom: Int,
+    viewportStartRow: UInt64?
+  ) {
+    self.viewport = viewport
+    self.overscanTop = overscanTop
+    self.overscanBottom = overscanBottom
+    self.requestedOverscanTop = requestedOverscanTop
+    self.requestedOverscanBottom = requestedOverscanBottom
+    self.viewportStartRow = viewportStartRow
+  }
 }
 
 public final class GhosttyVTBridge {
@@ -136,6 +169,19 @@ public final class GhosttyVTBridge {
       total: scrollbar.total,
       offset: scrollbar.offset,
       length: scrollbar.length
+    )
+  }
+
+  public func scrollFrame(overscanTop: Int, overscanBottom: Int) throws -> GhosttyTerminalScrollFrame {
+    let viewport = try frame()
+    let scrollbar = try? scrollbar()
+    return GhosttyTerminalScrollFrame(
+      viewport: viewport,
+      overscanTop: [],
+      overscanBottom: [],
+      requestedOverscanTop: max(0, overscanTop),
+      requestedOverscanBottom: max(0, overscanBottom),
+      viewportStartRow: scrollbar?.offset
     )
   }
 
