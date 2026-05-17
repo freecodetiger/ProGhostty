@@ -121,6 +121,7 @@ public struct TerminalCellStyleStats: Equatable, Sendable {
 
 public struct TerminalRendererDiagnostics: Equatable, Sendable {
   public static let missingOverscanRowsReason = "missing overscan rows from libghostty-vt snapshot"
+  public static let overscanRowsAvailableReason = "overscan rows available from libghostty-vt snapshot"
 
   public var backend: TerminalRendererBackendKind
   public var dirtyRowCount: Int
@@ -134,6 +135,8 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
   public var droppedFrames: Int
   public var alternateScreenActive: Bool
   public var scrollMode: TerminalScrollMode
+  public var overscanTopRows: Int
+  public var overscanBottomRows: Int
   public var pixelSmoothScroll: TerminalPixelSmoothScrollAvailability
   public var pixelSmoothScrollReason: String
   public var styleStats: TerminalCellStyleStats
@@ -151,6 +154,8 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
     droppedFrames: Int = 0,
     alternateScreenActive: Bool = false,
     scrollMode: TerminalScrollMode = .rowBased,
+    overscanTopRows: Int = 0,
+    overscanBottomRows: Int = 0,
     pixelSmoothScroll: TerminalPixelSmoothScrollAvailability = .unavailable,
     pixelSmoothScrollReason: String = TerminalRendererDiagnostics.missingOverscanRowsReason,
     styleStats: TerminalCellStyleStats = TerminalCellStyleStats()
@@ -167,13 +172,15 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
     self.droppedFrames = droppedFrames
     self.alternateScreenActive = alternateScreenActive
     self.scrollMode = scrollMode
+    self.overscanTopRows = overscanTopRows
+    self.overscanBottomRows = overscanBottomRows
     self.pixelSmoothScroll = pixelSmoothScroll
     self.pixelSmoothScrollReason = pixelSmoothScrollReason
     self.styleStats = styleStats
   }
 
   public var debugSummary: String {
-    "backend=\(backend.rawValue) dirtyRows=\(dirtyRowCount) visibleRows=\(visibleRowCount) cacheHitRate=\(String(format: "%.3f", cacheHitRate)) avgDrawMs=\(String(format: "%.3f", averageDrawTime * 1000)) maxDrawMs=\(String(format: "%.3f", maxDrawTime * 1000)) redraw=\(redrawMode.rawValue) scrollMode=\(scrollMode.rawValue) pixelSmoothScroll=\(pixelSmoothScroll.rawValue) pixelSmoothScrollReason=\"\(pixelSmoothScrollReason)\" scrollOffset=\(String(format: "%.2f", smoothScrollOffset)) coalesced=\(coalescedFrames) dropped=\(droppedFrames) alt=\(alternateScreenActive) styleFg=\(styleStats.explicitForegroundCells) styleBg=\(styleStats.explicitBackgroundCells) styleBold=\(styleStats.boldCells) styleFaint=\(styleStats.faintCells) styleUnderline=\(styleStats.underlineCells) styleInverse=\(styleStats.inverseCells)"
+    "backend=\(backend.rawValue) dirtyRows=\(dirtyRowCount) visibleRows=\(visibleRowCount) cacheHitRate=\(String(format: "%.3f", cacheHitRate)) avgDrawMs=\(String(format: "%.3f", averageDrawTime * 1000)) maxDrawMs=\(String(format: "%.3f", maxDrawTime * 1000)) redraw=\(redrawMode.rawValue) scrollMode=\(scrollMode.rawValue) overscanTop=\(overscanTopRows) overscanBottom=\(overscanBottomRows) pixelSmoothScroll=\(pixelSmoothScroll.rawValue) pixelSmoothScrollReason=\"\(pixelSmoothScrollReason)\" scrollOffset=\(String(format: "%.2f", smoothScrollOffset)) coalesced=\(coalescedFrames) dropped=\(droppedFrames) alt=\(alternateScreenActive) styleFg=\(styleStats.explicitForegroundCells) styleBg=\(styleStats.explicitBackgroundCells) styleBold=\(styleStats.boldCells) styleFaint=\(styleStats.faintCells) styleUnderline=\(styleStats.underlineCells) styleInverse=\(styleStats.inverseCells)"
   }
 }
 

@@ -116,11 +116,29 @@ struct TerminalRendererBackendTests {
     let diagnostics = TerminalRendererDiagnostics(backend: .ghosttyVTCellGrid)
 
     #expect(diagnostics.scrollMode == .rowBased)
+    #expect(diagnostics.overscanTopRows == 0)
+    #expect(diagnostics.overscanBottomRows == 0)
     #expect(diagnostics.pixelSmoothScroll == .unavailable)
     #expect(diagnostics.pixelSmoothScrollReason == TerminalRendererDiagnostics.missingOverscanRowsReason)
     #expect(diagnostics.debugSummary.contains("scrollMode=row-based"))
+    #expect(diagnostics.debugSummary.contains("overscanTop=0"))
+    #expect(diagnostics.debugSummary.contains("overscanBottom=0"))
     #expect(diagnostics.debugSummary.contains("pixelSmoothScroll=unavailable"))
     #expect(diagnostics.debugSummary.contains("missing overscan rows from libghostty-vt snapshot"))
+  }
+
+  @Test func rendererDiagnosticsReportOverscanRows() {
+    var diagnostics = TerminalRendererDiagnostics(backend: .ghosttyVTCellGrid)
+
+    diagnostics.overscanTopRows = 1
+    diagnostics.overscanBottomRows = 1
+    diagnostics.pixelSmoothScroll = .experimental
+    diagnostics.pixelSmoothScrollReason = TerminalRendererDiagnostics.overscanRowsAvailableReason
+
+    #expect(diagnostics.debugSummary.contains("overscanTop=1"))
+    #expect(diagnostics.debugSummary.contains("overscanBottom=1"))
+    #expect(diagnostics.debugSummary.contains("pixelSmoothScroll=experimental"))
+    #expect(diagnostics.debugSummary.contains("overscan rows available from libghostty-vt snapshot"))
   }
 
   @Test func smoothScrollControllerIgnoresScrollPastEdges() {
