@@ -643,8 +643,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       if shouldTransferFocus {
         surface.gridView.window?.makeFirstResponder(surface.gridView)
       }
-      render(frame, in: surface.cellGridBackend, isFocused: isFocused(id))
-      updateOverscanDiagnostics(from: bridge, in: surface.cellGridBackend)
+      render(bridge: bridge, fallbackFrame: frame, in: surface.cellGridBackend, isFocused: isFocused(id))
       PTYRenderDebugLog.write("diagnostics session=\(id) \(surface.cellGridBackend.diagnostics.debugSummary)")
     } else if let html = try? bridge.htmlText(),
       let attributed = try? attributedTerminalSnapshot(fromHTML: html, cursorFrame: frame, isFocused: isFocused(id))
@@ -709,18 +708,19 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     backend.render(frame: frame)
   }
 
-  private func updateOverscanDiagnostics(
-    from bridge: GhosttyVTBridge,
-    in backend: GhosttyVTCellGridRendererBackend
+  private func render(
+    bridge: GhosttyVTBridge,
+    fallbackFrame frame: GhosttyTerminalFrame,
+    in backend: GhosttyVTCellGridRendererBackend,
+    isFocused: Bool
   ) {
+    backend.setFocused(isFocused)
     guard let scrollFrame = try? bridge.scrollFrame(overscanTop: 1, overscanBottom: 1) else {
+      backend.render(frame: frame)
       backend.updateOverscanDiagnostics(topRows: 0, bottomRows: 0)
       return
     }
-    backend.updateOverscanDiagnostics(
-      topRows: scrollFrame.overscanTop.count,
-      bottomRows: scrollFrame.overscanBottom.count
-    )
+    backend.render(scrollFrame: scrollFrame)
   }
 
   private func render(
@@ -1009,6 +1009,7 @@ public final class PTYGridView: NSView {
   public var pasteboard = NSPasteboard.general
 
   private var frameSnapshot: GhosttyTerminalFrame?
+  private var scrollFrameSnapshot: GhosttyTerminalScrollFrame?
   private var palette = TerminalSurfacePalette.dark
   private var fontFamily = FontManager.defaultMonospacedFontName()
   private var fontSize: CGFloat = 14
@@ -1113,6 +1114,7 @@ public final class PTYGridView: NSView {
   public func render(_ frame: GhosttyTerminalFrame, isFocused: Bool) {
     let previous = frameSnapshot
     frameSnapshot = frame
+    scrollFrameSnapshot = nil
     isFocusedTerminalStorage = isFocused
     if let previous, previous.rows == frame.rows, previous.cols == frame.cols {
       for rect in Self.dirtyRects(from: previous, to: frame, cellSize: cellSize, inset: contentInset) {
@@ -1126,6 +1128,7 @@ public final class PTYGridView: NSView {
 
   public func render(_ frame: GhosttyTerminalFrame, isFocused: Bool, dirty: CellGridDirtyResult) {
     frameSnapshot = frame
+    scrollFrameSnapshot = nil
     isFocusedTerminalStorage = isFocused
     if viewport.visualOffsetY != 0 {
       needsDisplay = true
@@ -1145,6 +1148,38 @@ public final class PTYGridView: NSView {
     window?.invalidateCursorRects(for: self)
   }
 
+  public func render(_ scrollFrame: GhosttyTerminalScrollFrame, isFocused: Bool, dirty: CellGridDirtyResult) {
+    let previous = frameSnapshot
+    frameSnapshot = scrollFrame.viewport
+    scrollFrameSnapshot = scrollFrame
+    isFocusedTerminalStorage = isFocused
+    if viewport.visualOffsetY != 0 {
+      needsDisplay = true
+      window?.invalidateCursorRects(for: self)
+      return
+    }
+    if let previous, previous.rows == scrollFrame.viewport.rows, previous.cols == scrollFrame.viewport.cols {
+      switch dirty.mode {
+      case .clean:
+        break
+      case .full:
+        needsDisplay = true
+      case .dirty:
+        for rect in Self.dirtyRects(
+          forRows: dirty.rows,
+          frame: scrollFrame.viewport,
+          cellSize: cellSize,
+          inset: contentInset
+        ) {
+          setNeedsDisplay(rect)
+        }
+      }
+    } else {
+      needsDisplay = true
+    }
+    window?.invalidateCursorRects(for: self)
+  }
+
   public override func draw(_ dirtyRect: NSRect) {
     let drawStart = ProcessInfo.processInfo.systemUptime
     defer {
@@ -1156,27 +1191,30 @@ public final class PTYGridView: NSView {
     }
     palette.background.setFill()
     dirtyRect.fill()
-    guard let frame = frameSnapshot else { return }
+    guard let viewportFrame = frameSnapshot else { return }
+    let topOverscanRows = scrollFrameSnapshot?.overscanTop.count ?? 0
+    let drawFrame = scrollFrameSnapshot.map(extendedFrame(from:)) ?? viewportFrame
 
     NSGraphicsContext.current?.saveGraphicsState()
-    if viewport.visualOffsetY != 0 {
+    let translationY = drawTranslationY(topOverscanRows: topOverscanRows)
+    if translationY != 0 {
       let transform = NSAffineTransform()
-      transform.translateX(by: 0, yBy: Self.visualScrollTranslationY(for: viewport))
+      transform.translateX(by: 0, yBy: translationY)
       transform.concat()
     }
     Self.terminalContentClipRect(
-      cols: frame.cols,
-      rows: frame.rows,
+      cols: viewportFrame.cols,
+      rows: viewportFrame.rows,
       cellSize: cellSize,
       inset: contentInset
     )
     .clip()
-    let contentDirtyRect = Self.contentDirtyRect(forDrawing: dirtyRect, viewport: viewport)
-    let visibleRows = visibleRowRange(for: frame)
+    let contentDirtyRect = contentDirtyRect(forDrawing: dirtyRect, translationY: translationY)
+    let visibleRows = scrollFrameSnapshot == nil ? visibleRowRange(for: drawFrame) : 0..<drawFrame.rows
     for row in visibleRows {
-      drawRow(row, frame: frame, dirtyRect: contentDirtyRect)
+      drawRow(row, frame: drawFrame, dirtyRect: contentDirtyRect)
     }
-    drawCursor(frame, dirtyRect: contentDirtyRect)
+    drawCursor(viewportFrame, rowOffset: topOverscanRows, dirtyRect: contentDirtyRect)
     NSGraphicsContext.current?.restoreGraphicsState()
   }
 
@@ -1184,8 +1222,38 @@ public final class PTYGridView: NSView {
     0
   }
 
+  public static func visualScrollTranslationY(
+    for viewport: TerminalViewport,
+    hasOverscanRows: Bool,
+    cellHeight: CGFloat
+  ) -> CGFloat {
+    guard hasOverscanRows, cellHeight > 0 else { return 0 }
+    return min(max(viewport.visualOffsetY, -cellHeight), cellHeight)
+  }
+
   public static func contentDirtyRect(forDrawing dirtyRect: NSRect, viewport: TerminalViewport) -> NSRect {
     dirtyRect.offsetBy(dx: 0, dy: -visualScrollTranslationY(for: viewport))
+  }
+
+  public static func contentDirtyRect(
+    forDrawing dirtyRect: NSRect,
+    viewport: TerminalViewport,
+    hasOverscanRows: Bool,
+    cellHeight: CGFloat
+  ) -> NSRect {
+    dirtyRect.offsetBy(
+      dx: 0,
+      dy: -visualScrollTranslationY(
+        for: viewport,
+        hasOverscanRows: hasOverscanRows,
+        cellHeight: cellHeight
+      )
+    )
+  }
+
+  public func canRenderPixelScroll(for visualOffsetY: CGFloat) -> Bool {
+    guard visualOffsetY != 0, let scrollFrameSnapshot else { return false }
+    return visualOffsetY > 0 ? !scrollFrameSnapshot.overscanTop.isEmpty : !scrollFrameSnapshot.overscanBottom.isEmpty
   }
 
   public static func terminalContentClipRect(
@@ -1258,13 +1326,26 @@ public final class PTYGridView: NSView {
     case .consumed(let rowDelta):
       if rowDelta != 0 {
         let didScroll = viewportScrollHandler?(rowDelta) ?? false
-        smoothScrollController.reset()
-        viewport = smoothScrollController.viewport
         if didScroll {
+          smoothScrollController.resetStartRowKeepingVisualOffset()
+          viewport = smoothScrollController.viewport
+          if !canRenderPixelScroll(for: viewport.visualOffsetY) {
+            smoothScrollController.reset()
+            viewport = smoothScrollController.viewport
+          }
           needsDisplay = true
+        } else {
+          smoothScrollController.reset()
+          viewport = smoothScrollController.viewport
         }
       } else {
-        viewport = TerminalViewport()
+        viewport = smoothScrollController.viewport
+        if canRenderPixelScroll(for: viewport.visualOffsetY) {
+          needsDisplay = true
+        } else {
+          smoothScrollController.reset()
+          viewport = smoothScrollController.viewport
+        }
       }
     case .forwardToPTY:
       forwardToPTY()
@@ -1505,9 +1586,9 @@ public final class PTYGridView: NSView {
     drawText(String(cell.scalar), in: rect, attributes: textAttributes(for: cell, foreground: foreground))
   }
 
-  private func drawCursor(_ frame: GhosttyTerminalFrame, dirtyRect: NSRect) {
+  private func drawCursor(_ frame: GhosttyTerminalFrame, rowOffset: Int = 0, dirtyRect: NSRect) {
     guard isFocusedTerminalStorage, frame.cursorVisible else { return }
-    let rect = rectForCell(row: frame.cursorY, col: frame.cursorX)
+    let rect = rectForCell(row: frame.cursorY + rowOffset, col: frame.cursorX)
     guard dirtyRect.intersects(rect) else { return }
     palette.cursorBackground.setFill()
     switch frame.cursorShape {
@@ -1575,6 +1656,32 @@ public final class PTYGridView: NSView {
       overscan: 1
     )
     return controller.rowRange(totalRows: frame.rows)
+  }
+
+  private func drawTranslationY(topOverscanRows: Int) -> CGFloat {
+    -CGFloat(topOverscanRows) * cellSize.height + visualScrollTranslationY()
+  }
+
+  private func visualScrollTranslationY() -> CGFloat {
+    Self.visualScrollTranslationY(
+      for: viewport,
+      hasOverscanRows: canRenderPixelScroll(for: viewport.visualOffsetY),
+      cellHeight: cellSize.height
+    )
+  }
+
+  private func contentDirtyRect(forDrawing dirtyRect: NSRect, translationY: CGFloat) -> NSRect {
+    dirtyRect.offsetBy(dx: 0, dy: -translationY)
+  }
+
+  private func extendedFrame(from scrollFrame: GhosttyTerminalScrollFrame) -> GhosttyTerminalFrame {
+    var frame = scrollFrame.viewport
+    frame.rows = scrollFrame.overscanTop.count + scrollFrame.viewport.rows + scrollFrame.overscanBottom.count
+    frame.cursorY += scrollFrame.overscanTop.count
+    frame.cells = scrollFrame.overscanTop.flatMap(\.cells)
+      + scrollFrame.viewport.cells
+      + scrollFrame.overscanBottom.flatMap(\.cells)
+    return frame
   }
 
   private func visibleRowCount() -> Int {

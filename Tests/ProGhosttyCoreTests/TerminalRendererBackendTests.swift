@@ -63,6 +63,20 @@ struct TerminalRendererBackendTests {
   @MainActor @Test func liveGridVisualScrollTranslationMatchesViewportDirection() {
     #expect(PTYGridView.visualScrollTranslationY(for: TerminalViewport(visualOffsetY: 5)) == 0)
     #expect(PTYGridView.visualScrollTranslationY(for: TerminalViewport(visualOffsetY: -5)) == 0)
+    #expect(
+      PTYGridView.visualScrollTranslationY(
+        for: TerminalViewport(visualOffsetY: 5),
+        hasOverscanRows: true,
+        cellHeight: 16
+      ) == 5
+    )
+    #expect(
+      PTYGridView.visualScrollTranslationY(
+        for: TerminalViewport(visualOffsetY: 24),
+        hasOverscanRows: true,
+        cellHeight: 16
+      ) == 16
+    )
   }
 
   @MainActor @Test func liveGridDirtyRectCullingAccountsForVisualScrollTransform() {
@@ -79,6 +93,14 @@ struct TerminalRendererBackendTests {
         forDrawing: dirtyRect,
         viewport: TerminalViewport(visualOffsetY: -5)
       ) == NSRect(x: 0, y: 20, width: 80, height: 16)
+    )
+    #expect(
+      PTYGridView.contentDirtyRect(
+        forDrawing: dirtyRect,
+        viewport: TerminalViewport(visualOffsetY: 5),
+        hasOverscanRows: true,
+        cellHeight: 16
+      ) == NSRect(x: 0, y: 15, width: 80, height: 16)
     )
   }
 
@@ -141,15 +163,32 @@ struct TerminalRendererBackendTests {
     #expect(diagnostics.debugSummary.contains("overscan rows available from libghostty-vt snapshot"))
   }
 
-  @MainActor @Test func cellGridBackendKeepsPixelScrollUnavailableWhenOverscanExistsWithoutDebugFlag() {
+  @MainActor @Test func cellGridBackendReportsExperimentalPixelScrollWhenOverscanExists() {
     let backend = GhosttyVTCellGridRendererBackend()
 
     backend.updateOverscanDiagnostics(topRows: 1, bottomRows: 1)
 
     #expect(backend.diagnostics.overscanTopRows == 1)
     #expect(backend.diagnostics.overscanBottomRows == 1)
-    #expect(backend.diagnostics.pixelSmoothScroll == .unavailable)
+    #expect(backend.diagnostics.pixelSmoothScroll == .experimental)
     #expect(backend.diagnostics.pixelSmoothScrollReason == TerminalRendererDiagnostics.overscanRowsAvailableReason)
+  }
+
+  @MainActor @Test func cellGridBackendPassesScrollFrameToGridView() {
+    let backend = GhosttyVTCellGridRendererBackend()
+    let scrollFrame = scrollFrame(
+      viewportRows: ["two", "three"],
+      overscanTop: ["one"],
+      overscanBottom: ["four"],
+      cols: 8
+    )
+
+    backend.render(scrollFrame: scrollFrame)
+    backend.flushPendingFrame()
+
+    #expect(backend.gridView.canRenderPixelScroll(for: 5))
+    #expect(backend.diagnostics.overscanTopRows == 1)
+    #expect(backend.diagnostics.overscanBottomRows == 1)
   }
 
   @Test func smoothScrollControllerIgnoresScrollPastEdges() {
@@ -360,6 +399,29 @@ struct TerminalRendererBackendTests {
       isAlternateScreen: false,
       cells: cells
     )
+  }
+
+  private func scrollFrame(
+    viewportRows: [String],
+    overscanTop: [String],
+    overscanBottom: [String],
+    cols: Int
+  ) -> GhosttyTerminalScrollFrame {
+    GhosttyTerminalScrollFrame(
+      viewport: frame(rows: viewportRows, cols: cols, cursorX: 0, cursorY: max(0, viewportRows.count - 1)),
+      overscanTop: overscanTop.map { cellRow($0, cols: cols) },
+      overscanBottom: overscanBottom.map { cellRow($0, cols: cols) },
+      requestedOverscanTop: overscanTop.count,
+      requestedOverscanBottom: overscanBottom.count,
+      viewportStartRow: UInt64(overscanTop.count)
+    )
+  }
+
+  private func cellRow(_ text: String, cols: Int) -> GhosttyTerminalCellRow {
+    let padded = text.padding(toLength: cols, withPad: " ", startingAt: 0)
+    return GhosttyTerminalCellRow(cells: padded.unicodeScalars.prefix(cols).map {
+      cell($0)
+    })
   }
 
   private func cell(

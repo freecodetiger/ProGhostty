@@ -193,7 +193,7 @@ struct TerminalSurfaceTests {
     #expect(surfaceView.liveGridView.renderedText.contains("first") || surfaceView.liveGridView.renderedText.contains("second"))
   }
 
-  @MainActor @Test func liveCellGridWheelScrollDoesNotExposeTransientLocalPixelOffset() throws {
+  @MainActor @Test func liveCellGridWheelScrollUsesOverscanPixelRemainderBeforeRowCommit() throws {
     let registry = PTYTerminalSurfaceRegistry()
     let session = TerminalSessionID()
     registry.createSurface(session: session)
@@ -209,13 +209,14 @@ struct TerminalSurfaceTests {
     registry.flushPendingRenderers()
 
     #expect(surfaceView.liveGridView.renderedText == bottomText)
-    #expect(surfaceView.liveGridView.viewport == TerminalViewport())
+    #expect(surfaceView.liveGridView.viewport == TerminalViewport(startRow: 0, visualOffsetY: 5))
+    #expect(registry.rendererDiagnostics(for: session)?.pixelSmoothScroll == .experimental)
 
     surfaceView.liveGridView.testScrollWheelDeltaY(37)
     registry.flushPendingRenderers()
 
     #expect(surfaceView.liveGridView.renderedText.contains("first") || surfaceView.liveGridView.renderedText.contains("second"))
-    #expect(surfaceView.liveGridView.viewport == TerminalViewport())
+    #expect(abs(surfaceView.liveGridView.viewport.visualOffsetY) < surfaceView.liveGridView.terminalCellSize.height)
   }
 
   @MainActor @Test func liveCellGridWheelScrollReturnsToBottomAndIgnoresPastTopEdge() throws {

@@ -7,6 +7,7 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
   private var model = CellGridModel()
   private var options: TerminalRendererOptions
   private var pendingFrame: GhosttyTerminalFrame?
+  private var pendingScrollFrame: GhosttyTerminalScrollFrame?
   private var flushScheduled = false
   private var pendingFullRedraw = false
   private var diagnosticsState = TerminalRendererDiagnostics(backend: .ghosttyVTCellGrid)
@@ -51,7 +52,18 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
   }
 
   public func render(frame: GhosttyTerminalFrame) {
+    pendingScrollFrame = nil
     pendingFrame = frame
+    scheduleFlush()
+  }
+
+  public func render(scrollFrame: GhosttyTerminalScrollFrame) {
+    pendingScrollFrame = scrollFrame
+    pendingFrame = scrollFrame.viewport
+    scheduleFlush()
+  }
+
+  private func scheduleFlush() {
     if flushScheduled {
       diagnosticsState.coalescedFrames += 1
       return
@@ -67,7 +79,9 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
   public func flushPendingFrame() {
     flushScheduled = false
     guard let frame = pendingFrame else { return }
+    let scrollFrame = pendingScrollFrame
     pendingFrame = nil
+    pendingScrollFrame = nil
     let dirty = model.update(
       frame: frame,
       forceFullRedraw: options.forceFullRedrawEnabled || pendingFullRedraw,
@@ -75,7 +89,16 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
       selectionRows: gridView.currentSelectionRowSet
     )
     pendingFullRedraw = false
-    gridView.render(frame, isFocused: gridView.isFocusedTerminal, dirty: dirty)
+    if let scrollFrame {
+      gridView.render(scrollFrame, isFocused: gridView.isFocusedTerminal, dirty: dirty)
+      updateOverscanDiagnostics(
+        topRows: scrollFrame.overscanTop.count,
+        bottomRows: scrollFrame.overscanBottom.count
+      )
+    } else {
+      gridView.render(frame, isFocused: gridView.isFocusedTerminal, dirty: dirty)
+      updateOverscanDiagnostics(topRows: 0, bottomRows: 0)
+    }
     diagnosticsState.backend = .ghosttyVTCellGrid
     diagnosticsState.dirtyRowCount = dirty.rows.count
     diagnosticsState.visibleRowCount = frame.rows
@@ -92,7 +115,7 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
     diagnosticsState.overscanTopRows = max(0, topRows)
     diagnosticsState.overscanBottomRows = max(0, bottomRows)
     let hasOverscan = diagnosticsState.overscanTopRows > 0 || diagnosticsState.overscanBottomRows > 0
-    diagnosticsState.pixelSmoothScroll = .unavailable
+    diagnosticsState.pixelSmoothScroll = hasOverscan ? .experimental : .unavailable
     diagnosticsState.pixelSmoothScrollReason = hasOverscan
       ? TerminalRendererDiagnostics.overscanRowsAvailableReason
       : TerminalRendererDiagnostics.missingOverscanRowsReason
