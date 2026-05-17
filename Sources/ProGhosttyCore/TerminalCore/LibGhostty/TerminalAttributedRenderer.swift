@@ -1,6 +1,11 @@
 import AppKit
 import Foundation
 
+extension NSAttributedString.Key {
+  static let proGhosttyCursorShape = NSAttributedString.Key("ProGhosttyCursorShape")
+  static let proGhosttyCursorColor = NSAttributedString.Key("ProGhosttyCursorColor")
+}
+
 public final class TerminalAttributedRenderer {
   private let font: NSFont
   private let boldFont: NSFont
@@ -48,12 +53,14 @@ public final class TerminalAttributedRenderer {
 
         var attributes: [NSAttributedString.Key: Any] = [
           .font: cell.bold ? boldFont : font,
-          .foregroundColor: isCursor ? cursorForeground : displayForeground,
+          .foregroundColor: displayForeground,
         ]
-        if isCursor {
-          attributes[.backgroundColor] = cursorBackground
-        } else if cell.inverse || !cell.usesDefaultBackground {
+        if cell.inverse || !cell.usesDefaultBackground {
           attributes[.backgroundColor] = background
+        }
+        if isCursor {
+          attributes[.proGhosttyCursorShape] = frame.cursorShape
+          attributes[.proGhosttyCursorColor] = cursorBackground
         }
         if cell.italic {
           attributes[.obliqueness] = 0.18

@@ -4,7 +4,7 @@ import Testing
 
 @testable import ProGhosttyCore
 
-@Suite("Terminal surface")
+@Suite("Terminal surface", .serialized)
 struct TerminalSurfaceTests {
   @Test func builtInPalettesUseDistinctReadableGrays() {
     let light = TerminalSurfacePalette.light
@@ -44,7 +44,7 @@ struct TerminalSurfaceTests {
     registry.createSurface(session: session)
     registry.applyPalette(.light)
 
-    let scrollView = try #require(registry.viewForSession(session) as? NSScrollView)
+    let scrollView = try scrollView(in: #require(registry.viewForSession(session)))
     let textView = try #require(scrollView.documentView as? NSTextView)
 
     #expect(scrollView.backgroundColor.sameRGB(as: TerminalSurfacePalette.light.background))
@@ -60,7 +60,7 @@ struct TerminalSurfaceTests {
     let session = TerminalSessionID()
     registry.createSurface(session: session)
 
-    let scrollView = try #require(registry.viewForSession(session) as? NSScrollView)
+    let scrollView = try scrollView(in: #require(registry.viewForSession(session)))
     let textView = try #require(scrollView.documentView as? NSTextView)
     let selectionBackground = textView.selectedTextAttributes[.backgroundColor] as? NSColor
 
@@ -76,7 +76,7 @@ struct TerminalSurfaceTests {
 
     registry.applyFont(family: "Menlo", size: 21)
 
-    let scrollView = try #require(registry.viewForSession(session) as? NSScrollView)
+    let scrollView = try scrollView(in: #require(registry.viewForSession(session)))
     let textView = try #require(scrollView.documentView as? NSTextView)
     #expect(textView.font?.pointSize == 21)
     #expect(textView.font?.familyName == "Menlo")
@@ -84,6 +84,7 @@ struct TerminalSurfaceTests {
 
   @MainActor @Test func ptySurfaceRendersScrollableScrollbackDocument() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))
     let session = TerminalSessionID()
     registry.createSurface(session: session)
     let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
@@ -91,8 +92,9 @@ struct TerminalSurfaceTests {
     bridge.write(Data("hello".utf8))
     bridge.write(Data("\u{1B}D\u{1B}D\u{1B}D".utf8))
     registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
 
-    let scrollView = try #require(registry.viewForSession(session) as? NSScrollView)
+    let scrollView = try scrollView(in: #require(registry.viewForSession(session)))
     let textView = try #require(scrollView.documentView as? NSTextView)
 
     #expect(textView.string.contains("hello"))
@@ -100,8 +102,191 @@ struct TerminalSurfaceTests {
     #expect(textView.textContainer?.heightTracksTextView == false)
   }
 
-  @MainActor @Test func htmlScrollbackSurfaceDimsInactiveSessionText() throws {
+  @MainActor @Test func ptySurfaceRendersAlternateScreenLiveViewportFromCellGrid() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 8, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("\u{1B}[?1049h".utf8))
+    bridge.write(Data("x".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let gridView = try gridView(in: #require(registry.viewForSession(session)))
+    let firstLine = gridView.renderedText.components(separatedBy: "\n").first ?? ""
+
+    #expect(firstLine.hasPrefix("x"))
+    #expect((firstLine as NSString).length == 8)
+  }
+
+  @MainActor @Test func liveCellGridUsesFixedGridViewInsteadOfTextKitDocument() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 8, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("\u{1B}[?1049h".utf8))
+    bridge.write(Data("x".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    #expect(surfaceView.isShowingLiveGrid)
+    #expect(surfaceView.liveGridView.renderedText.hasPrefix("x"))
+    #expect(surfaceView.scrollView.isHidden)
+    #expect(surfaceView.liveGridView.isHidden == false)
+  }
+
+  @MainActor @Test func autoRendererUsesCellGridForOrdinaryPromptFrames() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("prompt % ".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    #expect(surfaceView.isShowingLiveGrid)
+    #expect(surfaceView.liveGridView.renderedText.contains("prompt"))
+  }
+
+  @MainActor @Test func liveCellGridScrollsLibGhosttyViewportForScrollbackHistory() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    #expect(surfaceView.liveGridView.renderedText.contains("fourth"))
+
+    surfaceView.liveGridView.testScrollViewportRows(2)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.isShowingLiveGrid)
+    #expect(surfaceView.liveGridView.renderedText.contains("first") || surfaceView.liveGridView.renderedText.contains("second"))
+    #expect(registry.rendererDiagnostics(for: session)?.backend == .ghosttyVTCellGrid)
+  }
+
+  @MainActor @Test func liveCellGridWheelScrollReachesLibGhosttyScrollbackWhenFrameHasNoExtraRows() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    #expect(surfaceView.liveGridView.renderedText.contains("fourth"))
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.renderedText.contains("first") || surfaceView.liveGridView.renderedText.contains("second"))
+  }
+
+  @MainActor @Test func liveCellGridWheelScrollDoesNotExposeTransientLocalPixelOffset() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let bottomText = surfaceView.liveGridView.renderedText
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(5)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.renderedText == bottomText)
+    #expect(surfaceView.liveGridView.viewport == TerminalViewport())
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.renderedText.contains("first") || surfaceView.liveGridView.renderedText.contains("second"))
+    #expect(surfaceView.liveGridView.viewport == TerminalViewport())
+  }
+
+  @MainActor @Test func liveCellGridWheelScrollReturnsToBottomAndIgnoresPastTopEdge() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    registry.flushPendingRenderers()
+    let topText = surfaceView.liveGridView.renderedText
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(5)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.renderedText == topText)
+    #expect(surfaceView.liveGridView.viewport == TerminalViewport())
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.renderedText == topText)
+    #expect(surfaceView.liveGridView.viewport == TerminalViewport())
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(-37)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.renderedText.contains("fourth"))
+  }
+
+  @MainActor @Test func surfaceRegistryExposesCellGridRendererDiagnostics() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("prompt % ".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
+
+    #expect(diagnostics.backend == .ghosttyVTCellGrid)
+    #expect(diagnostics.visibleRowCount == 2)
+  }
+
+  @MainActor @Test func ptySurfaceUsesBarCursorOverlayWithoutPaintingBlankCellBackground() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 8, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("\u{1B}[6 q".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    #expect(surfaceView.isShowingLiveGrid)
+    #expect(surfaceView.liveGridView.cursorCellRect != nil)
+    #expect(surfaceView.liveGridView.renderedText.hasPrefix(" "))
+  }
+
+  @MainActor @Test func textFallbackSurfaceDimsInactiveSessionText() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))
     let activeSession = TerminalSessionID()
     let inactiveSession = TerminalSessionID()
     registry.createSurface(session: activeSession)
@@ -112,28 +297,32 @@ struct TerminalSurfaceTests {
     activeBridge.write(Data("active".utf8))
     inactiveBridge.write(Data("inactive".utf8))
     registry.render(activeBridge, session: activeSession)
+    registry.flushPendingRenderers()
     registry.render(inactiveBridge, session: inactiveSession)
+    registry.flushPendingRenderers()
 
     registry.setFocusedSession(activeSession)
 
-    let activeTextView = try #require((registry.viewForSession(activeSession) as? NSScrollView)?.documentView as? NSTextView)
-    let inactiveTextView = try #require((registry.viewForSession(inactiveSession) as? NSScrollView)?.documentView as? NSTextView)
+    let activeTextView = try textView(in: #require(registry.viewForSession(activeSession)))
+    let inactiveTextView = try textView(in: #require(registry.viewForSession(inactiveSession)))
     let activeColor = try #require(activeTextView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
     let inactiveColor = try #require(inactiveTextView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
 
     #expect(inactiveColor.lightness < activeColor.lightness)
   }
 
-  @MainActor @Test func htmlScrollbackSurfacePreservesFaintSuggestionStyle() throws {
+  @MainActor @Test func textFallbackSurfacePreservesFaintSuggestionStyle() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))
     let session = TerminalSessionID()
     registry.createSurface(session: session)
     let bridge = try GhosttyVTBridge(cols: 40, rows: 2, maxScrollback: 100)
 
     bridge.write(Data("typed \u{1B}[2msuggestion\u{1B}[0m".utf8))
     registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
 
-    let textView = try #require((registry.viewForSession(session) as? NSScrollView)?.documentView as? NSTextView)
+    let textView = try textView(in: #require(registry.viewForSession(session)))
     let text = textView.string as NSString
     let normalIndex = text.range(of: "typed").location
     let suggestionIndex = text.range(of: "suggestion").location
@@ -143,16 +332,18 @@ struct TerminalSurfaceTests {
     #expect(suggestionColor.lightness < normalColor.lightness)
   }
 
-  @MainActor @Test func htmlScrollbackSurfacePreservesPaletteSuggestionStyle() throws {
+  @MainActor @Test func textFallbackSurfacePreservesPaletteSuggestionStyle() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))
     let session = TerminalSessionID()
     registry.createSurface(session: session)
     let bridge = try GhosttyVTBridge(cols: 40, rows: 2, maxScrollback: 100)
 
     bridge.write(Data("typed \u{1B}[38;5;8msuggestion\u{1B}[0m".utf8))
     registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
 
-    let textView = try #require((registry.viewForSession(session) as? NSScrollView)?.documentView as? NSTextView)
+    let textView = try textView(in: #require(registry.viewForSession(session)))
     let text = textView.string as NSString
     let normalIndex = text.range(of: "typed").location
     let suggestionIndex = text.range(of: "suggestion").location
@@ -162,45 +353,268 @@ struct TerminalSurfaceTests {
     #expect(suggestionColor.lightness < normalColor.lightness)
   }
 
-  @MainActor @Test func htmlScrollbackSurfaceShowsCursorFromGhosttyFrame() throws {
+  @MainActor @Test func textFallbackSurfaceShowsCursorFromGhosttyFrame() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))
     let session = TerminalSessionID()
     registry.createSurface(session: session)
     let bridge = try GhosttyVTBridge(cols: 40, rows: 2, maxScrollback: 100)
 
     bridge.write(Data("prompt % ".utf8))
     registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
 
-    let textView = try #require((registry.viewForSession(session) as? NSScrollView)?.documentView as? NSTextView)
+    let textView = try textView(in: #require(registry.viewForSession(session)))
     let cursorIndex = (textView.string as NSString).length - 1
-    let cursorBackground = try #require(textView.textStorage?.attribute(.backgroundColor, at: cursorIndex, effectiveRange: nil) as? NSColor)
-    let cursorForeground = try #require(textView.textStorage?.attribute(.foregroundColor, at: cursorIndex, effectiveRange: nil) as? NSColor)
+    let cursorShape = textView.textStorage?.attribute(.proGhosttyCursorShape, at: cursorIndex, effectiveRange: nil) as? TerminalCursorShape
+    let cursorBackground = textView.textStorage?.attribute(.backgroundColor, at: cursorIndex, effectiveRange: nil) as? NSColor
 
     #expect((textView.string as NSString).substring(with: NSRange(location: cursorIndex, length: 1)) == " ")
-    #expect(cursorBackground.sameRGB(as: TerminalSurfacePalette.dark.cursorBackground))
-    #expect(cursorForeground.sameRGB(as: TerminalSurfacePalette.dark.cursorForeground))
+    #expect(cursorShape == .block)
+    #expect(cursorBackground?.sameRGB(as: TerminalSurfacePalette.dark.cursorBackground) != true)
   }
 
-  @MainActor @Test func htmlScrollbackSurfaceShowsCursorAtBlankLineEnd() throws {
+  @MainActor @Test func textFallbackSurfaceShowsCursorAtBlankLineEnd() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))
     let session = TerminalSessionID()
     registry.createSurface(session: session)
     let bridge = try GhosttyVTBridge(cols: 40, rows: 2, maxScrollback: 100)
 
     bridge.write(Data("prompt % \r\n".utf8))
     registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
 
-    let textView = try #require((registry.viewForSession(session) as? NSScrollView)?.documentView as? NSTextView)
+    let textView = try textView(in: #require(registry.viewForSession(session)))
     let text = textView.string as NSString
     let cursorIndex = text.length - 1
-    let cursorBackground = try #require(textView.textStorage?.attribute(.backgroundColor, at: cursorIndex, effectiveRange: nil) as? NSColor)
+    let cursorShape = textView.textStorage?.attribute(.proGhosttyCursorShape, at: cursorIndex, effectiveRange: nil) as? TerminalCursorShape
+    let cursorBackground = textView.textStorage?.attribute(.backgroundColor, at: cursorIndex, effectiveRange: nil) as? NSColor
 
     #expect(text.substring(with: NSRange(location: cursorIndex, length: 1)) == " ")
-    #expect(cursorBackground.sameRGB(as: TerminalSurfacePalette.dark.cursorBackground))
+    #expect(cursorShape == .block)
+    #expect(cursorBackground?.sameRGB(as: TerminalSurfacePalette.dark.cursorBackground) != true)
   }
 
-  @MainActor @Test func htmlScrollbackSurfaceDoesNotShowStrongCursorWhenUnfocused() throws {
+  @MainActor @Test func textFallbackSurfaceKeepsCursorOnTrimmedViewportBlankLine() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 4, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\n".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let textView = try textView(in: #require(registry.viewForSession(session)))
+    let text = textView.string as NSString
+    let cursorIndex = text.length - 1
+    let cursorShape = textView.textStorage?.attribute(.proGhosttyCursorShape, at: cursorIndex, effectiveRange: nil) as? TerminalCursorShape
+
+    #expect(text.range(of: "second\n ").location != NSNotFound)
+    #expect(text.substring(with: NSRange(location: cursorIndex, length: 1)) == " ")
+    #expect(cursorShape == .block)
+  }
+
+  @MainActor @Test func textFallbackSurfaceKeepsCursorOnTrimmedBlankLineAfterHistory() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 4, maxScrollback: 100)
+
+    bridge.write(Data("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix\r\n".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let textView = try textView(in: #require(registry.viewForSession(session)))
+    let text = textView.string as NSString
+    let cursorIndex = text.length - 1
+    let cursorShape = textView.textStorage?.attribute(.proGhosttyCursorShape, at: cursorIndex, effectiveRange: nil) as? TerminalCursorShape
+
+    #expect(text.range(of: "six\n ").location != NSNotFound)
+    #expect(text.substring(with: NSRange(location: cursorIndex, length: 1)) == " ")
+    #expect(cursorShape == .block)
+  }
+
+  @MainActor @Test func textFallbackSurfaceKeepsCursorOnLatestPromptAfterScrollback() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nlatest % ".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let textView = try textView(in: #require(registry.viewForSession(session)))
+    let text = textView.string as NSString
+    let latestPrompt = text.range(of: "latest %")
+    let cursorIndex = text.length - 1
+    let cursorShape = textView.textStorage?.attribute(.proGhosttyCursorShape, at: cursorIndex, effectiveRange: nil) as? TerminalCursorShape
+
+    #expect(latestPrompt.location != NSNotFound)
+    #expect(cursorIndex > latestPrompt.location)
+    #expect(text.substring(with: NSRange(location: cursorIndex, length: 1)) == " ")
+    #expect(cursorShape == .block)
+  }
+
+  @MainActor @Test func liveScreenRenderKeepsCursorVisuallyAnchoredWhenSuggestionsResize() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    surfaceView.frame = NSRect(x: 0, y: 0, width: 720, height: 170)
+
+    let expandedSuggestions = try codexLikeBridge(suggestions: [
+      "/model        choose what model and reasoning effort to use",
+      "/fast         toggle Fast mode",
+      "/ide          include current selection",
+      "/permissions  choose what Codex is allowed to do",
+    ])
+    registry.render(expandedSuggestions, session: session)
+    registry.flushPendingRenderers()
+    let expandedCursorY = try #require(surfaceView.liveGridView.cursorCellRect?.minY)
+    let expandedLineCount = surfaceView.liveGridView.renderedText.components(separatedBy: "\n").count
+
+    let collapsedSuggestions = try codexLikeBridge(suggestions: [
+      "/model        choose what model and reasoning effort to use",
+    ])
+    registry.render(collapsedSuggestions, session: session)
+    registry.flushPendingRenderers()
+    let collapsedCursorY = try #require(surfaceView.liveGridView.cursorCellRect?.minY)
+    let collapsedLineCount = surfaceView.liveGridView.renderedText.components(separatedBy: "\n").count
+
+    #expect(abs(expandedCursorY - collapsedCursorY) < 0.5)
+    #expect(expandedLineCount == 12)
+    #expect(collapsedLineCount == 12)
+  }
+
+  @MainActor @Test func liveScreenRenderDoesNotBounceToHtmlWhenSuggestionsTemporarilyDisappear() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+
+    registry.render(try codexLikeBridge(suggestions: [
+      "/model        choose what model and reasoning effort to use",
+      "/permissions  choose what Codex is allowed to do",
+    ]), session: session)
+    registry.flushPendingRenderers()
+    registry.render(try codexLikeBridge(suggestions: []), session: session)
+    registry.flushPendingRenderers()
+
+    let gridView = try gridView(in: #require(registry.viewForSession(session)))
+
+    #expect(gridView.renderedText.components(separatedBy: "\n").count == 12)
+  }
+
+  @MainActor @Test func liveCellGridStaysMountedAcrossCodexLikeRefreshes() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    registry.render(try codexLikeBridge(suggestions: [
+      "/model        choose what model and reasoning effort to use",
+      "/permissions  choose what Codex is allowed to do",
+    ]), session: session)
+    registry.flushPendingRenderers()
+    let mountedGridView = surfaceView.liveGridView
+
+    registry.render(try codexLikeBridge(suggestions: [
+      "/resume       resume a previous session",
+      "/review       review current changes",
+    ]), session: session)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.isShowingLiveGrid)
+    #expect(surfaceView.liveGridView === mountedGridView)
+  }
+
+  @MainActor @Test func liveCellGridStaysActiveAcrossRepeatedCodexLikeAnsiRefreshes() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 96, rows: 12, maxScrollback: 200)
+
+    bridge.write(Data((1...12).map { "history \($0)" }.joined(separator: "\r\n").utf8))
+    for query in ["", "r", "re", "res", "resu"] {
+      let suggestions = [
+        "/resume       resume a previous session",
+        "/review       review current changes",
+        "/reset        reset conversation state",
+      ].filter { query.isEmpty || $0.contains(query) }
+      bridge.write(Data("\u{1B}[10;1H> /\(query)\u{1B}[11;1H\u{1B}[J\(suggestions.joined(separator: "\r\n"))\u{1B}[10;\(4 + query.count)H".utf8))
+      registry.render(bridge, session: session)
+      registry.flushPendingRenderers()
+
+      let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+      #expect(surfaceView.isShowingLiveGrid)
+      #expect(registry.rendererDiagnostics(for: session)?.backend == .ghosttyVTCellGrid)
+      #expect(surfaceView.liveGridView.renderedText.components(separatedBy: "\n").count == 12)
+    }
+  }
+
+  @Test func scrollAnchorPreservesCursorScreenPositionWhenLiveDocumentHeightChanges() {
+    let origin = TerminalScrollAnchor.replacementOrigin(
+      previousOriginY: 100,
+      previousCursorDocumentMinY: 220,
+      nextCursorDocumentMinY: 180,
+      maxOriginY: 300
+    )
+
+    #expect(origin == 60)
+  }
+
+  @Test func attributedDiffScopesEqualLengthLiveGridUpdatesToChangedRuns() {
+    let old = NSAttributedString(string: "abc\ndef", attributes: [.foregroundColor: NSColor.white])
+    let new = NSAttributedString(string: "abc\ndex", attributes: [.foregroundColor: NSColor.white])
+
+    let ranges = TerminalAttributedDiff.changedRanges(from: old, to: new)
+
+    #expect(ranges == [NSRange(location: 6, length: 1)])
+  }
+
+  @Test func attributedDiffFallsBackToWholeDocumentWhenLengthChanges() {
+    let old = NSAttributedString(string: "abc")
+    let new = NSAttributedString(string: "abcd")
+
+    let ranges = TerminalAttributedDiff.changedRanges(from: old, to: new)
+
+    #expect(ranges == [NSRange(location: 0, length: 4)])
+  }
+
+  @MainActor @Test func liveGridDirtyRectsScopeCodexLikeUpdatesToDirtyRowsAndCursorRows() {
+    let old = frameWithText(rows: [
+      "> /",
+      "/model",
+      "/permissions",
+    ], cols: 16, cursorX: 3, cursorY: 0)
+    let new = frameWithText(rows: [
+      "> /r",
+      "/resume",
+      "/review",
+    ], cols: 16, cursorX: 4, cursorY: 0)
+
+    let rects = PTYGridView.dirtyRects(
+      from: old,
+      to: new,
+      cellSize: CGSize(width: 8, height: 16),
+      inset: CGSize(width: 14, height: 12)
+    )
+
+    #expect(rects == [
+      NSRect(x: 14, y: 12, width: 16 * 8, height: 16),
+      NSRect(x: 14, y: 12 + 16, width: 16 * 8, height: 16),
+      NSRect(x: 14, y: 12 + 2 * 16, width: 16 * 8, height: 16),
+    ])
+  }
+
+  @MainActor @Test func textFallbackSurfaceDoesNotShowStrongCursorWhenUnfocused() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))
     let activeSession = TerminalSessionID()
     let inactiveSession = TerminalSessionID()
     registry.createSurface(session: activeSession)
@@ -211,16 +625,17 @@ struct TerminalSurfaceTests {
     activeBridge.write(Data("active % ".utf8))
     inactiveBridge.write(Data("inactive % ".utf8))
     registry.render(activeBridge, session: activeSession)
+    registry.flushPendingRenderers()
     registry.render(inactiveBridge, session: inactiveSession)
+    registry.flushPendingRenderers()
     registry.setFocusedSession(activeSession)
 
-    let inactiveTextView = try #require((registry.viewForSession(inactiveSession) as? NSScrollView)?.documentView as? NSTextView)
+    let inactiveTextView = try textView(in: #require(registry.viewForSession(inactiveSession)))
     let text = inactiveTextView.string as NSString
     let cursorIndex = text.length - 1
-    let background = try #require(inactiveTextView.textStorage?.attribute(.backgroundColor, at: cursorIndex, effectiveRange: nil) as? NSColor)
 
     #expect(text.substring(with: NSRange(location: cursorIndex, length: 1)) == " ")
-    #expect(!background.sameRGB(as: TerminalSurfacePalette.dark.cursorBackground))
+    #expect(inactiveTextView.textStorage?.attribute(.proGhosttyCursorShape, at: cursorIndex, effectiveRange: nil) == nil)
   }
 
   @MainActor @Test func ptyTextSelectionHitTestingIgnoresBlankTerminalBackground() throws {
@@ -415,6 +830,99 @@ struct TerminalSurfaceTests {
     ))
     #expect(textView.performKeyEquivalent(with: pasteEvent))
     #expect(written == Data("pwd".utf8))
+  }
+
+  private func codexLikeBridge(suggestions: [String]) throws -> GhosttyVTBridge {
+    let bridge = try GhosttyVTBridge(cols: 96, rows: 12, maxScrollback: 200)
+    let history = (1...12).map { "history \($0)" }.joined(separator: "\r\n")
+    let renderedSuggestions = suggestions.joined(separator: "\r\n")
+    bridge.write(Data("\(history)\r\n".utf8))
+    bridge.write(Data("\u{1B}[10;1H> /\u{1B}[11;1H\(renderedSuggestions)\u{1B}[10;4H".utf8))
+    return bridge
+  }
+
+  private func cursorCharacterIndex(in textStorage: NSTextStorage) -> Int? {
+    var cursorIndex: Int?
+    let range = NSRange(location: 0, length: textStorage.length)
+    textStorage.enumerateAttribute(.proGhosttyCursorShape, in: range) { value, attributeRange, stop in
+      guard value is TerminalCursorShape else { return }
+      cursorIndex = attributeRange.location
+      stop.pointee = true
+    }
+    return cursorIndex
+  }
+
+  private func frameWithText(rows: [String], cols: Int, cursorX: Int, cursorY: Int) -> GhosttyTerminalFrame {
+    let cells = rows.flatMap { row in
+      let padded = row.padding(toLength: cols, withPad: " ", startingAt: 0)
+      return padded.unicodeScalars.prefix(cols).map {
+        GhosttyTerminalFrame.Cell(
+          scalar: $0,
+          foreground: GhosttyTerminalFrame.RGB(r: 255, g: 255, b: 255),
+          background: GhosttyTerminalFrame.RGB(r: 0, g: 0, b: 0),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false,
+          usesDefaultForeground: true,
+          usesDefaultBackground: true
+        )
+      }
+    }
+    return GhosttyTerminalFrame(
+      cols: cols,
+      rows: rows.count,
+      cursorVisible: true,
+      cursorX: cursorX,
+      cursorY: cursorY,
+      cursorShape: .bar,
+      cursorBlinking: false,
+      isAlternateScreen: true,
+      cells: cells
+    )
+  }
+
+  @MainActor private func scrollView(in view: NSView) throws -> NSScrollView {
+    if let scrollView = view as? NSScrollView {
+      return scrollView
+    }
+    if let surfaceView = view as? PTYTerminalSurfaceView {
+      return surfaceView.scrollView
+    }
+    for subview in view.subviews {
+      if let scrollView = try? scrollView(in: subview) {
+        return scrollView
+      }
+    }
+    throw SurfaceLookupError.notFound("NSScrollView")
+  }
+
+  @MainActor private func textView(in view: NSView) throws -> NSTextView {
+    let scrollView = try scrollView(in: view)
+    guard let textView = scrollView.documentView as? NSTextView else {
+      throw SurfaceLookupError.notFound("NSTextView")
+    }
+    return textView
+  }
+
+  @MainActor private func gridView(in view: NSView) throws -> PTYGridView {
+    if let gridView = view as? PTYGridView {
+      return gridView
+    }
+    if let surfaceView = view as? PTYTerminalSurfaceView {
+      return surfaceView.liveGridView
+    }
+    for subview in view.subviews {
+      if let gridView = try? gridView(in: subview) {
+        return gridView
+      }
+    }
+    throw SurfaceLookupError.notFound("PTYGridView")
+  }
+
+  private enum SurfaceLookupError: Error {
+    case notFound(String)
   }
 }
 

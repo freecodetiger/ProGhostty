@@ -8,7 +8,6 @@ final class AppModel: ObservableObject {
   struct WorkspaceRuntime: Identifiable, Equatable {
     var layout: WorkspaceLayout
     var workspace: Workspace?
-    var outputBySession: [TerminalSessionID: String]
     var cwdBySession: [TerminalSessionID: String]
     var lastBlockBySession: [TerminalSessionID: CommandBlock]
 
@@ -39,10 +38,6 @@ final class AppModel: ObservableObject {
       return lastBlockBySession[selectedSessionID]
     }
 
-    @MainActor func selectedOutput(focusStore: TerminalFocusStore) -> String {
-      guard let selectedSessionID = selectedSessionID(focusStore: focusStore) else { return "" }
-      return outputBySession[selectedSessionID] ?? ""
-    }
   }
 
   enum Section: String, CaseIterable, Identifiable {
@@ -155,7 +150,6 @@ final class AppModel: ObservableObject {
       let runtime = WorkspaceRuntime(
         layout: opened.workspace,
         workspace: workspace,
-        outputBySession: [opened.pane.sessionId: ""],
         cwdBySession: [opened.pane.sessionId: cwd],
         lastBlockBySession: [:]
       )
@@ -263,10 +257,6 @@ final class AppModel: ObservableObject {
     return focusStore.focusedPaneId(in: activeWorkspaceID)
   }
 
-  var selectedOutput: String {
-    activeWorkspace?.selectedOutput(focusStore: focusStore) ?? ""
-  }
-
   var selectedCwd: String? {
     activeWorkspace?.selectedCwd(focusStore: focusStore)
   }
@@ -361,7 +351,6 @@ final class AppModel: ObservableObject {
       )
       indexer.associate(session: split.pane.sessionId, workspaceId: workspace?.id)
       runtime.layout = split.workspace
-      runtime.outputBySession[split.pane.sessionId] = ""
       runtime.cwdBySession[split.pane.sessionId] = cwd
       workspaceRuntimes[index] = runtime
       self.activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
@@ -397,7 +386,6 @@ final class AppModel: ObservableObject {
       }
       guard let updatedLayout = paneWorkspaceController.workspaceLayout(id: activeWorkspaceID) else { return }
       runtime.layout = updatedLayout
-      runtime.outputBySession[closed.sessionId] = nil
       runtime.cwdBySession[closed.sessionId] = nil
       runtime.lastBlockBySession[closed.sessionId] = nil
       workspaceRuntimes[index] = runtime
@@ -570,6 +558,7 @@ final class AppModel: ObservableObject {
   private func applyTerminalAppearance() {
     surfaceRegistry.applyPalette(terminalPalette)
     surfaceRegistry.applyFont(family: settings.fontFamily, size: CGFloat(settings.fontSize))
+    surfaceRegistry.applyRendererOptions(settings.terminalRendererOptions)
     applyFocusedTerminalSurface()
     for window in NSApp.windows where window !== settingsWindowController?.window {
       ProGhosttyWindowAppearance.applyTerminalChrome(
@@ -818,7 +807,6 @@ final class AppModel: ObservableObject {
     }
     for session in removedSessions {
       sessionManager.closeSession(session)
-      workspaceRuntimes[index].outputBySession[session] = nil
       workspaceRuntimes[index].cwdBySession[session] = nil
       workspaceRuntimes[index].lastBlockBySession[session] = nil
     }
@@ -1012,7 +1000,6 @@ final class AppModel: ObservableObject {
     else { return }
     workspaceRuntimes[index].layout = updated
     for pane in PaneTreeReducer.listLeaves(in: updated.root) {
-      workspaceRuntimes[index].outputBySession[pane.sessionId] = workspaceRuntimes[index].outputBySession[pane.sessionId] ?? ""
       workspaceRuntimes[index].cwdBySession[pane.sessionId] = workspaceRuntimes[index].cwdBySession[pane.sessionId] ?? pane.cwd ?? workspaceRuntimes[index].displayPath ?? ""
       indexer.associate(session: pane.sessionId, workspaceId: workspaceRuntimes[index].workspace?.id)
     }
@@ -1037,10 +1024,8 @@ final class AppModel: ObservableObject {
 
   private func handle(_ event: TerminalEvent) {
     switch event {
-    case .output(let session, let data):
-      updateWorkspaceForSession(session) { workspace in
-        workspace.outputBySession[session, default: ""] += String(decoding: data, as: UTF8.self)
-      }
+    case .output:
+      break
     case .cwdChanged(let session, let cwd):
       shellIntegrationState = "available"
       updateWorkspaceForSession(session) { workspace in workspace.cwdBySession[session] = cwd }

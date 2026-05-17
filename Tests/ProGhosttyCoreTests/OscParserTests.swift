@@ -60,4 +60,24 @@ struct OscParserTests {
     let sequences = parser.parse(data)
     #expect(sequences.map(\.parameters) == [["A"], ["B"]])
   }
+
+  @MainActor @Test func rendererSelectionDoesNotAffectOscSideChannelParsing() throws {
+    let payload = Data("prompt\u{1B}]133;C;echo hi\u{07}\u{1B}]777;precmd\u{07}".utf8)
+    for mode in [TerminalRendererMode.auto, .ghosttyVTCellGrid, .ghosttyVTTextFallback] {
+      let registry = PTYTerminalSurfaceRegistry()
+      registry.applyRendererOptions(TerminalRendererOptions(mode: mode))
+      let session = TerminalSessionID()
+      registry.createSurface(session: session)
+      let bridge = try GhosttyVTBridge(cols: 40, rows: 4, maxScrollback: 100)
+      var parser = OscParser()
+
+      bridge.write(payload)
+      registry.render(bridge, session: session)
+      registry.flushPendingRenderers()
+      let sequences = parser.parse(payload)
+
+      #expect(sequences.map(\.command) == ["133", "777"])
+      #expect(sequences.first?.parameters == ["C", "echo hi"])
+    }
+  }
 }

@@ -18,23 +18,13 @@ struct TerminalView: View {
     if let workspace = model.activeWorkspace {
       TerminalTreeLayoutView(root: workspace.layout.root)
     } else {
-      ScrollView {
-        Text(selectedOutput)
-          .font(.system(size: model.settings.fontSize, design: .monospaced))
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(12)
-          .textSelection(.enabled)
-      }
-      .background(Color(nsColor: model.terminalBackgroundColor))
+      Text("No active workspace")
+        .font(.system(size: model.settings.fontSize, design: .monospaced))
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(12)
+        .background(Color(nsColor: model.terminalBackgroundColor))
     }
-  }
-
-  private var selectedOutput: String {
-    guard model.activeWorkspace != nil else {
-      return "No active workspace"
-    }
-    let output = model.selectedOutput
-    return output.isEmpty ? "Terminal ready." : output
   }
 }
 
@@ -630,6 +620,16 @@ final class TerminalPaneViewController: NSViewController {
 
   private func terminalGridSize(for size: CGSize) -> (rows: Int, cols: Int) {
     let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+    if let surface = contentView as? PTYTerminalSurfaceView {
+      let cellSize = surface.liveGridView.terminalCellSize
+      let inset = surface.liveGridView.terminalContentInset
+      let contentWidth = max(1, (size.width - inset.width * 2) * scale)
+      let contentHeight = max(1, (size.height - inset.height * 2) * scale)
+      return (
+        rows: max(1, Int(contentHeight / max(1, ceil(cellSize.height * scale)))),
+        cols: max(2, Int(contentWidth / max(1, ceil(cellSize.width * scale))))
+      )
+    }
     let textView = terminalTextView(in: contentView)
     let font = textView?.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     let sampleWidth = max(1, ceil(("W" as NSString).size(withAttributes: [.font: font]).width * scale))
@@ -682,13 +682,12 @@ final class TerminalPaneViewController: NSViewController {
     let menu = NSMenu()
     let paneId = pane.paneId
     menu.addItem(ClosureMenuItem(title: text.copy) { [weak self] in
-      self?.terminalTextView(in: self?.contentView)?.copy(nil)
+      self?.copyFromTerminalSurface()
     } isEnabled: { [weak self] in
-      guard let textView = self?.terminalTextView(in: self?.contentView) else { return false }
-      return textView.selectedRange().length > 0
+      self?.hasTerminalSelection() == true
     })
     menu.addItem(ClosureMenuItem(title: text.paste) { [weak self] in
-      self?.terminalTextView(in: self?.contentView)?.paste(nil)
+      self?.pasteIntoTerminalSurface()
     } isEnabled: {
       NSPasteboard.general.string(forType: .string)?.isEmpty == false
     })
@@ -718,6 +717,30 @@ final class TerminalPaneViewController: NSViewController {
       onSettings()
     })
     return menu
+  }
+
+  private func copyFromTerminalSurface() {
+    if let surface = contentView as? PTYTerminalSurfaceView, surface.isShowingLiveGrid {
+      surface.liveGridView.copy(nil)
+      return
+    }
+    terminalTextView(in: contentView)?.copy(nil)
+  }
+
+  private func pasteIntoTerminalSurface() {
+    if let surface = contentView as? PTYTerminalSurfaceView, surface.isShowingLiveGrid {
+      surface.liveGridView.paste(nil)
+      return
+    }
+    terminalTextView(in: contentView)?.paste(nil)
+  }
+
+  private func hasTerminalSelection() -> Bool {
+    if let surface = contentView as? PTYTerminalSurfaceView, surface.isShowingLiveGrid {
+      return surface.liveGridView.selectedText?.isEmpty == false
+    }
+    guard let textView = terminalTextView(in: contentView) else { return false }
+    return textView.selectedRange().length > 0
   }
 
   private func performSplitIfPossible(

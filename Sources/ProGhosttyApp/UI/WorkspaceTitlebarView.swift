@@ -110,6 +110,17 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       installTitlebarBackground(in: window)
       harmonizeTitlebarMaterials(in: window)
       keepTitlebarBackgroundOrdered(in: window)
+      DispatchQueue.main.async { [weak self, weak window] in
+        guard let self, let window else { return }
+        ProGhosttyWindowAppearance.applyTerminalChrome(
+          to: window,
+          backgroundColor: self.backgroundColor,
+          usesDarkAppearance: self.usesDarkAppearance
+        )
+        self.installTitlebarBackground(in: window)
+        self.harmonizeTitlebarMaterials(in: window)
+        self.keepTitlebarBackgroundOrdered(in: window)
+      }
     }
 
     private func installTitlebarBackground(in window: NSWindow) {
@@ -212,36 +223,6 @@ private final class TitlebarBackgroundView: NSView {
   }
 }
 
-@MainActor
-enum ProGhosttyWindowAppearance {
-  static let titlebarBackgroundIdentifier = NSUserInterfaceItemIdentifier("ProGhosttyTitlebarBackground")
-
-  static func applyTerminalChrome(
-    to window: NSWindow,
-    backgroundColor: NSColor,
-    usesDarkAppearance: Bool
-  ) {
-    window.appearance = NSAppearance(named: usesDarkAppearance ? .darkAqua : .aqua)
-    window.titleVisibility = .hidden
-    window.titlebarAppearsTransparent = true
-    window.titlebarSeparatorStyle = .none
-    window.styleMask.insert(.fullSizeContentView)
-    window.isOpaque = true
-    window.backgroundColor = backgroundColor
-
-    let background = backgroundColor.cgColor
-    window.contentView?.wantsLayer = true
-    window.contentView?.layer?.backgroundColor = background
-    window.contentView?.superview?.wantsLayer = true
-    window.contentView?.superview?.layer?.backgroundColor = background
-
-    for view in window.contentView?.superview?.descendants(matchingIdentifier: titlebarBackgroundIdentifier) ?? [] {
-      view.wantsLayer = true
-      view.layer?.backgroundColor = background
-    }
-  }
-}
-
 private final class NotificationObserverBag {
   private var observers: [NSObjectProtocol] = []
 
@@ -282,14 +263,4 @@ private extension NSView {
     return result
   }
 
-  func descendants(matchingIdentifier identifier: NSUserInterfaceItemIdentifier) -> [NSView] {
-    var result: [NSView] = []
-    for subview in subviews {
-      if subview.identifier == identifier {
-        result.append(subview)
-      }
-      result.append(contentsOf: subview.descendants(matchingIdentifier: identifier))
-    }
-    return result
-  }
 }

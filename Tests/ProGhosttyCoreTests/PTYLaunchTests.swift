@@ -19,9 +19,29 @@ struct PTYLaunchTests {
   }
 
   @Test func launchEnvironmentSuppressesZshEndOfLineMarkerByDefault() {
-    let environment = PTYLaunch.launchEnvironment([:])
+    let environment = PTYLaunch.launchEnvironment([:], baseEnvironment: [:])
 
     #expect(environment.contains("PROMPT_EOL_MARK="))
+  }
+
+  @Test func launchEnvironmentDoesNotLeakHostNoColorIntoTerminalSessions() {
+    let environment = PTYLaunch.launchEnvironment(
+      [:],
+      baseEnvironment: ["NO_COLOR": "1", "TERM": "xterm-ghostty"]
+    )
+
+    #expect(!environment.contains("NO_COLOR=1"))
+    #expect(environment.contains("COLORTERM=truecolor"))
+    #expect(environment.contains("CLICOLOR=1"))
+  }
+
+  @Test func launchEnvironmentAllowsExplicitNoColorOverride() {
+    let environment = PTYLaunch.launchEnvironment(
+      ["NO_COLOR": "1"],
+      baseEnvironment: ["TERM": "xterm-ghostty"]
+    )
+
+    #expect(environment.contains("NO_COLOR=1"))
   }
 
   @Test func controlEnvironmentInjectsSessionIdentityAndHelperPath() {

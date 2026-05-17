@@ -1,6 +1,17 @@
 import Foundation
 import ProGhosttyGhosttyVT
 
+public enum TerminalCursorShape: UInt8, Sendable {
+  case bar = 0
+  case block = 1
+  case underline = 2
+  case hollowBlock = 3
+
+  init(ghosttyRawValue: UInt8) {
+    self = TerminalCursorShape(rawValue: ghosttyRawValue) ?? .block
+  }
+}
+
 public struct GhosttyTerminalFrame: Sendable {
   public struct Cell: Sendable {
     public var scalar: UnicodeScalar
@@ -39,7 +50,7 @@ public struct GhosttyTerminalFrame: Sendable {
     }
   }
 
-  public struct RGB: Sendable, Equatable {
+  public struct RGB: Sendable, Equatable, Hashable {
     public var r: UInt8
     public var g: UInt8
     public var b: UInt8
@@ -50,7 +61,16 @@ public struct GhosttyTerminalFrame: Sendable {
   public var cursorVisible: Bool
   public var cursorX: Int
   public var cursorY: Int
+  public var cursorShape: TerminalCursorShape = .block
+  public var cursorBlinking: Bool = false
+  public var isAlternateScreen: Bool = false
   public var cells: [Cell]
+}
+
+public struct GhosttyTerminalScrollbar: Equatable, Sendable {
+  public var total: UInt64
+  public var offset: UInt64
+  public var length: UInt64
 }
 
 public final class GhosttyVTBridge {
@@ -98,6 +118,27 @@ public final class GhosttyVTBridge {
     _ = proghostty_vt_resize(handle, UInt16(cols), UInt16(rows))
   }
 
+  public func scrollViewport(deltaRows: Int) {
+    guard let handle else { return }
+    proghostty_vt_scroll_viewport(handle, deltaRows)
+  }
+
+  public func scrollbar() throws -> GhosttyTerminalScrollbar {
+    guard let handle else {
+      return GhosttyTerminalScrollbar(total: 0, offset: 0, length: 0)
+    }
+    var scrollbar = ProGhosttyVTScrollbar()
+    let result = proghostty_vt_scrollbar(handle, &scrollbar)
+    guard result == 0 else {
+      throw BridgeError.formatFailed(result)
+    }
+    return GhosttyTerminalScrollbar(
+      total: scrollbar.total,
+      offset: scrollbar.offset,
+      length: scrollbar.length
+    )
+  }
+
   public func frame() throws -> GhosttyTerminalFrame {
     guard let handle else {
       return GhosttyTerminalFrame(
@@ -135,6 +176,9 @@ public final class GhosttyVTBridge {
       cursorVisible: snapshot.cursor_visible,
       cursorX: Int(snapshot.cursor_x),
       cursorY: Int(snapshot.cursor_y),
+      cursorShape: TerminalCursorShape(ghosttyRawValue: snapshot.cursor_visual_style),
+      cursorBlinking: snapshot.cursor_blinking,
+      isAlternateScreen: snapshot.alternate_screen,
       cells: cells
     )
   }

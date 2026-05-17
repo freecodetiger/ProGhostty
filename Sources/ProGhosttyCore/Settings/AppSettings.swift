@@ -2,6 +2,10 @@ import AppKit
 import Foundation
 
 public struct AppSettings: Codable, Equatable, Sendable {
+  public var rendererMode: TerminalRendererMode
+  public var smoothPixelScrollingEnabled: Bool
+  public var dirtyRowRenderingEnabled: Bool
+  public var forceFullRedrawEnabled: Bool
   public var defaultShell: String
   public var defaultWorkingDirectory: String?
   public var fontFamily: String
@@ -19,6 +23,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
   public var keyboardShortcuts: KeyboardShortcutSettings
 
   public static let defaults = AppSettings(
+    rendererMode: .auto,
+    smoothPixelScrollingEnabled: false,
+    dirtyRowRenderingEnabled: true,
+    forceFullRedrawEnabled: false,
     defaultShell: "/bin/zsh",
     defaultWorkingDirectory: nil,
     fontFamily: FontManager.defaultMonospacedFontName(),
@@ -37,6 +45,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
   )
 
   enum CodingKeys: String, CodingKey {
+    case rendererMode
+    case smoothPixelScrollingEnabled
+    case dirtyRowRenderingEnabled
+    case forceFullRedrawEnabled
     case defaultShell
     case defaultWorkingDirectory
     case fontFamily
@@ -55,6 +67,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
   }
 
   public init(
+    rendererMode: TerminalRendererMode,
+    smoothPixelScrollingEnabled: Bool,
+    dirtyRowRenderingEnabled: Bool,
+    forceFullRedrawEnabled: Bool,
     defaultShell: String,
     defaultWorkingDirectory: String?,
     fontFamily: String,
@@ -71,6 +87,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     aliyunASRAPIKey: String?,
     keyboardShortcuts: KeyboardShortcutSettings
   ) {
+    self.rendererMode = rendererMode
+    self.smoothPixelScrollingEnabled = smoothPixelScrollingEnabled
+    self.dirtyRowRenderingEnabled = dirtyRowRenderingEnabled
+    self.forceFullRedrawEnabled = forceFullRedrawEnabled
     self.defaultShell = defaultShell
     self.defaultWorkingDirectory = defaultWorkingDirectory
     self.fontFamily = fontFamily
@@ -90,6 +110,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
+    rendererMode = try container.decodeIfPresent(TerminalRendererMode.self, forKey: .rendererMode) ?? Self.defaults.rendererMode
+    smoothPixelScrollingEnabled = try container.decodeIfPresent(Bool.self, forKey: .smoothPixelScrollingEnabled) ?? Self.defaults.smoothPixelScrollingEnabled
+    dirtyRowRenderingEnabled = try container.decodeIfPresent(Bool.self, forKey: .dirtyRowRenderingEnabled) ?? Self.defaults.dirtyRowRenderingEnabled
+    forceFullRedrawEnabled = try container.decodeIfPresent(Bool.self, forKey: .forceFullRedrawEnabled) ?? Self.defaults.forceFullRedrawEnabled
     defaultShell = try container.decodeIfPresent(String.self, forKey: .defaultShell) ?? Self.defaults.defaultShell
     defaultWorkingDirectory = try container.decodeIfPresent(String.self, forKey: .defaultWorkingDirectory)
     fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? Self.defaults.fontFamily

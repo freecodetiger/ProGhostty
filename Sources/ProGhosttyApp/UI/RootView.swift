@@ -74,6 +74,27 @@ struct RootView: View {
       )
       .frame(width: 0, height: 0)
     )
+    .background(
+      TerminalChromeSyncView(
+        backgroundColor: model.terminalBackgroundColor,
+        usesDarkAppearance: model.usesDarkAppearance,
+        syncToken: terminalChromeSyncToken
+      )
+      .frame(width: 0, height: 0)
+    )
+  }
+
+  private var terminalChromeSyncToken: Int {
+    var hasher = Hasher()
+    hasher.combine(model.isWorkspaceSwitcherPresented)
+    hasher.combine(model.isHistoryPresented)
+    hasher.combine(model.isPluginManagerPresented)
+    hasher.combine(model.isAICompanionPresented)
+    hasher.combine(model.titlebarToast?.message)
+    hasher.combine(String(describing: model.titlebarToast?.style))
+    hasher.combine(model.usesDarkAppearance)
+    hasher.combine(model.terminalBackgroundColor.rgbSignature)
+    return hasher.finalize()
   }
 }
 
@@ -114,6 +135,19 @@ private struct TitlebarToastView: View {
     case .success:
       return Color.green.opacity(0.38)
     }
+  }
+}
+
+private extension NSColor {
+  var rgbSignature: String {
+    let rgb = usingColorSpace(.deviceRGB) ?? self
+    return String(
+      format: "%.4f:%.4f:%.4f:%.4f",
+      rgb.redComponent,
+      rgb.greenComponent,
+      rgb.blueComponent,
+      rgb.alphaComponent
+    )
   }
 }
 

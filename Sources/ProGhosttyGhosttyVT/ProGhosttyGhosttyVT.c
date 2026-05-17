@@ -65,6 +65,36 @@ int proghostty_vt_resize(ProGhosttyVT *vt, uint16_t cols, uint16_t rows) {
   return ghostty_terminal_resize(vt->terminal, cols, rows, 8, 16);
 }
 
+void proghostty_vt_scroll_viewport(ProGhosttyVT *vt, intptr_t delta_rows) {
+  if (vt == NULL || vt->terminal == NULL || delta_rows == 0) {
+    return;
+  }
+
+  GhosttyTerminalScrollViewport scroll = {
+    .tag = GHOSTTY_SCROLL_VIEWPORT_DELTA,
+    .value = {.delta = delta_rows},
+  };
+  ghostty_terminal_scroll_viewport(vt->terminal, scroll);
+}
+
+int proghostty_vt_scrollbar(ProGhosttyVT *vt, ProGhosttyVTScrollbar *out) {
+  if (vt == NULL || vt->terminal == NULL || out == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+
+  GhosttyTerminalScrollbar scrollbar = {0};
+  GhosttyResult result = ghostty_terminal_get(
+    vt->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &scrollbar);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+
+  out->total = scrollbar.total;
+  out->offset = scrollbar.offset;
+  out->length = scrollbar.len;
+  return GHOSTTY_SUCCESS;
+}
+
 static ProGhosttyVTCell blank_cell(GhosttyRenderStateColors *colors) {
   ProGhosttyVTCell cell;
   cell.codepoint = ' ';
@@ -117,15 +147,6 @@ static void apply_style(ProGhosttyVTCell *cell, GhosttyRenderStateRowCells cells
     cell->faint = style.faint;
     cell->underline = style.underline != 0;
     cell->inverse = style.inverse;
-  }
-
-  if (cell->inverse) {
-    GhosttyColorRgb tmp = fg;
-    fg = bg;
-    bg = tmp;
-    bool tmp_default = fg_default;
-    fg_default = bg_default;
-    bg_default = tmp_default;
   }
 
   cell->fg_r = fg.r;
@@ -227,9 +248,15 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
 
   bool cursor_visible = false;
   bool cursor_has_value = false;
+  bool cursor_blinking = false;
+  GhosttyTerminalScreen active_screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY;
+  GhosttyRenderStateCursorVisualStyle cursor_visual_style = GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
   uint16_t cursor_x = 0;
   uint16_t cursor_y = 0;
+  ghostty_terminal_get(vt->terminal, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &active_screen);
   ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE, &cursor_visible);
+  ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING, &cursor_blinking);
+  ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, &cursor_visual_style);
   ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE, &cursor_has_value);
   if (cursor_visible && cursor_has_value) {
     ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X, &cursor_x);
@@ -244,6 +271,9 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
   out->cursor_visible = cursor_visible && cursor_has_value;
   out->cursor_x = cursor_x;
   out->cursor_y = cursor_y;
+  out->cursor_visual_style = (uint8_t)cursor_visual_style;
+  out->cursor_blinking = cursor_blinking;
+  out->alternate_screen = active_screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE;
   out->cells = cells_out;
   out->cell_count = cell_count;
   return GHOSTTY_SUCCESS;

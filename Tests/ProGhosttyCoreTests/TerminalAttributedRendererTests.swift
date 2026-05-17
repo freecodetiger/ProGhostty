@@ -3,7 +3,7 @@ import Testing
 
 @testable import ProGhosttyCore
 
-@Suite("Terminal attributed renderer")
+@MainActor @Suite("Terminal attributed renderer")
 struct TerminalAttributedRendererTests {
   @Test func rendersFaintCellsWithSubduedForeground() {
     let frame = makeFrame(
@@ -60,11 +60,12 @@ struct TerminalAttributedRendererTests {
     #expect(background?.redComponent.isApproximately(20.0 / 255.0) == true)
   }
 
-  @Test func rendersCursorCellWithDistinctForegroundAndBackground() {
+  @Test func rendersBlockCursorAsOverlayAttributeWithoutPaintingCellBackground() {
     let frame = makeFrame(
       cursorVisible: true,
       cursorX: 1,
       cursorY: 0,
+      cursorShape: .block,
       cells: [
         .init(
           scalar: "a",
@@ -92,7 +93,113 @@ struct TerminalAttributedRendererTests {
 
     let normalBackground = rendered.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor
     let cursorBackground = rendered.attribute(.backgroundColor, at: 1, effectiveRange: nil) as? NSColor
-    #expect(cursorBackground != normalBackground)
+    #expect(cursorBackground?.sameRGB(as: normalBackground) == true)
+    #expect(rendered.attribute(.proGhosttyCursorShape, at: 1, effectiveRange: nil) as? TerminalCursorShape == .block)
+  }
+
+  @Test func rendersBarCursorAsOverlayAttributeWithoutPaintingCellBackground() {
+    let frame = makeFrame(
+      cursorVisible: true,
+      cursorX: 0,
+      cursorY: 0,
+      cursorShape: .bar,
+      cells: [
+        .init(
+          scalar: " ",
+          foreground: .init(r: 200, g: 200, b: 200),
+          background: .init(r: 10, g: 10, b: 10),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false,
+          usesDefaultForeground: true,
+          usesDefaultBackground: true
+        )
+      ])
+
+    let rendered = TerminalAttributedRenderer().attributedString(for: frame)
+
+    #expect(rendered.attribute(.backgroundColor, at: 0, effectiveRange: nil) == nil)
+    #expect(rendered.attribute(.proGhosttyCursorShape, at: 0, effectiveRange: nil) as? TerminalCursorShape == .bar)
+  }
+
+  @Test func rendersUnderlineCursorAsOverlayAttributeWithoutPaintingCellBackground() {
+    let frame = makeFrame(
+      cursorVisible: true,
+      cursorX: 0,
+      cursorY: 0,
+      cursorShape: .underline,
+      cells: [
+        .init(
+          scalar: " ",
+          foreground: .init(r: 200, g: 200, b: 200),
+          background: .init(r: 10, g: 10, b: 10),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false,
+          usesDefaultForeground: true,
+          usesDefaultBackground: true
+        )
+      ])
+
+    let rendered = TerminalAttributedRenderer().attributedString(for: frame)
+
+    #expect(rendered.attribute(.backgroundColor, at: 0, effectiveRange: nil) == nil)
+    #expect(rendered.attribute(.proGhosttyCursorShape, at: 0, effectiveRange: nil) as? TerminalCursorShape == .underline)
+  }
+
+  @Test func rendersHollowBlockCursorAsOverlayAttributeWithoutFillingCellBackground() {
+    let frame = makeFrame(
+      cursorVisible: true,
+      cursorX: 0,
+      cursorY: 0,
+      cursorShape: .hollowBlock,
+      cells: [
+        .init(
+          scalar: " ",
+          foreground: .init(r: 200, g: 200, b: 200),
+          background: .init(r: 10, g: 10, b: 10),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false,
+          usesDefaultForeground: true,
+          usesDefaultBackground: true
+        )
+      ])
+
+    let rendered = TerminalAttributedRenderer().attributedString(for: frame)
+
+    #expect(rendered.attribute(.backgroundColor, at: 0, effectiveRange: nil) == nil)
+    #expect(rendered.attribute(.proGhosttyCursorShape, at: 0, effectiveRange: nil) as? TerminalCursorShape == .hollowBlock)
+  }
+
+  @Test func hiddenCursorDoesNotEmitCursorOverlayAttribute() {
+    let frame = makeFrame(
+      cursorVisible: false,
+      cursorX: 0,
+      cursorY: 0,
+      cursorShape: .bar,
+      cells: [
+        .init(
+          scalar: "a",
+          foreground: .init(r: 200, g: 200, b: 200),
+          background: .init(r: 10, g: 10, b: 10),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false
+        )
+      ])
+
+    let rendered = TerminalAttributedRenderer().attributedString(for: frame)
+
+    #expect(rendered.attribute(.proGhosttyCursorShape, at: 0, effectiveRange: nil) == nil)
   }
 
   @Test func defaultBackgroundDoesNotPaintEmptyCellRuns() {
@@ -255,6 +362,7 @@ struct TerminalAttributedRendererTests {
     cursorVisible: Bool = false,
     cursorX: Int = 0,
     cursorY: Int = 0,
+    cursorShape: TerminalCursorShape = .block,
     cells: [GhosttyTerminalFrame.Cell]
   ) -> GhosttyTerminalFrame {
     GhosttyTerminalFrame(
@@ -263,6 +371,7 @@ struct TerminalAttributedRendererTests {
       cursorVisible: cursorVisible,
       cursorX: cursorX,
       cursorY: cursorY,
+      cursorShape: cursorShape,
       cells: cells
     )
   }

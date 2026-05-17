@@ -98,6 +98,10 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
     return (textView.string as NSString).substring(with: range)
   }
 
+  public func rendererDiagnostics(for id: TerminalSessionID) -> TerminalRendererDiagnostics? {
+    nil
+  }
+
   public func applyPalette(_ palette: TerminalSurfacePalette) {
     self.palette = palette
     for state in sessions.values {
@@ -112,6 +116,8 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
       state.view.font = terminalFont()
     }
   }
+
+  public func applyRendererOptions(_ options: TerminalRendererOptions) {}
 
   public func setFocusedSession(_ id: TerminalSessionID?) {}
   public func focusSessionView(_ id: TerminalSessionID?) {}

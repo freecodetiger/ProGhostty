@@ -49,6 +49,44 @@ struct GhosttyVTBridgeTests {
     #expect(frame.cursorX > 0)
   }
 
+  @Test func renderFrameKeepsInverseAsStyleInsteadOfPreSwappingColors() throws {
+    let bridge = try GhosttyVTBridge(cols: 10, rows: 2)
+    bridge.write(Data("\u{1B}[38;2;200;10;20;7mX\u{1B}[0m".utf8))
+
+    let cell = try #require(try bridge.frame().cells.first)
+
+    #expect(cell.scalar == "X")
+    #expect(cell.inverse)
+    #expect(cell.foreground == GhosttyTerminalFrame.RGB(r: 200, g: 10, b: 20))
+    #expect(cell.usesDefaultForeground == false)
+    #expect(cell.usesDefaultBackground == true)
+  }
+
+  @Test func renderFramePreservesCursorVisualStyle() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+
+    bridge.write(Data("\u{1B}[6 qbar".utf8))
+    #expect(try bridge.frame().cursorShape == .bar)
+
+    bridge.write(Data("\u{1B}[4 qunderline".utf8))
+    #expect(try bridge.frame().cursorShape == .underline)
+
+    bridge.write(Data("\u{1B}[2 qblock".utf8))
+    #expect(try bridge.frame().cursorShape == .block)
+  }
+
+  @Test func renderFrameReportsAlternateScreenState() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+
+    #expect(try bridge.frame().isAlternateScreen == false)
+
+    bridge.write(Data("\u{1B}[?1049h".utf8))
+    #expect(try bridge.frame().isAlternateScreen)
+
+    bridge.write(Data("\u{1B}[?1049l".utf8))
+    #expect(try bridge.frame().isAlternateScreen == false)
+  }
+
   @Test func zshEndOfLineMarkerClearsWithCarriageReturnOverwrite() throws {
     let bridge = try GhosttyVTBridge(cols: 80, rows: 5)
     let clearLineRemainder = String(repeating: " ", count: 78)
@@ -71,5 +109,18 @@ struct GhosttyVTBridgeTests {
 
     #expect(text.contains("hello"))
     #expect(html.contains("hello"))
+  }
+
+  @Test func cellGridFrameCanScrollLibGhosttyViewportIntoScrollback() throws {
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+
+    let bottom = try bridge.frame().cells.map { String($0.scalar) }.joined()
+    bridge.scrollViewport(deltaRows: -2)
+    let scrolled = try bridge.frame().cells.map { String($0.scalar) }.joined()
+
+    #expect(bottom.contains("fourth"))
+    #expect(scrolled.contains("first") || scrolled.contains("second"))
+    #expect(try bridge.scrollbar().total >= bridge.scrollbar().length)
   }
 }

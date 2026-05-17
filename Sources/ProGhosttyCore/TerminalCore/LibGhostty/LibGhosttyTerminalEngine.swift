@@ -25,8 +25,10 @@ public final class LibGhosttyTerminalEngine: TerminalSessionManager, TerminalSur
   public func controlToken(for id: TerminalSessionID) -> String? { nil }
   public func viewForSession(_ id: TerminalSessionID) -> NSView? { nil }
   public func selectedText(for id: TerminalSessionID) -> String? { nil }
+  public func rendererDiagnostics(for id: TerminalSessionID) -> TerminalRendererDiagnostics? { nil }
   public func applyPalette(_ palette: TerminalSurfacePalette) {}
   public func applyFont(family: String, size: CGFloat) {}
+  public func applyRendererOptions(_ options: TerminalRendererOptions) {}
   public func setFocusedSession(_ id: TerminalSessionID?) {}
   public func focusSessionView(_ id: TerminalSessionID?) {}
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {}

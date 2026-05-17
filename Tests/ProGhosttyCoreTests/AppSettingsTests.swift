@@ -28,6 +28,17 @@ struct AppSettingsTests {
     #expect(settings.pgControlCommandsEnabled == true)
     #expect(settings.keyboardShortcuts.shortcut(for: .openSettings).key == ",")
     #expect(settings.keyboardShortcuts.shortcut(for: .splitRight).modifiers == [.command])
+    #expect(settings.rendererMode == .auto)
+    #expect(settings.smoothPixelScrollingEnabled == false)
+    #expect(settings.dirtyRowRenderingEnabled == true)
+    #expect(settings.forceFullRedrawEnabled == false)
+  }
+
+  @Test func rendererOptionsDoNotEnablePixelScrollWithoutDebugFlag() {
+    var settings = AppSettings.defaults
+    settings.smoothPixelScrollingEnabled = true
+
+    #expect(settings.terminalRendererOptions.smoothPixelScrollingEnabled == false)
   }
 
   @Test func legacySystemThemeBecomesFollowSystemAppearance() throws {

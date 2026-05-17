@@ -65,8 +65,10 @@ public enum TerminalEvent: Sendable {
 @MainActor public protocol TerminalSurfaceRegistry: AnyObject {
   func viewForSession(_ id: TerminalSessionID) -> NSView?
   func selectedText(for id: TerminalSessionID) -> String?
+  func rendererDiagnostics(for id: TerminalSessionID) -> TerminalRendererDiagnostics?
   func applyPalette(_ palette: TerminalSurfacePalette)
   func applyFont(family: String, size: CGFloat)
+  func applyRendererOptions(_ options: TerminalRendererOptions)
   func setFocusedSession(_ id: TerminalSessionID?)
   func focusSessionView(_ id: TerminalSessionID?)
   func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?)

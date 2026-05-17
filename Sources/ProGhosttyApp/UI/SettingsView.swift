@@ -100,6 +100,21 @@ struct SettingsView: View {
                 .opacity(model.settings.followSystemAppearance ? 0.55 : 1)
               }
             }
+
+            SettingsRow(text.renderer) {
+              VStack(alignment: .leading, spacing: 8) {
+                Picker("", selection: $model.settings.rendererMode) {
+                  Text(text.rendererAuto).tag(TerminalRendererMode.auto)
+                  Text(text.rendererCellGrid).tag(TerminalRendererMode.ghosttyVTCellGrid)
+                  Text(text.rendererTextFallback).tag(TerminalRendererMode.ghosttyVTTextFallback)
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+
+                Toggle(text.dirtyRowRendering, isOn: $model.settings.dirtyRowRenderingEnabled)
+                Toggle(text.forceFullRedraw, isOn: $model.settings.forceFullRedrawEnabled)
+              }
+            }
           }
 
           SettingsSection(text.history) {

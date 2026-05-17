@@ -36,6 +36,12 @@ struct AppText {
   var theme: String { text("Theme", "主题") }
   var light: String { text("Light", "浅色") }
   var dark: String { text("Dark", "深色") }
+  var renderer: String { text("Renderer", "渲染器") }
+  var rendererAuto: String { text("Auto", "自动") }
+  var rendererCellGrid: String { text("Ghostty VT Cell Grid", "Ghostty VT Cell Grid") }
+  var rendererTextFallback: String { text("Text fallback", "文本回退") }
+  var dirtyRowRendering: String { text("Dirty row rendering", "脏行增量渲染") }
+  var forceFullRedraw: String { text("Force full redraw for debug", "调试时强制全量重绘") }
   var history: String { text("History", "历史") }
   var commandBlocks: String { text("Command blocks", "命令块") }
   var outputPreviews: String { text("Output previews", "输出预览") }
