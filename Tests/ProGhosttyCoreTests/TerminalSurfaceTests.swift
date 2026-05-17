@@ -219,6 +219,119 @@ struct TerminalSurfaceTests {
     #expect(abs(surfaceView.liveGridView.viewport.visualOffsetY) < surfaceView.liveGridView.terminalCellSize.height)
   }
 
+  @MainActor @Test func liveCellGridPinnedOutputClearsPixelRemainderAndKeepsLatestPromptVisible() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(5)
+    registry.flushPendingRenderers()
+    #expect(surfaceView.liveGridView.viewport.visualOffsetY == 5)
+
+    let wasPinned = try #require(registry.viewportIsPinnedToBottom(session) as Bool?)
+    bridge.write(Data("\r\ncwd % ".utf8))
+    registry.prepareForPinnedOutput(session: session, wasPinnedToBottom: wasPinned, bridge: bridge)
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.viewport == TerminalViewport())
+    #expect(surfaceView.liveGridView.renderedText.contains("cwd %"))
+  }
+
+  @MainActor @Test func liveCellGridUserInputReturnsScrolledPaneToLiveBottom() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    registry.flushPendingRenderers()
+    #expect(surfaceView.liveGridView.renderedText.contains("first") || surfaceView.liveGridView.renderedText.contains("second"))
+
+    registry.prepareForUserInput(session: session, bridge: bridge)
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.viewport == TerminalViewport())
+    #expect(surfaceView.liveGridView.renderedText.contains("fourth"))
+  }
+
+  @MainActor @Test func liveCellGridCommandOutputAfterScrolledInputShowsFinalLineAndPrompt() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 28, rows: 6, maxScrollback: 500)
+
+    bridge.write(Data("old 1\r\nold 2\r\nold 3\r\nold 4\r\nold 5\r\nold 6".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    registry.flushPendingRenderers()
+
+    registry.prepareForUserInput(session: session, bridge: bridge)
+    let output = (1...200).map(String.init).joined(separator: "\r\n") + "\r\nzpc@host ~ % "
+    bridge.write(Data(output.utf8))
+    registry.prepareForPinnedOutput(session: session, wasPinnedToBottom: true, bridge: bridge)
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.viewport == TerminalViewport())
+    #expect(surfaceView.liveGridView.renderedText.contains("200"))
+    #expect(surfaceView.liveGridView.renderedText.contains("zpc@host ~ %"))
+  }
+
+  @MainActor @Test func liveCellGridResizeWhilePinnedKeepsFinalLineAndPromptVisible() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 28, rows: 5, maxScrollback: 500)
+
+    let output = (1...200).map(String.init).joined(separator: "\r\n") + "\r\nzpc@host ~ % "
+    bridge.write(Data(output.utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    let wasPinned = try #require(registry.viewportIsPinnedToBottom(session) as Bool?)
+    bridge.resize(cols: 28, rows: 7)
+    registry.prepareForPinnedOutput(session: session, wasPinnedToBottom: wasPinned, bridge: bridge)
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.renderedText.contains("200"))
+    #expect(surfaceView.liveGridView.renderedText.contains("zpc@host ~ %"))
+  }
+
+  @MainActor @Test func liveCellGridWheelRowCommitUpdatesSnapshotSynchronously() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+
+    #expect(surfaceView.liveGridView.renderedText.contains("first") || surfaceView.liveGridView.renderedText.contains("second"))
+    #expect(abs(surfaceView.liveGridView.viewport.visualOffsetY) < surfaceView.liveGridView.terminalCellSize.height)
+  }
+
   @MainActor @Test func liveCellGridWheelScrollFallsBackToRowScrollWhenPixelScrollIsDisabled() throws {
     let registry = PTYTerminalSurfaceRegistry()
     registry.applyRendererOptions(TerminalRendererOptions(smoothPixelScrollingEnabled: false))

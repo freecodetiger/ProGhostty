@@ -68,7 +68,7 @@ struct TerminalRendererBackendTests {
       cellHeight: 16,
       alternateScreen: false,
       smoothPixelScrollingEnabled: true,
-      hasOverscanRowsForDirection: true
+      hasOverscanRowsForProjectedRemainder: true
     )
 
     #expect(decision == .consumed(rowDelta: 2, pixelRemainderY: 5))
@@ -86,14 +86,14 @@ struct TerminalRendererBackendTests {
       cellHeight: 16,
       alternateScreen: false,
       smoothPixelScrollingEnabled: true,
-      hasOverscanRowsForDirection: true
+      hasOverscanRowsForProjectedRemainder: true
     )
     let decision = coordinator.scroll(
       deltaY: 12,
       cellHeight: 16,
       alternateScreen: false,
       smoothPixelScrollingEnabled: true,
-      hasOverscanRowsForDirection: true
+      hasOverscanRowsForProjectedRemainder: true
     )
 
     #expect(decision == .consumed(rowDelta: 1, pixelRemainderY: 6))
@@ -110,7 +110,7 @@ struct TerminalRendererBackendTests {
       cellHeight: 16,
       alternateScreen: true,
       smoothPixelScrollingEnabled: true,
-      hasOverscanRowsForDirection: true
+      hasOverscanRowsForProjectedRemainder: true
     )
 
     #expect(decision == .forwardToPTY)
@@ -126,7 +126,7 @@ struct TerminalRendererBackendTests {
       cellHeight: 16,
       alternateScreen: false,
       smoothPixelScrollingEnabled: true,
-      hasOverscanRowsForDirection: false
+      hasOverscanRowsForProjectedRemainder: false
     )
 
     #expect(decision == .consumed(rowDelta: 1, pixelRemainderY: 0))
@@ -292,6 +292,52 @@ struct TerminalRendererBackendTests {
     #expect(backend.diagnostics.overscanBottomRows == 1)
   }
 
+  @MainActor @Test func liveGridDrawsBottomViewportRowWhenTopOverscanIsPresent() throws {
+    let backend = GhosttyVTCellGridRendererBackend()
+    let gridView = backend.gridView
+    let cols = 12
+    let rows = 2
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(rows) * cellSize.height
+    )
+    var scrollFrame = scrollFrame(
+      viewportRows: ["top", "BOTTOM"],
+      overscanTop: ["history"],
+      overscanBottom: [],
+      cols: cols
+    )
+    scrollFrame.viewport.cursorVisible = false
+
+    backend.render(scrollFrame: scrollFrame)
+    backend.flushPendingFrame()
+
+    let image = try #require(gridView.bitmapImageRepForCachingDisplay(in: gridView.bounds))
+    gridView.cacheDisplay(in: gridView.bounds, to: image)
+
+    let bottomRowTextRect = bitmapRect(
+      PTYGridView.textGlyphRect(
+      row: 1,
+      col: 0,
+      cellSize: cellSize,
+      inset: inset
+      )
+      .union(PTYGridView.textGlyphRect(row: 1, col: 5, cellSize: cellSize, inset: inset)),
+      imageHeight: image.pixelsHigh
+    )
+    let foregroundPixelCount = nonBackgroundPixelCount(
+      in: bottomRowTextRect,
+      image: image,
+      background: TerminalSurfacePalette.dark.background
+    )
+
+    #expect(foregroundPixelCount > 0)
+  }
+
   @MainActor @Test func paneScrollCoordinatorStateIsIndependentPerGridView() {
     let first = GhosttyVTCellGridRendererBackend(
       options: TerminalRendererOptions(smoothPixelScrollingEnabled: true)
@@ -316,6 +362,46 @@ struct TerminalRendererBackendTests {
     #expect(first.diagnostics.pixelRemainderY == 5)
     #expect(second.gridView.viewport.visualOffsetY == 0)
     #expect(second.diagnostics.pixelRemainderY == 0)
+  }
+
+  @MainActor @Test func liveGridUsesProjectedRemainderOverscanWhenWheelDirectionReverses() {
+    let backend = GhosttyVTCellGridRendererBackend(
+      options: TerminalRendererOptions(smoothPixelScrollingEnabled: true)
+    )
+    backend.render(scrollFrame: scrollFrame(
+      viewportRows: ["two", "three"],
+      overscanTop: ["one"],
+      overscanBottom: [],
+      cols: 8
+    ))
+    backend.flushPendingFrame()
+
+    backend.gridView.testScrollWheelDeltaY(10)
+    backend.gridView.testScrollWheelDeltaY(-3)
+
+    #expect(backend.gridView.viewport.visualOffsetY == 7)
+    #expect(backend.diagnostics.pixelRemainderY == 7)
+    #expect(backend.diagnostics.pixelSmoothScrollReason == TerminalRendererDiagnostics.smoothScrollEnabledReason)
+  }
+
+  @MainActor @Test func liveGridIgnoresResidualMomentumAfterUserInputReset() {
+    let backend = GhosttyVTCellGridRendererBackend(
+      options: TerminalRendererOptions(smoothPixelScrollingEnabled: true)
+    )
+    backend.render(scrollFrame: scrollFrame(
+      viewportRows: ["two", "three"],
+      overscanTop: ["one"],
+      overscanBottom: ["four"],
+      cols: 8
+    ))
+    backend.flushPendingFrame()
+
+    backend.gridView.testScrollWheelDeltaY(10)
+    backend.resetPixelScroll(suppressMomentum: true)
+    backend.gridView.testMomentumScrollWheelDeltaY(10)
+
+    #expect(backend.gridView.viewport == TerminalViewport())
+    #expect(backend.diagnostics.pixelRemainderY == 0)
   }
 
   @MainActor @Test func liveGridForwardsAlternateScreenWheelInputToPTYWithoutPixelScroll() {
@@ -594,6 +680,42 @@ struct TerminalRendererBackendTests {
       inverse: inverse,
       usesDefaultForeground: usesDefaultForeground,
       usesDefaultBackground: usesDefaultBackground
+    )
+  }
+
+  private func nonBackgroundPixelCount(
+    in rect: NSRect,
+    image: NSBitmapImageRep,
+    background: NSColor
+  ) -> Int {
+    let backgroundRGB = background.usingColorSpace(.deviceRGB) ?? background
+    let minX = max(0, Int(floor(rect.minX)))
+    let maxX = min(image.pixelsWide - 1, Int(ceil(rect.maxX)))
+    let minY = max(0, Int(floor(rect.minY)))
+    let maxY = min(image.pixelsHigh - 1, Int(ceil(rect.maxY)))
+    guard minX <= maxX, minY <= maxY else { return 0 }
+
+    var count = 0
+    for x in minX...maxX {
+      for y in minY...maxY {
+        guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+        let distance = abs(color.redComponent - backgroundRGB.redComponent)
+          + abs(color.greenComponent - backgroundRGB.greenComponent)
+          + abs(color.blueComponent - backgroundRGB.blueComponent)
+        if distance > 0.08 {
+          count += 1
+        }
+      }
+    }
+    return count
+  }
+
+  private func bitmapRect(_ viewRect: NSRect, imageHeight: Int) -> NSRect {
+    NSRect(
+      x: viewRect.minX,
+      y: CGFloat(imageHeight) - viewRect.maxY,
+      width: viewRect.width,
+      height: viewRect.height
     )
   }
 }

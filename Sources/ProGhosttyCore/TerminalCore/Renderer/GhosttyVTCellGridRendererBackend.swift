@@ -135,6 +135,11 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
     gridView.resetViewportStartRowKeepingVisualOffset()
   }
 
+  public func resetPixelScroll(suppressMomentum: Bool = false) {
+    gridView.resetPixelScroll(suppressMomentum: suppressMomentum)
+    requestFullRedraw()
+  }
+
   private func requestFullRedraw() {
     pendingFullRedraw = true
     diagnosticsState.redrawMode = .full

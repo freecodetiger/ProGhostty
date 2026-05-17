@@ -234,16 +234,26 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   public func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int) {
     guard var state = sessions[id] else { return }
+    let wasPinnedToBottom = surfaceRegistry.viewportIsPinnedToBottom(id) ?? true
     state.config.rows = rows
     state.config.cols = cols
     state.vtBridge.resize(cols: cols, rows: rows)
     sessions[id] = state
     PTYLaunch.resize(fileDescriptor: state.fileDescriptor, rows: rows, cols: cols)
     _ = Darwin.kill(state.pid, SIGWINCH)
+    surfaceRegistry.prepareForPinnedOutput(
+      session: id,
+      wasPinnedToBottom: wasPinnedToBottom,
+      bridge: state.vtBridge
+    )
+    surfaceRegistry.render(state.vtBridge, session: id)
   }
 
   public func writeInput(_ data: Data, to id: TerminalSessionID) {
-    guard let fd = sessions[id]?.fileDescriptor else { return }
+    guard let state = sessions[id] else { return }
+    surfaceRegistry.prepareForUserInput(session: id, bridge: state.vtBridge)
+    surfaceRegistry.render(state.vtBridge, session: id)
+    let fd = state.fileDescriptor
     data.withUnsafeBytes { bytes in
       guard let base = bytes.baseAddress else { return }
       _ = Darwin.write(fd, base, bytes.count)
@@ -365,7 +375,13 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   private func handleOutput(_ data: Data, session id: TerminalSessionID) {
     guard var state = sessions[id] else { return }
+    let wasPinnedToBottom = surfaceRegistry.viewportIsPinnedToBottom(id) ?? true
     state.vtBridge.write(data)
+    surfaceRegistry.prepareForPinnedOutput(
+      session: id,
+      wasPinnedToBottom: wasPinnedToBottom,
+      bridge: state.vtBridge
+    )
     surfaceRegistry.render(state.vtBridge, session: id)
     let sequences = state.oscParser.parse(data)
     sessions[id] = state
@@ -603,9 +619,33 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     }
     bridge.scrollViewport(deltaRows: terminalDelta)
     render(bridge, surface: &surface, session: id)
+    backend.flushPendingFrame()
     backend.resetViewportStartRowKeepingVisualOffset()
     surfaces[id] = surface
     return true
+  }
+
+  func viewportIsPinnedToBottom(_ id: TerminalSessionID) -> Bool? {
+    guard let bridge = surfaces[id]?.bridge, let scrollbar = try? bridge.scrollbar() else {
+      return nil
+    }
+    return scrollbar.offset + scrollbar.length >= scrollbar.total
+  }
+
+  func prepareForPinnedOutput(
+    session id: TerminalSessionID,
+    wasPinnedToBottom: Bool,
+    bridge: GhosttyVTBridge
+  ) {
+    guard wasPinnedToBottom, let surface = surfaces[id] else { return }
+    scrollToBottom(bridge)
+    surface.cellGridBackend.resetPixelScroll()
+  }
+
+  func prepareForUserInput(session id: TerminalSessionID, bridge: GhosttyVTBridge) {
+    guard let surface = surfaces[id] else { return }
+    scrollToBottom(bridge)
+    surface.cellGridBackend.resetPixelScroll(suppressMomentum: true)
   }
 
   private func canScrollViewport(session id: TerminalSessionID, rowDelta: Int) -> Bool {
@@ -626,6 +666,14 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     return true
   }
 
+  private func scrollToBottom(_ bridge: GhosttyVTBridge) {
+    guard let scrollbar = try? bridge.scrollbar(), scrollbar.offset + scrollbar.length < scrollbar.total else {
+      return
+    }
+    let rowsToBottom = scrollbar.total - (scrollbar.offset + scrollbar.length)
+    bridge.scrollViewport(deltaRows: Int(min(UInt64(Int.max), rowsToBottom)))
+  }
+
   private func render(_ bridge: GhosttyVTBridge, surface: inout SurfaceState, session id: TerminalSessionID) {
     surface.bridge = bridge
     let shouldFollowOutput = surface.textBackend.isScrolledToBottom
@@ -644,6 +692,11 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
         surface.gridView.window?.makeFirstResponder(surface.gridView)
       }
       render(bridge: bridge, fallbackFrame: frame, in: surface.cellGridBackend, isFocused: isFocused(id))
+      if let scrollbar = try? bridge.scrollbar(), let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2) {
+        PTYRenderDebugLog.write(
+          "snapshot session=\(id) scrollbar=(offset:\(scrollbar.offset), length:\(scrollbar.length), total:\(scrollbar.total)) viewportStart=\(String(describing: scrollFrame.viewportStartRow)) tail=\"\(Self.tailText(from: scrollFrame.viewport))\""
+        )
+      }
       PTYRenderDebugLog.write("diagnostics session=\(id) \(surface.cellGridBackend.diagnostics.debugSummary)")
     } else if let html = try? bridge.htmlText(),
       let attributed = try? attributedTerminalSnapshot(fromHTML: html, cursorFrame: frame, isFocused: isFocused(id))
@@ -697,6 +750,22 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       }
     }
     return false
+  }
+
+  private static func tailText(from frame: GhosttyTerminalFrame, maxRows: Int = 6) -> String {
+    guard frame.rows > 0, frame.cols > 0 else { return "" }
+    let firstRow = max(0, frame.rows - maxRows)
+    return (firstRow..<frame.rows)
+      .map { row in
+        let start = row * frame.cols
+        let end = min(start + frame.cols, frame.cells.count)
+        guard start < end else { return "" }
+        return frame.cells[start..<end]
+          .map { String($0.scalar) }
+          .joined()
+          .trimmingCharacters(in: .whitespaces)
+      }
+      .joined(separator: " | ")
   }
 
   private func render(
@@ -1019,6 +1088,7 @@ public final class PTYGridView: NSView {
   private var isFocusedTerminalStorage = true
   private var rendererOptions = TerminalRendererOptions()
   private var scrollCoordinator = PaneScrollCoordinator()
+  private var suppressMomentumScroll = false
   private(set) public var viewport = TerminalViewport()
   private(set) public var lastDrawDuration: TimeInterval = 0
   private(set) public var maxDrawDuration: TimeInterval = 0
@@ -1105,6 +1175,13 @@ public final class PTYGridView: NSView {
     viewport = TerminalViewport(visualOffsetY: scrollCoordinator.pixelRemainderY)
   }
 
+  public func resetPixelScroll(suppressMomentum: Bool = false) {
+    scrollCoordinator.reset()
+    viewport = TerminalViewport()
+    suppressMomentumScroll = suppressMomentum
+    needsDisplay = true
+  }
+
   public func applyScrollDiagnostics(to diagnostics: inout TerminalRendererDiagnostics) {
     diagnostics.pixelRemainderY = scrollCoordinator.pixelRemainderY
     diagnostics.committedRowDelta = scrollCoordinator.lastCommittedRowDelta
@@ -1172,7 +1249,7 @@ public final class PTYGridView: NSView {
     frameSnapshot = scrollFrame.viewport
     scrollFrameSnapshot = scrollFrame
     isFocusedTerminalStorage = isFocused
-    if viewport.visualOffsetY != 0 {
+    if viewport.visualOffsetY != 0 || !scrollFrame.overscanTop.isEmpty || !scrollFrame.overscanBottom.isEmpty {
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
       return
@@ -1215,12 +1292,6 @@ public final class PTYGridView: NSView {
     let drawFrame = scrollFrameSnapshot.map(extendedFrame(from:)) ?? viewportFrame
 
     NSGraphicsContext.current?.saveGraphicsState()
-    let translationY = drawTranslationY(topOverscanRows: topOverscanRows)
-    if translationY != 0 {
-      let transform = NSAffineTransform()
-      transform.translateX(by: 0, yBy: translationY)
-      transform.concat()
-    }
     Self.terminalContentClipRect(
       cols: viewportFrame.cols,
       rows: viewportFrame.rows,
@@ -1228,6 +1299,12 @@ public final class PTYGridView: NSView {
       inset: contentInset
     )
     .clip()
+    let translationY = drawTranslationY(topOverscanRows: topOverscanRows)
+    if translationY != 0 {
+      let transform = NSAffineTransform()
+      transform.translateX(by: 0, yBy: translationY)
+      transform.concat()
+    }
     let contentDirtyRect = contentDirtyRect(forDrawing: dirtyRect, translationY: translationY)
     let visibleRows = scrollFrameSnapshot == nil ? visibleRowRange(for: drawFrame) : 0..<drawFrame.rows
     for row in visibleRows {
@@ -1316,6 +1393,15 @@ public final class PTYGridView: NSView {
   }
 
   public override func scrollWheel(with event: NSEvent) {
+    if suppressMomentumScroll {
+      if !event.momentumPhase.isEmpty {
+        PTYRenderDebugLog.write(
+          "wheel-ignore reason=suppressed-momentum deltaY=\(String(format: "%.3f", event.scrollingDeltaY)) momentum=\(event.momentumPhase.rawValue)"
+        )
+        return
+      }
+      suppressMomentumScroll = false
+    }
     PTYRenderDebugLog.write(
       "wheel precise=\(event.hasPreciseScrollingDeltas) deltaY=\(String(format: "%.3f", event.scrollingDeltaY)) phase=\(event.phase.rawValue) momentum=\(event.momentumPhase.rawValue)"
     )
@@ -1336,7 +1422,7 @@ public final class PTYGridView: NSView {
         cellHeight: cellSize.height,
         alternateScreen: true,
         smoothPixelScrollingEnabled: rendererOptions.smoothPixelScrollingEnabled,
-        hasOverscanRowsForDirection: false
+        hasOverscanRowsForProjectedRemainder: false
       )
       viewport = TerminalViewport()
       PTYRenderDebugLog.write(
@@ -1357,16 +1443,16 @@ public final class PTYGridView: NSView {
         return
       }
     }
-    let hasOverscanRowsForDirection = hasOverscanRows(forDeltaY: deltaY)
+    let hasOverscanRowsForProjectedRemainder = hasOverscanRows(forVisualOffsetY: viewport.visualOffsetY + deltaY)
     let decision = scrollCoordinator.scroll(
       deltaY: deltaY,
       cellHeight: cellSize.height,
       alternateScreen: false,
       smoothPixelScrollingEnabled: rendererOptions.smoothPixelScrollingEnabled,
-      hasOverscanRowsForDirection: hasOverscanRowsForDirection
+      hasOverscanRowsForProjectedRemainder: hasOverscanRowsForProjectedRemainder
     )
     PTYRenderDebugLog.write(
-      "wheel-decision deltaY=\(String(format: "%.3f", deltaY)) cellHeight=\(String(format: "%.3f", cellSize.height)) smooth=\(rendererOptions.smoothPixelScrollingEnabled) hasOverscan=\(hasOverscanRowsForDirection) decision=\(decision) viewportOffset=\(String(format: "%.3f", viewport.visualOffsetY))"
+      "wheel-decision deltaY=\(String(format: "%.3f", deltaY)) cellHeight=\(String(format: "%.3f", cellSize.height)) smooth=\(rendererOptions.smoothPixelScrollingEnabled) hasOverscan=\(hasOverscanRowsForProjectedRemainder) decision=\(decision) viewportOffset=\(String(format: "%.3f", viewport.visualOffsetY))"
     )
     switch decision {
     case .consumed(let rowDelta, let pixelRemainderY):
@@ -1399,9 +1485,9 @@ public final class PTYGridView: NSView {
     }
   }
 
-  private func hasOverscanRows(forDeltaY deltaY: CGFloat) -> Bool {
-    guard deltaY != 0, let scrollFrameSnapshot else { return false }
-    return deltaY > 0 ? !scrollFrameSnapshot.overscanTop.isEmpty : !scrollFrameSnapshot.overscanBottom.isEmpty
+  private func hasOverscanRows(forVisualOffsetY visualOffsetY: CGFloat) -> Bool {
+    guard visualOffsetY != 0, let scrollFrameSnapshot else { return false }
+    return visualOffsetY > 0 ? !scrollFrameSnapshot.overscanTop.isEmpty : !scrollFrameSnapshot.overscanBottom.isEmpty
   }
 
   public override func keyDown(with event: NSEvent) {
@@ -1453,6 +1539,11 @@ public final class PTYGridView: NSView {
 
   func testScrollWheelDeltaY(_ deltaY: CGFloat, forwardToPTY: () -> Void) {
     processScroll(deltaY: deltaY, forwardToPTY: forwardToPTY)
+  }
+
+  func testMomentumScrollWheelDeltaY(_ deltaY: CGFloat) {
+    if suppressMomentumScroll { return }
+    processScroll(deltaY: deltaY)
   }
 
   public override func mouseDown(with event: NSEvent) {

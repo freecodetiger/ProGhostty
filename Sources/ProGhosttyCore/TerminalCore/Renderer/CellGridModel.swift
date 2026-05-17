@@ -213,7 +213,7 @@ public struct PaneScrollCoordinator: Sendable {
     cellHeight: CGFloat,
     alternateScreen: Bool,
     smoothPixelScrollingEnabled: Bool,
-    hasOverscanRowsForDirection: Bool
+    hasOverscanRowsForProjectedRemainder: Bool
   ) -> PaneScrollDecision {
     lastCommittedRowDelta = 0
     guard deltaY != 0 else { return .ignored }
@@ -229,14 +229,16 @@ public struct PaneScrollCoordinator: Sendable {
       reset(reason: TerminalRendererDiagnostics.invalidCellHeightReason)
       return .ignored
     }
-    guard hasOverscanRowsForDirection else {
+    let projectedRemainderY = pixelRemainderY + deltaY
+    let needsOverscanRows = projectedRemainderY != 0
+    guard !needsOverscanRows || hasOverscanRowsForProjectedRemainder else {
       reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
       return rowBasedDecision(for: deltaY)
     }
 
     pendingWheelEvents += 1
     lastDisabledReason = TerminalRendererDiagnostics.smoothScrollEnabledReason
-    pixelRemainderY += deltaY
+    pixelRemainderY = projectedRemainderY
     let rowDelta = Int(pixelRemainderY / cellHeight)
     if rowDelta != 0 {
       pixelRemainderY.formTruncatingRemainder(dividingBy: cellHeight)

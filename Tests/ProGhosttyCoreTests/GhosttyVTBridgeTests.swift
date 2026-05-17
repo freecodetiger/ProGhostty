@@ -162,6 +162,17 @@ struct GhosttyVTBridgeTests {
     #expect(frame.overscanTop.count <= 4)
     #expect(frame.overscanBottom.count <= 4)
   }
+
+  @Test func seqLikeOutputAtBottomIncludesFinalLineAndPrompt() throws {
+    let bridge = try GhosttyVTBridge(cols: 80, rows: 35, maxScrollback: 500)
+    let output = (1...200).map(String.init).joined(separator: "\r\n") + "\r\nzpc@host ~ % "
+
+    bridge.write(Data(output.utf8))
+
+    let text = try bridge.frame().cells.map { String($0.scalar) }.joined()
+    #expect(text.contains("200"))
+    #expect(text.contains("zpc@host"))
+  }
 }
 
 private extension GhosttyTerminalCellRow {
