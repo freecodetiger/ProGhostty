@@ -177,6 +177,94 @@ public enum SmoothScrollDecision: Equatable, Sendable {
   case ignored
 }
 
+public enum PaneScrollDecision: Equatable, Sendable {
+  case consumed(rowDelta: Int, pixelRemainderY: CGFloat)
+  case forwardToPTY
+  case ignored
+}
+
+public struct PaneScrollCoordinator: Sendable {
+  public private(set) var pixelRemainderY: CGFloat
+  public private(set) var lastCommittedRowDelta: Int
+  public private(set) var coalescedWheelEvents: Int
+  public private(set) var lastDisabledReason: String
+  private var pendingWheelEvents: Int
+
+  public init(
+    pixelRemainderY: CGFloat = 0,
+    lastCommittedRowDelta: Int = 0,
+    coalescedWheelEvents: Int = 0,
+    lastDisabledReason: String = TerminalRendererDiagnostics.smoothScrollEnabledReason
+  ) {
+    self.pixelRemainderY = pixelRemainderY
+    self.lastCommittedRowDelta = lastCommittedRowDelta
+    self.coalescedWheelEvents = coalescedWheelEvents
+    self.lastDisabledReason = lastDisabledReason
+    pendingWheelEvents = 0
+  }
+
+  public var isPixelScrollActive: Bool {
+    lastDisabledReason == TerminalRendererDiagnostics.smoothScrollEnabledReason
+  }
+
+  @discardableResult
+  public mutating func scroll(
+    deltaY: CGFloat,
+    cellHeight: CGFloat,
+    alternateScreen: Bool,
+    smoothPixelScrollingEnabled: Bool,
+    hasOverscanRowsForDirection: Bool
+  ) -> PaneScrollDecision {
+    lastCommittedRowDelta = 0
+    guard deltaY != 0 else { return .ignored }
+    guard !alternateScreen else {
+      reset(reason: TerminalRendererDiagnostics.alternateScreenScrollReason)
+      return .forwardToPTY
+    }
+    guard smoothPixelScrollingEnabled else {
+      reset(reason: TerminalRendererDiagnostics.smoothScrollDisabledReason)
+      return rowBasedDecision(for: deltaY)
+    }
+    guard cellHeight > 0 else {
+      reset(reason: TerminalRendererDiagnostics.invalidCellHeightReason)
+      return .ignored
+    }
+    guard hasOverscanRowsForDirection else {
+      reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
+      return rowBasedDecision(for: deltaY)
+    }
+
+    pendingWheelEvents += 1
+    lastDisabledReason = TerminalRendererDiagnostics.smoothScrollEnabledReason
+    pixelRemainderY += deltaY
+    let rowDelta = Int(pixelRemainderY / cellHeight)
+    if rowDelta != 0 {
+      pixelRemainderY.formTruncatingRemainder(dividingBy: cellHeight)
+      lastCommittedRowDelta = rowDelta
+      coalescedWheelEvents = pendingWheelEvents
+      pendingWheelEvents = abs(pixelRemainderY) > .ulpOfOne ? 1 : 0
+    } else {
+      coalescedWheelEvents = pendingWheelEvents
+    }
+    return .consumed(rowDelta: rowDelta, pixelRemainderY: pixelRemainderY)
+  }
+
+  public mutating func reset(reason: String = TerminalRendererDiagnostics.smoothScrollEnabledReason) {
+    pixelRemainderY = 0
+    lastCommittedRowDelta = 0
+    coalescedWheelEvents = 0
+    pendingWheelEvents = 0
+    lastDisabledReason = reason
+  }
+
+  private mutating func rowBasedDecision(for deltaY: CGFloat) -> PaneScrollDecision {
+    let rowDelta = deltaY.sign == .minus ? -1 : 1
+    lastCommittedRowDelta = rowDelta
+    coalescedWheelEvents = 1
+    return .consumed(rowDelta: rowDelta, pixelRemainderY: 0)
+  }
+}
+
 public struct SmoothScrollController: Sendable {
   public private(set) var viewport: TerminalViewport
   public var isEnabled: Bool

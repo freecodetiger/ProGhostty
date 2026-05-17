@@ -24,7 +24,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
   public static let defaults = AppSettings(
     rendererMode: .auto,
-    smoothPixelScrollingEnabled: false,
+    smoothPixelScrollingEnabled: true,
     dirtyRowRenderingEnabled: true,
     forceFullRedrawEnabled: false,
     defaultShell: "/bin/zsh",
@@ -289,10 +289,11 @@ public final class SettingsStore {
   public func load() -> AppSettings {
     guard
       let data = defaults.data(forKey: key),
-      let settings = try? JSONDecoder().decode(AppSettings.self, from: data)
+      var settings = try? JSONDecoder().decode(AppSettings.self, from: data)
     else {
       return .defaults
     }
+    settings.smoothPixelScrollingEnabled = true
     return settings
   }
 

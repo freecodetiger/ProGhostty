@@ -219,6 +219,30 @@ struct TerminalSurfaceTests {
     #expect(abs(surfaceView.liveGridView.viewport.visualOffsetY) < surfaceView.liveGridView.terminalCellSize.height)
   }
 
+  @MainActor @Test func liveCellGridWheelScrollFallsBackToRowScrollWhenPixelScrollIsDisabled() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(smoothPixelScrollingEnabled: false))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(5)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.viewport.visualOffsetY == 0)
+    #expect(surfaceView.liveGridView.renderedText.contains("second") || surfaceView.liveGridView.renderedText.contains("third"))
+    #expect(registry.rendererDiagnostics(for: session)?.pixelSmoothScroll == .unavailable)
+    #expect(
+      registry.rendererDiagnostics(for: session)?.pixelSmoothScrollReason
+        == TerminalRendererDiagnostics.smoothScrollDisabledReason
+    )
+  }
+
   @MainActor @Test func liveCellGridWheelScrollReturnsToBottomAndIgnoresPastTopEdge() throws {
     let registry = PTYTerminalSurfaceRegistry()
     let session = TerminalSessionID()

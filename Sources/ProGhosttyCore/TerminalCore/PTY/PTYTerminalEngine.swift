@@ -715,7 +715,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     isFocused: Bool
   ) {
     backend.setFocused(isFocused)
-    guard let scrollFrame = try? bridge.scrollFrame(overscanTop: 1, overscanBottom: 1) else {
+    guard let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2) else {
       backend.render(frame: frame)
       backend.updateOverscanDiagnostics(topRows: 0, bottomRows: 0)
       return
@@ -1018,7 +1018,7 @@ public final class PTYGridView: NSView {
   private var cellSize = CGSize(width: 8, height: 16)
   private var isFocusedTerminalStorage = true
   private var rendererOptions = TerminalRendererOptions()
-  private var smoothScrollController = SmoothScrollController()
+  private var scrollCoordinator = PaneScrollCoordinator()
   private(set) public var viewport = TerminalViewport()
   private(set) public var lastDrawDuration: TimeInterval = 0
   private(set) public var maxDrawDuration: TimeInterval = 0
@@ -1095,15 +1095,34 @@ public final class PTYGridView: NSView {
 
   public func applyRendererOptions(_ options: TerminalRendererOptions) {
     rendererOptions = options
-    // Keep pixel deltas as an internal row threshold accumulator, but do not
-    // expose visualOffsetY to drawing unless the experimental renderer flag is
-    // enabled. The default renderer remains row-based and libghostty-owned.
-    smoothScrollController.isEnabled = true
+    if !options.smoothPixelScrollingEnabled {
+      scrollCoordinator.reset(reason: TerminalRendererDiagnostics.smoothScrollDisabledReason)
+      viewport = TerminalViewport()
+    }
   }
 
   public func resetViewportStartRowKeepingVisualOffset() {
-    smoothScrollController.resetStartRowKeepingVisualOffset()
-    viewport = smoothScrollController.viewport
+    viewport = TerminalViewport(visualOffsetY: scrollCoordinator.pixelRemainderY)
+  }
+
+  public func applyScrollDiagnostics(to diagnostics: inout TerminalRendererDiagnostics) {
+    diagnostics.pixelRemainderY = scrollCoordinator.pixelRemainderY
+    diagnostics.committedRowDelta = scrollCoordinator.lastCommittedRowDelta
+    diagnostics.coalescedWheelEvents = scrollCoordinator.coalescedWheelEvents
+    diagnostics.smoothScrollOffset = viewport.visualOffsetY
+    if diagnostics.alternateScreenActive {
+      diagnostics.pixelSmoothScroll = .unavailable
+      diagnostics.pixelSmoothScrollReason = TerminalRendererDiagnostics.alternateScreenScrollReason
+    } else if scrollCoordinator.isPixelScrollActive && (diagnostics.overscanTopRows > 0 || diagnostics.overscanBottomRows > 0) {
+      diagnostics.pixelSmoothScroll = .experimental
+      diagnostics.pixelSmoothScrollReason = TerminalRendererDiagnostics.smoothScrollEnabledReason
+    } else if !scrollCoordinator.isPixelScrollActive {
+      diagnostics.pixelSmoothScroll = .unavailable
+      diagnostics.pixelSmoothScrollReason = scrollCoordinator.lastDisabledReason
+    } else {
+      diagnostics.pixelSmoothScroll = .unavailable
+      diagnostics.pixelSmoothScrollReason = TerminalRendererDiagnostics.missingOverscanRowsReason
+    }
   }
 
   public func setFocused(_ isFocused: Bool) {
@@ -1297,6 +1316,9 @@ public final class PTYGridView: NSView {
   }
 
   public override func scrollWheel(with event: NSEvent) {
+    PTYRenderDebugLog.write(
+      "wheel precise=\(event.hasPreciseScrollingDeltas) deltaY=\(String(format: "%.3f", event.scrollingDeltaY)) phase=\(event.phase.rawValue) momentum=\(event.momentumPhase.rawValue)"
+    )
     processScroll(deltaY: event.scrollingDeltaY) {
       super.scrollWheel(with: event)
     }
@@ -1304,47 +1326,70 @@ public final class PTYGridView: NSView {
 
   private func processScroll(deltaY: CGFloat, forwardToPTY: () -> Void = {}) {
     guard let frame = frameSnapshot else {
+      PTYRenderDebugLog.write("wheel-forward reason=no-frame deltaY=\(String(format: "%.3f", deltaY))")
       forwardToPTY()
       return
     }
-    if !frame.isAlternateScreen, deltaY != 0 {
+    if frame.isAlternateScreen {
+      _ = scrollCoordinator.scroll(
+        deltaY: deltaY,
+        cellHeight: cellSize.height,
+        alternateScreen: true,
+        smoothPixelScrollingEnabled: rendererOptions.smoothPixelScrollingEnabled,
+        hasOverscanRowsForDirection: false
+      )
+      viewport = TerminalViewport()
+      PTYRenderDebugLog.write(
+        "wheel-forward reason=alternate-screen deltaY=\(String(format: "%.3f", deltaY))"
+      )
+      forwardToPTY()
+      return
+    }
+    if deltaY != 0 {
       let rowDirection = deltaY.sign == .minus ? -1 : 1
       if viewportCanScrollHandler?(rowDirection) == false {
-        smoothScrollController.reset()
-        viewport = smoothScrollController.viewport
+        scrollCoordinator.reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
+        viewport = TerminalViewport()
         needsDisplay = true
+        PTYRenderDebugLog.write(
+          "wheel-ignore reason=edge deltaY=\(String(format: "%.3f", deltaY)) rowDirection=\(rowDirection)"
+        )
         return
       }
     }
-    let decision = smoothScrollController.scroll(
+    let hasOverscanRowsForDirection = hasOverscanRows(forDeltaY: deltaY)
+    let decision = scrollCoordinator.scroll(
       deltaY: deltaY,
       cellHeight: cellSize.height,
-      maxStartRow: nil,
-      alternateScreen: frame.isAlternateScreen
+      alternateScreen: false,
+      smoothPixelScrollingEnabled: rendererOptions.smoothPixelScrollingEnabled,
+      hasOverscanRowsForDirection: hasOverscanRowsForDirection
+    )
+    PTYRenderDebugLog.write(
+      "wheel-decision deltaY=\(String(format: "%.3f", deltaY)) cellHeight=\(String(format: "%.3f", cellSize.height)) smooth=\(rendererOptions.smoothPixelScrollingEnabled) hasOverscan=\(hasOverscanRowsForDirection) decision=\(decision) viewportOffset=\(String(format: "%.3f", viewport.visualOffsetY))"
     )
     switch decision {
-    case .consumed(let rowDelta):
+    case .consumed(let rowDelta, let pixelRemainderY):
       if rowDelta != 0 {
         let didScroll = viewportScrollHandler?(rowDelta) ?? false
         if didScroll {
-          smoothScrollController.resetStartRowKeepingVisualOffset()
-          viewport = smoothScrollController.viewport
-          if !canRenderPixelScroll(for: viewport.visualOffsetY) {
-            smoothScrollController.reset()
-            viewport = smoothScrollController.viewport
+          viewport = TerminalViewport(visualOffsetY: pixelRemainderY)
+          if pixelRemainderY != 0, !canRenderPixelScroll(for: pixelRemainderY) {
+            scrollCoordinator.reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
+            viewport = TerminalViewport()
           }
           needsDisplay = true
         } else {
-          smoothScrollController.reset()
-          viewport = smoothScrollController.viewport
+          scrollCoordinator.reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
+          viewport = TerminalViewport()
         }
       } else {
-        viewport = smoothScrollController.viewport
-        if canRenderPixelScroll(for: viewport.visualOffsetY) {
+        viewport = TerminalViewport(visualOffsetY: pixelRemainderY)
+        if canRenderPixelScroll(for: pixelRemainderY) {
           needsDisplay = true
         } else {
-          smoothScrollController.reset()
-          viewport = smoothScrollController.viewport
+          scrollCoordinator.reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
+          viewport = TerminalViewport()
         }
       }
     case .forwardToPTY:
@@ -1352,6 +1397,11 @@ public final class PTYGridView: NSView {
     case .ignored:
       break
     }
+  }
+
+  private func hasOverscanRows(forDeltaY deltaY: CGFloat) -> Bool {
+    guard deltaY != 0, let scrollFrameSnapshot else { return false }
+    return deltaY > 0 ? !scrollFrameSnapshot.overscanTop.isEmpty : !scrollFrameSnapshot.overscanBottom.isEmpty
   }
 
   public override func keyDown(with event: NSEvent) {
@@ -1399,6 +1449,10 @@ public final class PTYGridView: NSView {
 
   func testScrollWheelDeltaY(_ deltaY: CGFloat) {
     processScroll(deltaY: deltaY)
+  }
+
+  func testScrollWheelDeltaY(_ deltaY: CGFloat, forwardToPTY: () -> Void) {
+    processScroll(deltaY: deltaY, forwardToPTY: forwardToPTY)
   }
 
   public override func mouseDown(with event: NSEvent) {

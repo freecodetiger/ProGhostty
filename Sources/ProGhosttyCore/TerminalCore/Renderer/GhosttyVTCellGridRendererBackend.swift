@@ -15,11 +15,16 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
   public init(options: TerminalRendererOptions = TerminalRendererOptions()) {
     self.options = options
     gridView = PTYGridView()
+    gridView.applyRendererOptions(options)
   }
 
   public var view: NSView { gridView }
   public var selectedText: String? { gridView.selectedText }
-  public var diagnostics: TerminalRendererDiagnostics { diagnosticsState }
+  public var diagnostics: TerminalRendererDiagnostics {
+    var state = diagnosticsState
+    gridView.applyScrollDiagnostics(to: &state)
+    return state
+  }
 
   public func setInputHandler(_ handler: ((Data) -> Void)?) {
     gridView.inputHandler = handler
@@ -109,6 +114,7 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
     diagnosticsState.maxDrawTime = gridView.maxDrawDuration
     diagnosticsState.alternateScreenActive = frame.isAlternateScreen
     diagnosticsState.styleStats = TerminalCellStyleStats(frame: frame)
+    gridView.applyScrollDiagnostics(to: &diagnosticsState)
   }
 
   public func updateOverscanDiagnostics(topRows: Int, bottomRows: Int) {

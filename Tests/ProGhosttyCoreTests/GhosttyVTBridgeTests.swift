@@ -151,6 +151,17 @@ struct GhosttyVTBridgeTests {
     #expect(frame.overscanTop.first?.text(cols: frame.viewport.cols).contains("one") == true)
     #expect(frame.overscanBottom.first?.text(cols: frame.viewport.cols).contains("five") == true)
   }
+
+  @Test func scrollFrameClampsOverscanRowsToBridgeMaximum() throws {
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 100)
+    bridge.write(Data((1...12).map { "line-\($0)" }.joined(separator: "\r\n").utf8))
+    bridge.scrollViewport(deltaRows: -4)
+
+    let frame = try bridge.scrollFrame(overscanTop: 10, overscanBottom: 10)
+
+    #expect(frame.overscanTop.count <= 4)
+    #expect(frame.overscanBottom.count <= 4)
+  }
 }
 
 private extension GhosttyTerminalCellRow {

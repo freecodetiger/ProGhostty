@@ -3,7 +3,7 @@ set -euo pipefail
 
 CONFIGURATION="${1:-debug}"
 PRODUCT="ProGhostty"
-BUILD_DIR=".build/${CONFIGURATION}"
+BUILD_DIR="$(swift build -c "${CONFIGURATION}" --show-bin-path)"
 APP_DIR="${BUILD_DIR}/${PRODUCT}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"

@@ -60,6 +60,81 @@ struct TerminalRendererBackendTests {
     #expect(controller.viewport.visualOffsetY == 5)
   }
 
+  @Test func paneScrollCoordinatorConvertsWheelDeltaIntoCommittedRowsAndSubRowRemainder() {
+    var coordinator = PaneScrollCoordinator()
+
+    let decision = coordinator.scroll(
+      deltaY: 37,
+      cellHeight: 16,
+      alternateScreen: false,
+      smoothPixelScrollingEnabled: true,
+      hasOverscanRowsForDirection: true
+    )
+
+    #expect(decision == .consumed(rowDelta: 2, pixelRemainderY: 5))
+    #expect(coordinator.pixelRemainderY == 5)
+    #expect(coordinator.lastCommittedRowDelta == 2)
+    #expect(coordinator.coalescedWheelEvents == 1)
+    #expect(coordinator.isPixelScrollActive)
+  }
+
+  @Test func paneScrollCoordinatorKeepsOnlyOneLineOfPixelRemainderAcrossEvents() {
+    var coordinator = PaneScrollCoordinator()
+
+    _ = coordinator.scroll(
+      deltaY: 10,
+      cellHeight: 16,
+      alternateScreen: false,
+      smoothPixelScrollingEnabled: true,
+      hasOverscanRowsForDirection: true
+    )
+    let decision = coordinator.scroll(
+      deltaY: 12,
+      cellHeight: 16,
+      alternateScreen: false,
+      smoothPixelScrollingEnabled: true,
+      hasOverscanRowsForDirection: true
+    )
+
+    #expect(decision == .consumed(rowDelta: 1, pixelRemainderY: 6))
+    #expect(coordinator.pixelRemainderY == 6)
+    #expect(coordinator.lastCommittedRowDelta == 1)
+    #expect(coordinator.coalescedWheelEvents == 2)
+  }
+
+  @Test func paneScrollCoordinatorForwardsAlternateScreenWheelInputToPTY() {
+    var coordinator = PaneScrollCoordinator()
+
+    let decision = coordinator.scroll(
+      deltaY: 37,
+      cellHeight: 16,
+      alternateScreen: true,
+      smoothPixelScrollingEnabled: true,
+      hasOverscanRowsForDirection: true
+    )
+
+    #expect(decision == .forwardToPTY)
+    #expect(coordinator.pixelRemainderY == 0)
+    #expect(coordinator.lastDisabledReason == TerminalRendererDiagnostics.alternateScreenScrollReason)
+  }
+
+  @Test func paneScrollCoordinatorFallsBackToRowScrollWithoutOverscanRows() {
+    var coordinator = PaneScrollCoordinator()
+
+    let decision = coordinator.scroll(
+      deltaY: 5,
+      cellHeight: 16,
+      alternateScreen: false,
+      smoothPixelScrollingEnabled: true,
+      hasOverscanRowsForDirection: false
+    )
+
+    #expect(decision == .consumed(rowDelta: 1, pixelRemainderY: 0))
+    #expect(coordinator.pixelRemainderY == 0)
+    #expect(coordinator.lastCommittedRowDelta == 1)
+    #expect(coordinator.lastDisabledReason == TerminalRendererDiagnostics.missingOverscanRowsReason)
+  }
+
   @MainActor @Test func liveGridVisualScrollTranslationMatchesViewportDirection() {
     #expect(PTYGridView.visualScrollTranslationY(for: TerminalViewport(visualOffsetY: 5)) == 0)
     #expect(PTYGridView.visualScrollTranslationY(for: TerminalViewport(visualOffsetY: -5)) == 0)
@@ -163,15 +238,41 @@ struct TerminalRendererBackendTests {
     #expect(diagnostics.debugSummary.contains("overscan rows available from libghostty-vt snapshot"))
   }
 
-  @MainActor @Test func cellGridBackendReportsExperimentalPixelScrollWhenOverscanExists() {
-    let backend = GhosttyVTCellGridRendererBackend()
+  @MainActor @Test func cellGridBackendReportsExperimentalPixelScrollWhenOverscanExistsAndOptionIsEnabled() {
+    let backend = GhosttyVTCellGridRendererBackend(
+      options: TerminalRendererOptions(smoothPixelScrollingEnabled: true)
+    )
 
     backend.updateOverscanDiagnostics(topRows: 1, bottomRows: 1)
 
     #expect(backend.diagnostics.overscanTopRows == 1)
     #expect(backend.diagnostics.overscanBottomRows == 1)
     #expect(backend.diagnostics.pixelSmoothScroll == .experimental)
-    #expect(backend.diagnostics.pixelSmoothScrollReason == TerminalRendererDiagnostics.overscanRowsAvailableReason)
+    #expect(backend.diagnostics.pixelSmoothScrollReason == TerminalRendererDiagnostics.smoothScrollEnabledReason)
+  }
+
+  @MainActor @Test func cellGridBackendReportsDisabledPixelScrollWhenOptionIsDisabled() {
+    let backend = GhosttyVTCellGridRendererBackend(
+      options: TerminalRendererOptions(smoothPixelScrollingEnabled: false)
+    )
+
+    backend.updateOverscanDiagnostics(topRows: 1, bottomRows: 1)
+
+    #expect(backend.diagnostics.overscanTopRows == 1)
+    #expect(backend.diagnostics.overscanBottomRows == 1)
+    #expect(backend.diagnostics.pixelSmoothScroll == .unavailable)
+    #expect(backend.diagnostics.pixelSmoothScrollReason == TerminalRendererDiagnostics.smoothScrollDisabledReason)
+  }
+
+  @MainActor @Test func cellGridBackendReportsUnavailablePixelScrollWithoutOverscanRows() {
+    let backend = GhosttyVTCellGridRendererBackend(
+      options: TerminalRendererOptions(smoothPixelScrollingEnabled: true)
+    )
+
+    backend.updateOverscanDiagnostics(topRows: 0, bottomRows: 0)
+
+    #expect(backend.diagnostics.pixelSmoothScroll == .unavailable)
+    #expect(backend.diagnostics.pixelSmoothScrollReason == TerminalRendererDiagnostics.missingOverscanRowsReason)
   }
 
   @MainActor @Test func cellGridBackendPassesScrollFrameToGridView() {
@@ -189,6 +290,52 @@ struct TerminalRendererBackendTests {
     #expect(backend.gridView.canRenderPixelScroll(for: 5))
     #expect(backend.diagnostics.overscanTopRows == 1)
     #expect(backend.diagnostics.overscanBottomRows == 1)
+  }
+
+  @MainActor @Test func paneScrollCoordinatorStateIsIndependentPerGridView() {
+    let first = GhosttyVTCellGridRendererBackend(
+      options: TerminalRendererOptions(smoothPixelScrollingEnabled: true)
+    )
+    let second = GhosttyVTCellGridRendererBackend(
+      options: TerminalRendererOptions(smoothPixelScrollingEnabled: true)
+    )
+    let frame = scrollFrame(
+      viewportRows: ["two", "three"],
+      overscanTop: ["one"],
+      overscanBottom: ["four"],
+      cols: 8
+    )
+    first.render(scrollFrame: frame)
+    second.render(scrollFrame: frame)
+    first.flushPendingFrame()
+    second.flushPendingFrame()
+
+    first.gridView.testScrollWheelDeltaY(5)
+
+    #expect(first.gridView.viewport.visualOffsetY == 5)
+    #expect(first.diagnostics.pixelRemainderY == 5)
+    #expect(second.gridView.viewport.visualOffsetY == 0)
+    #expect(second.diagnostics.pixelRemainderY == 0)
+  }
+
+  @MainActor @Test func liveGridForwardsAlternateScreenWheelInputToPTYWithoutPixelScroll() {
+    let backend = GhosttyVTCellGridRendererBackend(
+      options: TerminalRendererOptions(smoothPixelScrollingEnabled: true)
+    )
+    var alternate = frame(rows: ["tui", "view"], cols: 8, cursorX: 0, cursorY: 0)
+    alternate.isAlternateScreen = true
+    backend.render(frame: alternate)
+    backend.flushPendingFrame()
+    var forwarded = false
+
+    backend.gridView.testScrollWheelDeltaY(5) {
+      forwarded = true
+    }
+
+    #expect(forwarded)
+    #expect(backend.gridView.viewport.visualOffsetY == 0)
+    #expect(backend.diagnostics.pixelSmoothScroll == .unavailable)
+    #expect(backend.diagnostics.pixelSmoothScrollReason == TerminalRendererDiagnostics.alternateScreenScrollReason)
   }
 
   @Test func smoothScrollControllerIgnoresScrollPastEdges() {

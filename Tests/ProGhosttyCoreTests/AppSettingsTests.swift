@@ -29,16 +29,37 @@ struct AppSettingsTests {
     #expect(settings.keyboardShortcuts.shortcut(for: .openSettings).key == ",")
     #expect(settings.keyboardShortcuts.shortcut(for: .splitRight).modifiers == [.command])
     #expect(settings.rendererMode == .auto)
-    #expect(settings.smoothPixelScrollingEnabled == false)
+    #expect(settings.smoothPixelScrollingEnabled == true)
     #expect(settings.dirtyRowRenderingEnabled == true)
     #expect(settings.forceFullRedrawEnabled == false)
   }
 
-  @Test func rendererOptionsDoNotEnablePixelScrollWithoutDebugFlag() {
+  @Test func rendererOptionsEnablePixelScrollByDefault() {
     var settings = AppSettings.defaults
     settings.smoothPixelScrollingEnabled = true
 
+    #expect(settings.terminalRendererOptions.smoothPixelScrollingEnabled == true)
+  }
+
+  @Test func rendererOptionsCanDisablePixelScrollFromSettings() {
+    var settings = AppSettings.defaults
+    settings.smoothPixelScrollingEnabled = false
+
     #expect(settings.terminalRendererOptions.smoothPixelScrollingEnabled == false)
+  }
+
+  @Test func settingsStoreMigratesHiddenPixelScrollFlagToEnabled() throws {
+    let suiteName = "proghostty.settings.test.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let store = SettingsStore(defaults: defaults)
+    var settings = AppSettings.defaults
+    settings.smoothPixelScrollingEnabled = false
+    try store.save(settings)
+
+    let loaded = store.load()
+
+    #expect(loaded.smoothPixelScrollingEnabled == true)
   }
 
   @Test func legacySystemThemeBecomesFollowSystemAppearance() throws {

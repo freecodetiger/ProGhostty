@@ -451,8 +451,8 @@ int proghostty_vt_scroll_snapshot(
     return result;
   }
 
-  uint16_t top_request = overscan_top > 2 ? 2 : overscan_top;
-  uint16_t bottom_request = overscan_bottom > 2 ? 2 : overscan_bottom;
+  uint16_t top_request = overscan_top > 4 ? 4 : overscan_top;
+  uint16_t bottom_request = overscan_bottom > 4 ? 4 : overscan_bottom;
   uint64_t viewport_start = scrollbar.offset;
   uint64_t viewport_end = scrollbar.offset + scrollbar.length;
   uint64_t total = scrollbar.total;
