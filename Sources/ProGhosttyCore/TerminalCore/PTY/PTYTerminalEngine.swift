@@ -1181,7 +1181,7 @@ public final class PTYGridView: NSView {
   }
 
   public static func visualScrollTranslationY(for viewport: TerminalViewport) -> CGFloat {
-    RendererDebug.enableExperimentalPixelScroll ? viewport.visualOffsetY : 0
+    0
   }
 
   public static func contentDirtyRect(forDrawing dirtyRect: NSRect, viewport: TerminalViewport) -> NSRect {

@@ -92,7 +92,7 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
     diagnosticsState.overscanTopRows = max(0, topRows)
     diagnosticsState.overscanBottomRows = max(0, bottomRows)
     let hasOverscan = diagnosticsState.overscanTopRows > 0 || diagnosticsState.overscanBottomRows > 0
-    diagnosticsState.pixelSmoothScroll = hasOverscan && options.smoothPixelScrollingEnabled ? .experimental : .unavailable
+    diagnosticsState.pixelSmoothScroll = .unavailable
     diagnosticsState.pixelSmoothScrollReason = hasOverscan
       ? TerminalRendererDiagnostics.overscanRowsAvailableReason
       : TerminalRendererDiagnostics.missingOverscanRowsReason
