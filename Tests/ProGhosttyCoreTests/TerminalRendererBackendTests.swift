@@ -501,6 +501,17 @@ struct TerminalRendererBackendTests {
     #expect(backend.diagnostics.alternateScreenActive == true)
   }
 
+  @MainActor @Test func cellGridBackendMarksLiveScreensWithContentBelowCursorAsResizeSensitive() {
+    let backend = GhosttyVTCellGridRendererBackend()
+    let next = frame(rows: ["prompt", "menu"], cols: 8, cursorX: 0, cursorY: 0)
+
+    backend.render(frame: next)
+    backend.flushPendingFrame()
+
+    #expect(backend.diagnostics.alternateScreenActive == false)
+    #expect(backend.diagnostics.resizeSensitiveScreen == true)
+  }
+
   @MainActor @Test func cellGridBackendDiagnosticsExposeStyleCoverage() {
     let backend = GhosttyVTCellGridRendererBackend()
     let styled = GhosttyTerminalFrame(

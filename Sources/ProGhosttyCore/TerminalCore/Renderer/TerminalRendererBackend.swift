@@ -138,6 +138,7 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
   public var coalescedFrames: Int
   public var droppedFrames: Int
   public var alternateScreenActive: Bool
+  public var resizeSensitiveScreen: Bool
   public var scrollMode: TerminalScrollMode
   public var overscanTopRows: Int
   public var overscanBottomRows: Int
@@ -160,6 +161,7 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
     coalescedFrames: Int = 0,
     droppedFrames: Int = 0,
     alternateScreenActive: Bool = false,
+    resizeSensitiveScreen: Bool = false,
     scrollMode: TerminalScrollMode = .rowBased,
     overscanTopRows: Int = 0,
     overscanBottomRows: Int = 0,
@@ -181,6 +183,7 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
     self.coalescedFrames = coalescedFrames
     self.droppedFrames = droppedFrames
     self.alternateScreenActive = alternateScreenActive
+    self.resizeSensitiveScreen = resizeSensitiveScreen
     self.scrollMode = scrollMode
     self.overscanTopRows = overscanTopRows
     self.overscanBottomRows = overscanBottomRows
@@ -193,7 +196,7 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
   }
 
   public var debugSummary: String {
-    "backend=\(backend.rawValue) dirtyRows=\(dirtyRowCount) visibleRows=\(visibleRowCount) cacheHitRate=\(String(format: "%.3f", cacheHitRate)) avgDrawMs=\(String(format: "%.3f", averageDrawTime * 1000)) maxDrawMs=\(String(format: "%.3f", maxDrawTime * 1000)) redraw=\(redrawMode.rawValue) scrollMode=\(scrollMode.rawValue) overscanTop=\(overscanTopRows) overscanBottom=\(overscanBottomRows) pixelSmoothScroll=\(pixelSmoothScroll.rawValue) pixelSmoothScrollReason=\"\(pixelSmoothScrollReason)\" pixelRemainderY=\(String(format: "%.2f", pixelRemainderY)) committedRowDelta=\(committedRowDelta) coalescedWheelEvents=\(coalescedWheelEvents) scrollOffset=\(String(format: "%.2f", smoothScrollOffset)) coalesced=\(coalescedFrames) dropped=\(droppedFrames) alt=\(alternateScreenActive) styleFg=\(styleStats.explicitForegroundCells) styleBg=\(styleStats.explicitBackgroundCells) styleBold=\(styleStats.boldCells) styleFaint=\(styleStats.faintCells) styleUnderline=\(styleStats.underlineCells) styleInverse=\(styleStats.inverseCells)"
+    "backend=\(backend.rawValue) dirtyRows=\(dirtyRowCount) visibleRows=\(visibleRowCount) cacheHitRate=\(String(format: "%.3f", cacheHitRate)) avgDrawMs=\(String(format: "%.3f", averageDrawTime * 1000)) maxDrawMs=\(String(format: "%.3f", maxDrawTime * 1000)) redraw=\(redrawMode.rawValue) scrollMode=\(scrollMode.rawValue) overscanTop=\(overscanTopRows) overscanBottom=\(overscanBottomRows) pixelSmoothScroll=\(pixelSmoothScroll.rawValue) pixelSmoothScrollReason=\"\(pixelSmoothScrollReason)\" pixelRemainderY=\(String(format: "%.2f", pixelRemainderY)) committedRowDelta=\(committedRowDelta) coalescedWheelEvents=\(coalescedWheelEvents) scrollOffset=\(String(format: "%.2f", smoothScrollOffset)) coalesced=\(coalescedFrames) dropped=\(droppedFrames) alt=\(alternateScreenActive) resizeSensitive=\(resizeSensitiveScreen) styleFg=\(styleStats.explicitForegroundCells) styleBg=\(styleStats.explicitBackgroundCells) styleBold=\(styleStats.boldCells) styleFaint=\(styleStats.faintCells) styleUnderline=\(styleStats.underlineCells) styleInverse=\(styleStats.inverseCells)"
   }
 }
 

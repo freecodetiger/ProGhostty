@@ -234,6 +234,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   public func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int) {
     guard var state = sessions[id] else { return }
+    guard state.config.rows != rows || state.config.cols != cols else { return }
     let wasPinnedToBottom = surfaceRegistry.viewportIsPinnedToBottom(id) ?? true
     state.config.rows = rows
     state.config.cols = cols

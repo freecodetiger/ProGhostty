@@ -47,6 +47,7 @@ private struct TerminalTreeLayoutView: NSViewControllerRepresentable {
       menuText: model.appText,
       palette: model.terminalPalette,
       onResize: { paneID, rows, cols in model.resizePane(paneID, rows: rows, cols: cols) },
+      isResizeSensitiveScreen: { paneID in model.paneIsResizeSensitiveScreen(paneID) },
       onRatioChanged: { splitID, ratio in model.updateSplitRatio(splitID, ratio: ratio) },
       onWorkspaceSwitcher: { model.openWorkspaceSwitcher() },
       onSettings: { model.openSettingsWindow() },
@@ -68,6 +69,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
   private var menuText = AppText(language: "system")
   private var palette = TerminalSurfacePalette.dark
   private var onResize: ((UUID, Int, Int) -> Void)?
+  private var isResizeSensitiveScreen: ((UUID) -> Bool)?
   private var onRatioChanged: ((UUID, Double) -> Void)?
   private var onWorkspaceSwitcher: (() -> Void)?
   private var onSettings: (() -> Void)?
@@ -89,6 +91,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     menuText: AppText,
     palette: TerminalSurfacePalette,
     onResize: @escaping (UUID, Int, Int) -> Void,
+    isResizeSensitiveScreen: @escaping (UUID) -> Bool,
     onRatioChanged: @escaping (UUID, Double) -> Void,
     onWorkspaceSwitcher: @escaping () -> Void,
     onSettings: @escaping () -> Void,
@@ -105,6 +108,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     self.palette = palette
     view.layer?.backgroundColor = palette.background.cgColor
     self.onResize = onResize
+    self.isResizeSensitiveScreen = isResizeSensitiveScreen
     self.onRatioChanged = onRatioChanged
     self.onWorkspaceSwitcher = onWorkspaceSwitcher
     self.onSettings = onSettings
@@ -196,6 +200,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
         menuText: menuText,
         palette: palette,
         onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
+        isResizeSensitiveScreen: { [weak self] paneID in self?.isResizeSensitiveScreen?(paneID) ?? false },
         onWorkspaceSwitcher: { [weak self] in self?.onWorkspaceSwitcher?() },
         onSettings: { [weak self] in self?.onSettings?() }
       )
@@ -212,6 +217,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       controller.palette = palette
       controller.hasMultiplePanes = hasMultiplePanes
       controller.onResize = onResize
+      controller.isResizeSensitiveScreen = isResizeSensitiveScreen
       controller.onRatioChanged = onRatioChanged
       controller.onWorkspaceSwitcher = onWorkspaceSwitcher
       controller.onSettings = onSettings
@@ -393,6 +399,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       palette: palette,
       dimsWhenInactive: hasMultiplePanes,
       onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
+      isResizeSensitiveScreen: { [weak self] paneID in self?.isResizeSensitiveScreen?(paneID) ?? false },
       onWorkspaceSwitcher: { [weak self] in self?.onWorkspaceSwitcher?() },
       onSettings: { [weak self] in self?.onSettings?() }
     )
@@ -527,9 +534,11 @@ final class TerminalPaneViewController: NSViewController {
   private weak var contentView: NSView?
   private var onSelect: ((UUID) -> Void)?
   private var onResize: ((UUID, Int, Int) -> Void)?
-  private var lastAppliedSize: CGSize = .zero
-  private var pendingResizeSize: CGSize = .zero
+  private var isResizeSensitiveScreen: ((UUID) -> Bool)?
+  private var lastAppliedGridSize: TerminalGridSize?
+  private var pendingResizeGridSize: TerminalGridSize?
   private var pendingResizeWorkItem: DispatchWorkItem?
+  private var resizeCoordinator = TerminalResizeCommitCoordinator()
 
   init(pane: TerminalPane, contentView: NSView?) {
     self.pane = pane
@@ -543,6 +552,11 @@ final class TerminalPaneViewController: NSViewController {
 
   override func loadView() {
     view = TerminalPaneHostView()
+    if let hostView = view as? TerminalPaneHostView {
+      hostView.onLiveResizeEnded = { [weak self] in
+        self?.commitPendingLiveResize()
+      }
+    }
     view.wantsLayer = true
     if let contentView {
       setContentView(contentView)
@@ -558,11 +572,13 @@ final class TerminalPaneViewController: NSViewController {
     palette: TerminalSurfacePalette,
     dimsWhenInactive: Bool = true,
     onResize: @escaping (UUID, Int, Int) -> Void,
+    isResizeSensitiveScreen: @escaping (UUID) -> Bool,
     onWorkspaceSwitcher: @escaping () -> Void,
     onSettings: @escaping () -> Void
   ) {
     self.onSelect = onSelect
     self.onResize = onResize
+    self.isResizeSensitiveScreen = isResizeSensitiveScreen
     applyAppearance(isSelected: isSelected, palette: palette, dimsWhenInactive: dimsWhenInactive)
     install(menu: menu(
       onSelect: onSelect,
@@ -597,20 +613,47 @@ final class TerminalPaneViewController: NSViewController {
       return
     }
 
-    guard size != lastAppliedSize else {
+    let gridSize = terminalGridSize(for: size)
+    let liveResizeActive = isLiveResizeActive
+    let resizeSensitive = isResizeSensitiveScreen?(pane.paneId) ?? false
+    if gridSize == pendingResizeGridSize, liveResizeActive, resizeSensitive {
+      return
+    }
+    let decision = resizeCoordinator.update(
+      gridSize: gridSize,
+      isLiveResize: liveResizeActive,
+      isResizeSensitiveScreen: resizeSensitive
+    )
+
+    guard decision != .ignore else {
+      pendingResizeWorkItem?.cancel()
+      pendingResizeWorkItem = nil
+      pendingResizeGridSize = nil
+      return
+    }
+    guard decision != .deferUntilLiveResizeEnds else {
       pendingResizeWorkItem?.cancel()
       pendingResizeWorkItem = nil
       return
     }
 
     pendingResizeWorkItem?.cancel()
-    pendingResizeSize = size
+    pendingResizeGridSize = gridSize
 
     let workItem = DispatchWorkItem { [weak self] in
-      guard let self, self.pendingResizeSize == size, self.view.bounds.size == size else { return }
+      guard let self else { return }
+      let currentGridSize = self.terminalGridSize(for: self.view.bounds.size)
+      guard
+        self.pendingResizeGridSize == gridSize,
+        currentGridSize == gridSize,
+        self.lastAppliedGridSize != gridSize
+      else {
+        return
+      }
       self.pendingResizeWorkItem = nil
-      self.lastAppliedSize = size
-      let gridSize = self.terminalGridSize(for: size)
+      self.pendingResizeGridSize = nil
+      self.lastAppliedGridSize = gridSize
+      self.resizeCoordinator.markCommitted(gridSize)
       self.onResize?(self.pane.paneId, gridSize.rows, gridSize.cols)
     }
 
@@ -618,16 +661,32 @@ final class TerminalPaneViewController: NSViewController {
     DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(40), execute: workItem)
   }
 
-  private func terminalGridSize(for size: CGSize) -> (rows: Int, cols: Int) {
+  private func commitPendingLiveResize() {
+    pendingResizeWorkItem?.cancel()
+    pendingResizeWorkItem = nil
+    pendingResizeGridSize = nil
+    guard case .commit(let gridSize) = resizeCoordinator.finishLiveResize() else { return }
+    lastAppliedGridSize = gridSize
+    resizeCoordinator.markCommitted(gridSize)
+    onResize?(pane.paneId, gridSize.rows, gridSize.cols)
+  }
+
+  private var isLiveResizeActive: Bool {
+    view.inLiveResize
+      || view.window?.inLiveResize == true
+      || (view as? TerminalPaneHostView)?.isLiveResizeActive == true
+  }
+
+  private func terminalGridSize(for size: CGSize) -> TerminalGridSize {
     let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     if let surface = contentView as? PTYTerminalSurfaceView {
       let cellSize = surface.liveGridView.terminalCellSize
       let inset = surface.liveGridView.terminalContentInset
-      let contentWidth = max(1, (size.width - inset.width * 2) * scale)
-      let contentHeight = max(1, (size.height - inset.height * 2) * scale)
-      return (
-        rows: max(1, Int(contentHeight / max(1, ceil(cellSize.height * scale)))),
-        cols: max(2, Int(contentWidth / max(1, ceil(cellSize.width * scale))))
+      return TerminalGridSizer.gridSize(
+        for: size,
+        cellSize: cellSize,
+        inset: inset,
+        scale: scale
       )
     }
     let textView = terminalTextView(in: contentView)
@@ -637,7 +696,7 @@ final class TerminalPaneViewController: NSViewController {
     let inset = textView?.textContainerInset ?? .zero
     let contentWidth = max(1, (size.width - inset.width * 2) * scale)
     let contentHeight = max(1, (size.height - inset.height * 2) * scale)
-    return (
+    return TerminalGridSize(
       rows: max(1, Int(contentHeight / lineHeight)),
       cols: max(2, Int(contentWidth / sampleWidth))
     )
@@ -766,10 +825,24 @@ final class TerminalPaneViewController: NSViewController {
 }
 
 private final class TerminalPaneHostView: NSView {
+  var onLiveResizeEnded: (() -> Void)?
+  private(set) var isLiveResizeActive = false
+
   override var acceptsFirstResponder: Bool { true }
 
   override func mouseDown(with event: NSEvent) {
     nextResponder?.mouseDown(with: event)
+  }
+
+  override func viewWillStartLiveResize() {
+    super.viewWillStartLiveResize()
+    isLiveResizeActive = true
+  }
+
+  override func viewDidEndLiveResize() {
+    super.viewDidEndLiveResize()
+    isLiveResizeActive = false
+    onLiveResizeEnded?()
   }
 }
 

@@ -783,6 +783,16 @@ final class AppModel: ObservableObject {
     paneWorkspaceController.resizePane(paneID, in: workspace.id, rows: rows, cols: cols)
   }
 
+  func paneIsResizeSensitiveScreen(_ paneID: UUID) -> Bool {
+    guard
+      let workspace = activeWorkspace,
+      let pane = PaneTreeReducer.findPane(in: workspace.layout.root, paneId: paneID)
+    else {
+      return false
+    }
+    return surfaceRegistry.rendererDiagnostics(for: pane.sessionId)?.resizeSensitiveScreen == true
+  }
+
   func saveActiveLayoutSnapshot() {
     guard let activeWorkspace else { return }
     savedLayoutSnapshots[activeWorkspace.id] = activeWorkspace.layout

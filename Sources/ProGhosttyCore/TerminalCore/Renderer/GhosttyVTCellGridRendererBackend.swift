@@ -113,8 +113,23 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
     diagnosticsState.averageDrawTime = gridView.averageDrawDuration
     diagnosticsState.maxDrawTime = gridView.maxDrawDuration
     diagnosticsState.alternateScreenActive = frame.isAlternateScreen
+    diagnosticsState.resizeSensitiveScreen = frame.isAlternateScreen || Self.hasRenderedContentBelowCursor(in: frame)
     diagnosticsState.styleStats = TerminalCellStyleStats(frame: frame)
     gridView.applyScrollDiagnostics(to: &diagnosticsState)
+  }
+
+  private static func hasRenderedContentBelowCursor(in frame: GhosttyTerminalFrame) -> Bool {
+    let firstRowBelowCursor = max(0, frame.cursorY + 1)
+    guard firstRowBelowCursor < frame.rows else { return false }
+    for row in firstRowBelowCursor..<frame.rows {
+      let rowStart = row * frame.cols
+      let rowEnd = min(rowStart + frame.cols, frame.cells.count)
+      guard rowStart < rowEnd else { continue }
+      if frame.cells[rowStart..<rowEnd].contains(where: { $0.scalar != " " || !$0.usesDefaultBackground }) {
+        return true
+      }
+    }
+    return false
   }
 
   public func updateOverscanDiagnostics(topRows: Int, bottomRows: Int) {
