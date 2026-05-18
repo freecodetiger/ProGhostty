@@ -304,6 +304,49 @@ struct AICLICompanionTests {
 
     #expect(result == .raw("run tests"))
   }
+
+  @Test func commandCapsuleStateTracksVoiceAndDraftLifecycle() {
+    var state = CommandCapsuleState()
+
+    state.open()
+    #expect(state.isPresented == true)
+    #expect(state.phase == .idle)
+    #expect(state.includedContext == [.workspacePath, .gitBranch, .gitStatus, .changedFileList])
+
+    state.startListening()
+    state.updateVoicePartial("fix tests")
+    #expect(state.phase == .listening)
+    #expect(state.voicePartial == "fix tests")
+
+    state.appendFinalTranscript("fix tests")
+    #expect(state.request == "fix tests")
+    #expect(state.voicePartial == "")
+    #expect(state.phase == .idle)
+
+    state.startRefining()
+    #expect(state.phase == .refining)
+
+    state.finishRefining(draft: "Refined prompt")
+    #expect(state.phase == .ready)
+    #expect(state.draft == "Refined prompt")
+
+    state.markSent()
+    #expect(state.phase == .sent)
+  }
+
+  @Test func commandCapsuleStatePreservesDraftOnError() {
+    var state = CommandCapsuleState()
+    state.open()
+    state.request = "raw request"
+    state.draft = "draft"
+
+    state.fail("network failed")
+
+    #expect(state.phase == .error)
+    #expect(state.errorMessage == "network failed")
+    #expect(state.request == "raw request")
+    #expect(state.draft == "draft")
+  }
 }
 
 @MainActor
