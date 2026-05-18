@@ -164,6 +164,102 @@ struct AICLICompanionTests {
 
     #expect(events == [.error("Missing DashScope API key. Configure it in Settings or set DASHSCOPE_API_KEY.")])
   }
+
+  @Test func openAICompatibleProviderConfigUsesConfiguredValuesThenEnvironment() {
+    let configured = OpenAICompatibleProviderConfig(
+      baseURL: "https://example.test/v1",
+      apiKey: " configured-key ",
+      model: " gpt-test ",
+      environmentReader: { _ in nil }
+    )
+
+    #expect(configured.resolvedBaseURL?.absoluteString == "https://example.test/v1")
+    #expect(configured.resolvedAPIKey == "configured-key")
+    #expect(configured.resolvedModel == "gpt-test")
+
+    let environment = OpenAICompatibleProviderConfig(
+      baseURL: "",
+      apiKey: nil,
+      model: "",
+      environmentReader: { key in
+        switch key {
+        case "OPENAI_BASE_URL": return "https://env.test/v1"
+        case "OPENAI_API_KEY": return "env-key"
+        case "OPENAI_MODEL": return "env-model"
+        default: return nil
+        }
+      }
+    )
+
+    #expect(environment.resolvedBaseURL?.absoluteString == "https://env.test/v1")
+    #expect(environment.resolvedAPIKey == "env-key")
+    #expect(environment.resolvedModel == "env-model")
+  }
+
+  @Test func openAICompatibleRequestEncodesChatCompletionsPayload() throws {
+    let request = OpenAICompatibleChatRequest(
+      model: "gpt-test",
+      messages: [
+        OpenAICompatibleChatMessage(role: "system", content: "system"),
+        OpenAICompatibleChatMessage(role: "user", content: "user"),
+      ],
+      temperature: 0.2
+    )
+
+    let data = try JSONEncoder().encode(request)
+    let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+    #expect(json["model"] as? String == "gpt-test")
+    #expect(json["temperature"] as? Double == 0.2)
+    let messages = try #require(json["messages"] as? [[String: String]])
+    #expect(messages.map { $0["role"] } == ["system", "user"])
+    #expect(messages.map { $0["content"] } == ["system", "user"])
+  }
+
+  @Test func openAICompatibleResponseDecodesFirstMessageContent() throws {
+    let data = """
+      {
+        "choices": [
+          {
+            "message": {
+              "role": "assistant",
+              "content": "Refined prompt"
+            }
+          }
+        ]
+      }
+      """.data(using: .utf8)!
+
+    let response = try JSONDecoder().decode(OpenAICompatibleChatResponse.self, from: data)
+
+    #expect(response.firstContent == "Refined prompt")
+  }
+
+  @Test func openAICompatibleClientPostsToChatCompletions() async throws {
+    let transport = RecordingOpenAITransport(responseData: """
+      {"choices":[{"message":{"role":"assistant","content":"Refined"}}]}
+      """.data(using: .utf8)!)
+    let client = OpenAICompatibleChatClient(transport: transport)
+    let config = OpenAICompatibleProviderConfig(
+      baseURL: "https://api.test/v1",
+      apiKey: "secret",
+      model: "gpt-test",
+      environmentReader: { _ in nil }
+    )
+
+    let content = try await client.complete(
+      request: OpenAICompatibleChatRequest(
+        model: "gpt-test",
+        messages: [OpenAICompatibleChatMessage(role: "user", content: "hello")]
+      ),
+      config: config
+    )
+
+    #expect(content == "Refined")
+    #expect(transport.lastRequest?.url?.absoluteString == "https://api.test/v1/chat/completions")
+    #expect(transport.lastRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+    #expect(transport.lastRequest?.value(forHTTPHeaderField: "Content-Type") == "application/json")
+  }
 }
 
 @MainActor
@@ -191,4 +287,23 @@ private final class RecordingSessionManager: TerminalSessionManager {
   }
 
   func controlToken(for id: TerminalSessionID) -> String? { nil }
+}
+
+private final class RecordingOpenAITransport: OpenAICompatibleChatTransport, @unchecked Sendable {
+  var lastRequest: URLRequest?
+  var lastBody: Data?
+  let responseData: Data
+
+  init(responseData: Data) {
+    self.responseData = responseData
+  }
+
+  func data(for request: URLRequest, body: Data) async throws -> (Data, HTTPURLResponse) {
+    lastRequest = request
+    lastBody = body
+    return (
+      responseData,
+      HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+    )
+  }
 }
