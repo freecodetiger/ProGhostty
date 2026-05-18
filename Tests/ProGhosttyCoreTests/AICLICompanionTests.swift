@@ -260,6 +260,50 @@ struct AICLICompanionTests {
     #expect(transport.lastRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
     #expect(transport.lastRequest?.value(forHTTPHeaderField: "Content-Type") == "application/json")
   }
+
+  @Test func codexPromptRefinerBuildsCodexFocusedMessages() throws {
+    let config = OpenAICompatibleProviderConfig(
+      baseURL: "https://api.test/v1",
+      apiKey: "key",
+      model: "gpt-test",
+      environmentReader: { _ in nil }
+    )
+    let refiner = CodexPromptRefiner(client: StubPromptClient(result: "unused"))
+
+    let request = try refiner.makeChatRequest(
+      userRequest: "fix the test",
+      context: AIPromptContext(
+        workspacePath: "/repo",
+        gitBranch: "main",
+        gitStatus: " M Tests/FooTests.swift",
+        selectedTerminalText: "failure output",
+        changedFiles: [GitModifiedFile(status: .modified, path: "Tests/FooTests.swift")]
+      ),
+      includedContext: [.workspacePath, .gitBranch, .gitStatus, .changedFileList, .selectedTerminalText],
+      config: config
+    )
+
+    #expect(request.model == "gpt-test")
+    #expect(request.messages[0].role == "system")
+    #expect(request.messages[0].content.contains("Codex CLI"))
+    #expect(request.messages[1].content.contains("fix the test"))
+    #expect(request.messages[1].content.contains("Workspace: /repo"))
+    #expect(request.messages[1].content.contains("Branch: main"))
+    #expect(request.messages[1].content.contains("Modified: Tests/FooTests.swift"))
+    #expect(request.messages[1].content.contains("failure output"))
+  }
+
+  @Test func codexPromptRefinerFallsBackToRawRequestWhenProviderIsMissing() async {
+    let refiner = CodexPromptRefiner(client: StubPromptClient(result: "should not be used"))
+    let result = await refiner.refine(
+      userRequest: "run tests",
+      context: AIPromptContext(workspacePath: "/repo"),
+      includedContext: [.workspacePath],
+      config: OpenAICompatibleProviderConfig(baseURL: "", apiKey: nil, model: "", environmentReader: { _ in nil })
+    )
+
+    #expect(result == .raw("run tests"))
+  }
 }
 
 @MainActor
@@ -305,5 +349,13 @@ private final class RecordingOpenAITransport: OpenAICompatibleChatTransport, @un
       responseData,
       HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
     )
+  }
+}
+
+private struct StubPromptClient: CodexPromptRefiningClient {
+  var result: String
+
+  func complete(request: OpenAICompatibleChatRequest, config: OpenAICompatibleProviderConfig) async throws -> String {
+    result
   }
 }
