@@ -32,6 +32,20 @@ struct AppSettingsTests {
     #expect(settings.smoothPixelScrollingEnabled == true)
     #expect(settings.dirtyRowRenderingEnabled == true)
     #expect(settings.forceFullRedrawEnabled == false)
+    #expect(settings.openAICompatibleBaseURL == "https://api.openai.com/v1")
+    #expect(settings.openAICompatibleAPIKey == nil)
+    #expect(settings.openAICompatibleModel == "")
+    #expect(settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule).key == "i")
+  }
+
+  @Test func openAICompatibleSettingsHaveStableDefaults() {
+    let settings = AppSettings.defaults
+
+    #expect(settings.openAICompatibleBaseURL == "https://api.openai.com/v1")
+    #expect(settings.openAICompatibleAPIKey == nil)
+    #expect(settings.openAICompatibleModel == "")
+    #expect(settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule).key == "i")
+    #expect(settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule).modifiers == [.command, .shift])
   }
 
   @Test func rendererOptionsEnablePixelScrollByDefault() {

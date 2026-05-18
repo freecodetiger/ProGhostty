@@ -20,6 +20,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
   public var rerunAutoEnter: Bool
   public var pgControlCommandsEnabled: Bool
   public var aliyunASRAPIKey: String?
+  public var openAICompatibleBaseURL: String
+  public var openAICompatibleAPIKey: String?
+  public var openAICompatibleModel: String
   public var keyboardShortcuts: KeyboardShortcutSettings
 
   public static let defaults = AppSettings(
@@ -41,6 +44,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     rerunAutoEnter: false,
     pgControlCommandsEnabled: true,
     aliyunASRAPIKey: nil,
+    openAICompatibleBaseURL: "https://api.openai.com/v1",
+    openAICompatibleAPIKey: nil,
+    openAICompatibleModel: "",
     keyboardShortcuts: .defaults
   )
 
@@ -63,6 +69,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     case rerunAutoEnter
     case pgControlCommandsEnabled
     case aliyunASRAPIKey
+    case openAICompatibleBaseURL
+    case openAICompatibleAPIKey
+    case openAICompatibleModel
     case keyboardShortcuts
   }
 
@@ -85,6 +94,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     rerunAutoEnter: Bool,
     pgControlCommandsEnabled: Bool,
     aliyunASRAPIKey: String?,
+    openAICompatibleBaseURL: String,
+    openAICompatibleAPIKey: String?,
+    openAICompatibleModel: String,
     keyboardShortcuts: KeyboardShortcutSettings
   ) {
     self.rendererMode = rendererMode
@@ -105,6 +117,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     self.rerunAutoEnter = rerunAutoEnter
     self.pgControlCommandsEnabled = pgControlCommandsEnabled
     self.aliyunASRAPIKey = aliyunASRAPIKey
+    self.openAICompatibleBaseURL = openAICompatibleBaseURL
+    self.openAICompatibleAPIKey = openAICompatibleAPIKey
+    self.openAICompatibleModel = openAICompatibleModel
     self.keyboardShortcuts = keyboardShortcuts.mergedWithDefaults()
   }
 
@@ -131,6 +146,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     rerunAutoEnter = try container.decodeIfPresent(Bool.self, forKey: .rerunAutoEnter) ?? Self.defaults.rerunAutoEnter
     pgControlCommandsEnabled = try container.decodeIfPresent(Bool.self, forKey: .pgControlCommandsEnabled) ?? Self.defaults.pgControlCommandsEnabled
     aliyunASRAPIKey = try container.decodeIfPresent(String.self, forKey: .aliyunASRAPIKey)
+    openAICompatibleBaseURL = try container.decodeIfPresent(String.self, forKey: .openAICompatibleBaseURL) ?? Self.defaults.openAICompatibleBaseURL
+    openAICompatibleAPIKey = try container.decodeIfPresent(String.self, forKey: .openAICompatibleAPIKey)
+    openAICompatibleModel = try container.decodeIfPresent(String.self, forKey: .openAICompatibleModel) ?? Self.defaults.openAICompatibleModel
     keyboardShortcuts = (
       try container.decodeIfPresent(KeyboardShortcutSettings.self, forKey: .keyboardShortcuts) ?? Self.defaults.keyboardShortcuts
     ).mergedWithDefaults()
@@ -145,6 +163,7 @@ public enum KeyboardShortcutAction: String, CaseIterable, Codable, Sendable, Ide
   case closePane
   case focusPreviousPane
   case focusNextPane
+  case openCodexCommandCapsule
 
   public var id: String { rawValue }
 }
@@ -241,6 +260,7 @@ public struct KeyboardShortcutSettings: Codable, Equatable, Sendable {
     .closePane: KeyboardShortcutBinding(key: "w", modifiers: [.command]),
     .focusPreviousPane: KeyboardShortcutBinding(key: "leftArrow", modifiers: [.command, .option]),
     .focusNextPane: KeyboardShortcutBinding(key: "rightArrow", modifiers: [.command, .option]),
+    .openCodexCommandCapsule: KeyboardShortcutBinding(key: "i", modifiers: [.command, .shift]),
   ])
 
   public init(bindings: [KeyboardShortcutAction: KeyboardShortcutBinding]) {
