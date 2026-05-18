@@ -64,6 +64,11 @@ public enum TerminalPixelSmoothScrollAvailability: String, Sendable {
   case experimental
 }
 
+public enum TerminalScrollCommitMode: String, Sendable {
+  case immediate
+  case coalesced
+}
+
 public struct TerminalCellStyleStats: Equatable, Sendable {
   public var explicitForegroundCells: Int
   public var explicitBackgroundCells: Int
@@ -147,6 +152,11 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
   public var pixelRemainderY: CGFloat
   public var committedRowDelta: Int
   public var coalescedWheelEvents: Int
+  public var scrollCommitMode: TerminalScrollCommitMode
+  public var pendingScrollRowDelta: Int
+  public var pendingScrollWheelEvents: Int
+  public var lastScrollCommitDuration: TimeInterval
+  public var lastScrollRenderDuration: TimeInterval
   public var styleStats: TerminalCellStyleStats
 
   public init(
@@ -170,6 +180,11 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
     pixelRemainderY: CGFloat = 0,
     committedRowDelta: Int = 0,
     coalescedWheelEvents: Int = 0,
+    scrollCommitMode: TerminalScrollCommitMode = .immediate,
+    pendingScrollRowDelta: Int = 0,
+    pendingScrollWheelEvents: Int = 0,
+    lastScrollCommitDuration: TimeInterval = 0,
+    lastScrollRenderDuration: TimeInterval = 0,
     styleStats: TerminalCellStyleStats = TerminalCellStyleStats()
   ) {
     self.backend = backend
@@ -192,11 +207,16 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
     self.pixelRemainderY = pixelRemainderY
     self.committedRowDelta = committedRowDelta
     self.coalescedWheelEvents = coalescedWheelEvents
+    self.scrollCommitMode = scrollCommitMode
+    self.pendingScrollRowDelta = pendingScrollRowDelta
+    self.pendingScrollWheelEvents = pendingScrollWheelEvents
+    self.lastScrollCommitDuration = lastScrollCommitDuration
+    self.lastScrollRenderDuration = lastScrollRenderDuration
     self.styleStats = styleStats
   }
 
   public var debugSummary: String {
-    "backend=\(backend.rawValue) dirtyRows=\(dirtyRowCount) visibleRows=\(visibleRowCount) cacheHitRate=\(String(format: "%.3f", cacheHitRate)) avgDrawMs=\(String(format: "%.3f", averageDrawTime * 1000)) maxDrawMs=\(String(format: "%.3f", maxDrawTime * 1000)) redraw=\(redrawMode.rawValue) scrollMode=\(scrollMode.rawValue) overscanTop=\(overscanTopRows) overscanBottom=\(overscanBottomRows) pixelSmoothScroll=\(pixelSmoothScroll.rawValue) pixelSmoothScrollReason=\"\(pixelSmoothScrollReason)\" pixelRemainderY=\(String(format: "%.2f", pixelRemainderY)) committedRowDelta=\(committedRowDelta) coalescedWheelEvents=\(coalescedWheelEvents) scrollOffset=\(String(format: "%.2f", smoothScrollOffset)) coalesced=\(coalescedFrames) dropped=\(droppedFrames) alt=\(alternateScreenActive) resizeSensitive=\(resizeSensitiveScreen) styleFg=\(styleStats.explicitForegroundCells) styleBg=\(styleStats.explicitBackgroundCells) styleBold=\(styleStats.boldCells) styleFaint=\(styleStats.faintCells) styleUnderline=\(styleStats.underlineCells) styleInverse=\(styleStats.inverseCells)"
+    "backend=\(backend.rawValue) dirtyRows=\(dirtyRowCount) visibleRows=\(visibleRowCount) cacheHitRate=\(String(format: "%.3f", cacheHitRate)) avgDrawMs=\(String(format: "%.3f", averageDrawTime * 1000)) maxDrawMs=\(String(format: "%.3f", maxDrawTime * 1000)) redraw=\(redrawMode.rawValue) scrollMode=\(scrollMode.rawValue) overscanTop=\(overscanTopRows) overscanBottom=\(overscanBottomRows) pixelSmoothScroll=\(pixelSmoothScroll.rawValue) pixelSmoothScrollReason=\"\(pixelSmoothScrollReason)\" pixelRemainderY=\(String(format: "%.2f", pixelRemainderY)) committedRowDelta=\(committedRowDelta) coalescedWheelEvents=\(coalescedWheelEvents) scrollCommitMode=\(scrollCommitMode.rawValue) pendingScrollRowDelta=\(pendingScrollRowDelta) pendingScrollWheelEvents=\(pendingScrollWheelEvents) scrollCommitMs=\(String(format: "%.3f", lastScrollCommitDuration * 1000)) scrollRenderMs=\(String(format: "%.3f", lastScrollRenderDuration * 1000)) scrollOffset=\(String(format: "%.2f", smoothScrollOffset)) coalesced=\(coalescedFrames) dropped=\(droppedFrames) alt=\(alternateScreenActive) resizeSensitive=\(resizeSensitiveScreen) styleFg=\(styleStats.explicitForegroundCells) styleBg=\(styleStats.explicitBackgroundCells) styleBold=\(styleStats.boldCells) styleFaint=\(styleStats.faintCells) styleUnderline=\(styleStats.underlineCells) styleInverse=\(styleStats.inverseCells)"
   }
 }
 

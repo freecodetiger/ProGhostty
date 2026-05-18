@@ -135,6 +135,85 @@ struct TerminalRendererBackendTests {
     #expect(coordinator.lastDisabledReason == TerminalRendererDiagnostics.missingOverscanRowsReason)
   }
 
+  @Test func scrollCommitCoordinatorCoalescesRowDeltasUntilDrained() {
+    var coordinator = ScrollCommitCoordinator()
+
+    let firstSchedule = coordinator.enqueue(rowDelta: 1)
+    let secondSchedule = coordinator.enqueue(rowDelta: 2)
+    let thirdSchedule = coordinator.enqueue(rowDelta: -1)
+
+    #expect(firstSchedule)
+    #expect(!secondSchedule)
+    #expect(!thirdSchedule)
+    #expect(coordinator.pendingRowDelta == 2)
+    #expect(coordinator.pendingWheelEvents == 3)
+
+    let batch = coordinator.drain()
+
+    #expect(batch?.rowDelta == 2)
+    #expect(batch?.wheelEvents == 3)
+    #expect(coordinator.pendingRowDelta == 0)
+    #expect(coordinator.pendingWheelEvents == 0)
+  }
+
+  @MainActor @Test func liveGridDefersHighFrequencyWheelCommitsUntilFlush() {
+    let backend = GhosttyVTCellGridRendererBackend(
+      options: TerminalRendererOptions(smoothPixelScrollingEnabled: true)
+    )
+    backend.render(scrollFrame: scrollFrame(
+      viewportRows: ["two", "three"],
+      overscanTop: ["one"],
+      overscanBottom: ["four"],
+      cols: 8
+    ))
+    backend.flushPendingFrame()
+    var committedRowDeltas: [Int] = []
+    backend.gridView.viewportScrollHandler = { rowDelta in
+      committedRowDeltas.append(rowDelta)
+      return true
+    }
+
+    for _ in 0..<20 {
+      backend.gridView.testScrollWheelDeltaY(18)
+    }
+
+    #expect(committedRowDeltas.isEmpty)
+    #expect(backend.diagnostics.pendingScrollWheelEvents == 20)
+
+    backend.gridView.flushPendingScrollCommit()
+
+    #expect(committedRowDeltas.count == 1)
+    #expect(committedRowDeltas[0] > 1)
+    #expect(backend.diagnostics.pendingScrollWheelEvents == 0)
+  }
+
+  @MainActor @Test func liveGridCommitsAccumulatedSlowTrackpadRowBeforeRemainderWraps() {
+    let backend = GhosttyVTCellGridRendererBackend(
+      options: TerminalRendererOptions(smoothPixelScrollingEnabled: true)
+    )
+    backend.render(scrollFrame: scrollFrame(
+      viewportRows: ["two", "three"],
+      overscanTop: ["one"],
+      overscanBottom: ["four"],
+      cols: 8
+    ))
+    backend.flushPendingFrame()
+    var committedRowDeltas: [Int] = []
+    backend.gridView.viewportScrollHandler = { rowDelta in
+      committedRowDeltas.append(rowDelta)
+      return true
+    }
+
+    backend.gridView.testScrollWheelDeltaY(15)
+    #expect(backend.gridView.viewport.visualOffsetY == 15)
+
+    backend.gridView.testScrollWheelDeltaY(2)
+
+    #expect(committedRowDeltas == [1])
+    #expect(backend.gridView.viewport.visualOffsetY == 1)
+    #expect(backend.diagnostics.pendingScrollRowDelta == 0)
+  }
+
   @MainActor @Test func liveGridVisualScrollTranslationMatchesViewportDirection() {
     #expect(PTYGridView.visualScrollTranslationY(for: TerminalViewport(visualOffsetY: 5)) == 0)
     #expect(PTYGridView.visualScrollTranslationY(for: TerminalViewport(visualOffsetY: -5)) == 0)
@@ -222,6 +301,10 @@ struct TerminalRendererBackendTests {
     #expect(diagnostics.debugSummary.contains("overscanBottom=0"))
     #expect(diagnostics.debugSummary.contains("pixelSmoothScroll=unavailable"))
     #expect(diagnostics.debugSummary.contains("missing overscan rows from libghostty-vt snapshot"))
+    #expect(diagnostics.debugSummary.contains("scrollCommitMode=immediate"))
+    #expect(diagnostics.debugSummary.contains("pendingScrollRowDelta=0"))
+    #expect(diagnostics.debugSummary.contains("scrollCommitMs=0.000"))
+    #expect(diagnostics.debugSummary.contains("scrollRenderMs=0.000"))
   }
 
   @Test func rendererDiagnosticsReportOverscanRows() {

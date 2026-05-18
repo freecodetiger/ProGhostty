@@ -563,6 +563,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   public func flushPendingRenderers() {
     for surface in surfaces.values {
+      surface.gridView.flushPendingScrollCommit()
       surface.cellGridBackend.flushPendingFrame()
     }
   }
@@ -1072,6 +1073,8 @@ public final class PTYTerminalSurfaceView: NSView {
 }
 
 public final class PTYGridView: NSView {
+  private static let scrollCommitInterval: TimeInterval = 1.0 / 120.0
+
   public var inputHandler: ((Data) -> Void)?
   public var viewportScrollHandler: ((Int) -> Bool)?
   public var viewportCanScrollHandler: ((Int) -> Bool)?
@@ -1089,9 +1092,11 @@ public final class PTYGridView: NSView {
   private var isFocusedTerminalStorage = true
   private var rendererOptions = TerminalRendererOptions()
   private var scrollCoordinator = PaneScrollCoordinator()
+  private var scrollCommitCoordinator = ScrollCommitCoordinator()
   private var suppressMomentumScroll = false
   private(set) public var viewport = TerminalViewport()
   private(set) public var lastDrawDuration: TimeInterval = 0
+  private(set) public var lastScrollCommitDuration: TimeInterval = 0
   private(set) public var maxDrawDuration: TimeInterval = 0
   private var totalDrawDuration: TimeInterval = 0
   private var drawCount = 0
@@ -1178,6 +1183,7 @@ public final class PTYGridView: NSView {
 
   public func resetPixelScroll(suppressMomentum: Bool = false) {
     scrollCoordinator.reset()
+    scrollCommitCoordinator.reset()
     viewport = TerminalViewport()
     suppressMomentumScroll = suppressMomentum
     needsDisplay = true
@@ -1187,6 +1193,11 @@ public final class PTYGridView: NSView {
     diagnostics.pixelRemainderY = scrollCoordinator.pixelRemainderY
     diagnostics.committedRowDelta = scrollCoordinator.lastCommittedRowDelta
     diagnostics.coalescedWheelEvents = scrollCoordinator.coalescedWheelEvents
+    diagnostics.scrollCommitMode = .coalesced
+    diagnostics.pendingScrollRowDelta = scrollCommitCoordinator.pendingRowDelta
+    diagnostics.pendingScrollWheelEvents = scrollCommitCoordinator.pendingWheelEvents
+    diagnostics.lastScrollCommitDuration = lastScrollCommitDuration
+    diagnostics.lastScrollRenderDuration = lastDrawDuration
     diagnostics.smoothScrollOffset = viewport.visualOffsetY
     if diagnostics.alternateScreenActive {
       diagnostics.pixelSmoothScroll = .unavailable
@@ -1250,7 +1261,7 @@ public final class PTYGridView: NSView {
     frameSnapshot = scrollFrame.viewport
     scrollFrameSnapshot = scrollFrame
     isFocusedTerminalStorage = isFocused
-    if viewport.visualOffsetY != 0 || !scrollFrame.overscanTop.isEmpty || !scrollFrame.overscanBottom.isEmpty {
+    if viewport.visualOffsetY != 0 {
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
       return
@@ -1458,18 +1469,24 @@ public final class PTYGridView: NSView {
     switch decision {
     case .consumed(let rowDelta, let pixelRemainderY):
       if rowDelta != 0 {
-        let didScroll = viewportScrollHandler?(rowDelta) ?? false
-        if didScroll {
-          viewport = TerminalViewport(visualOffsetY: pixelRemainderY)
-          if pixelRemainderY != 0, !canRenderPixelScroll(for: pixelRemainderY) {
-            scrollCoordinator.reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
-            viewport = TerminalViewport()
-          }
-          needsDisplay = true
-        } else {
+        viewport = TerminalViewport(visualOffsetY: pixelRemainderY)
+        if pixelRemainderY != 0, !canRenderPixelScroll(for: pixelRemainderY) {
           scrollCoordinator.reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
           viewport = TerminalViewport()
+          scrollCommitCoordinator.reset()
+          return
         }
+        if shouldCommitSlowAccumulatedRowImmediately(rowDelta: rowDelta) {
+          if !commitViewportScroll(rowDelta: rowDelta) {
+            scrollCoordinator.reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
+            viewport = TerminalViewport()
+            scrollCommitCoordinator.reset()
+            return
+          }
+        } else if scrollCommitCoordinator.enqueue(rowDelta: rowDelta) {
+          schedulePendingScrollCommit()
+        }
+        needsDisplay = true
       } else {
         viewport = TerminalViewport(visualOffsetY: pixelRemainderY)
         if canRenderPixelScroll(for: pixelRemainderY) {
@@ -1489,6 +1506,42 @@ public final class PTYGridView: NSView {
   private func hasOverscanRows(forVisualOffsetY visualOffsetY: CGFloat) -> Bool {
     guard visualOffsetY != 0, let scrollFrameSnapshot else { return false }
     return visualOffsetY > 0 ? !scrollFrameSnapshot.overscanTop.isEmpty : !scrollFrameSnapshot.overscanBottom.isEmpty
+  }
+
+  private func shouldCommitSlowAccumulatedRowImmediately(rowDelta: Int) -> Bool {
+    !scrollCommitCoordinator.hasPendingCommit
+      && abs(rowDelta) == 1
+      && scrollCoordinator.coalescedWheelEvents > 1
+  }
+
+  private func schedulePendingScrollCommit() {
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.scrollCommitInterval) { [weak self] in
+      Task { @MainActor in
+        self?.flushPendingScrollCommit()
+      }
+    }
+  }
+
+  public func flushPendingScrollCommit() {
+    guard let batch = scrollCommitCoordinator.drain() else { return }
+    if commitViewportScroll(rowDelta: batch.rowDelta) {
+      if viewport.visualOffsetY != 0, !canRenderPixelScroll(for: viewport.visualOffsetY) {
+        scrollCoordinator.reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
+        viewport = TerminalViewport()
+      }
+      needsDisplay = true
+    } else {
+      scrollCoordinator.reset(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
+      viewport = TerminalViewport()
+      needsDisplay = true
+    }
+  }
+
+  private func commitViewportScroll(rowDelta: Int) -> Bool {
+    let start = ProcessInfo.processInfo.systemUptime
+    let didScroll = viewportScrollHandler?(rowDelta) ?? false
+    lastScrollCommitDuration = ProcessInfo.processInfo.systemUptime - start
+    return didScroll
   }
 
   public override func keyDown(with event: NSEvent) {

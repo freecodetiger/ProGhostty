@@ -315,7 +315,7 @@ struct TerminalSurfaceTests {
     #expect(surfaceView.liveGridView.renderedText.contains("zpc@host ~ %"))
   }
 
-  @MainActor @Test func liveCellGridWheelRowCommitUpdatesSnapshotSynchronously() throws {
+  @MainActor @Test func liveCellGridWheelRowCommitsAreCoalescedUntilRendererFlush() throws {
     let registry = PTYTerminalSurfaceRegistry()
     let session = TerminalSessionID()
     registry.createSurface(session: session)
@@ -325,11 +325,21 @@ struct TerminalSurfaceTests {
     registry.render(bridge, session: session)
     registry.flushPendingRenderers()
     let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let bottomText = surfaceView.liveGridView.renderedText
 
     surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+
+    #expect(surfaceView.liveGridView.renderedText == bottomText)
+    #expect(registry.rendererDiagnostics(for: session)?.pendingScrollRowDelta != 0)
+    #expect(registry.rendererDiagnostics(for: session)?.pendingScrollWheelEvents == 2)
+
+    registry.flushPendingRenderers()
 
     #expect(surfaceView.liveGridView.renderedText.contains("first") || surfaceView.liveGridView.renderedText.contains("second"))
     #expect(abs(surfaceView.liveGridView.viewport.visualOffsetY) < surfaceView.liveGridView.terminalCellSize.height)
+    #expect(registry.rendererDiagnostics(for: session)?.scrollCommitMode == .coalesced)
+    #expect(registry.rendererDiagnostics(for: session)?.lastScrollCommitDuration ?? 0 >= 0)
   }
 
   @MainActor @Test func liveCellGridWheelScrollFallsBackToRowScrollWhenPixelScrollIsDisabled() throws {

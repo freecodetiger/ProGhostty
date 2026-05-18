@@ -267,6 +267,58 @@ public struct PaneScrollCoordinator: Sendable {
   }
 }
 
+public struct ScrollCommitBatch: Equatable, Sendable {
+  public var rowDelta: Int
+  public var wheelEvents: Int
+
+  public init(rowDelta: Int, wheelEvents: Int) {
+    self.rowDelta = rowDelta
+    self.wheelEvents = wheelEvents
+  }
+}
+
+public struct ScrollCommitCoordinator: Sendable {
+  public private(set) var pendingRowDelta: Int
+  public private(set) var pendingWheelEvents: Int
+  private var commitScheduled: Bool
+
+  public init(pendingRowDelta: Int = 0, pendingWheelEvents: Int = 0, commitScheduled: Bool = false) {
+    self.pendingRowDelta = pendingRowDelta
+    self.pendingWheelEvents = pendingWheelEvents
+    self.commitScheduled = commitScheduled
+  }
+
+  public var hasPendingCommit: Bool {
+    commitScheduled || pendingRowDelta != 0
+  }
+
+  @discardableResult
+  public mutating func enqueue(rowDelta: Int) -> Bool {
+    guard rowDelta != 0 else { return false }
+    let shouldSchedule = !commitScheduled
+    pendingRowDelta += rowDelta
+    pendingWheelEvents += 1
+    commitScheduled = true
+    return shouldSchedule
+  }
+
+  public mutating func drain() -> ScrollCommitBatch? {
+    commitScheduled = false
+    let rowDelta = pendingRowDelta
+    let wheelEvents = pendingWheelEvents
+    pendingRowDelta = 0
+    pendingWheelEvents = 0
+    guard rowDelta != 0 else { return nil }
+    return ScrollCommitBatch(rowDelta: rowDelta, wheelEvents: wheelEvents)
+  }
+
+  public mutating func reset() {
+    pendingRowDelta = 0
+    pendingWheelEvents = 0
+    commitScheduled = false
+  }
+}
+
 public struct SmoothScrollController: Sendable {
   public private(set) var viewport: TerminalViewport
   public var isEnabled: Bool
