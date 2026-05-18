@@ -39,10 +39,21 @@ struct RootView: View {
         }
         .transition(.opacity.combined(with: .scale(scale: 0.985)))
       }
+
+      if model.commandCapsuleState.isPresented {
+        VStack {
+          Spacer()
+          CodexCommandCapsuleView()
+            .environmentObject(model)
+            .padding(.bottom, 28)
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
     }
     .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
     .animation(.easeOut(duration: 0.12), value: model.isHistoryPresented)
     .animation(.easeOut(duration: 0.12), value: model.isAICompanionPresented)
+    .animation(.easeOut(duration: 0.14), value: model.commandCapsuleState.isPresented)
     .animation(.easeOut(duration: 0.14), value: model.titlebarToast)
     .preferredColorScheme(model.appColorScheme)
     .background(Color(nsColor: model.terminalBackgroundColor).ignoresSafeArea())
@@ -73,6 +84,8 @@ struct RootView: View {
     hasher.combine(model.isWorkspaceSwitcherPresented)
     hasher.combine(model.isHistoryPresented)
     hasher.combine(model.isAICompanionPresented)
+    hasher.combine(model.commandCapsuleState.isPresented)
+    hasher.combine(model.commandCapsuleState.phase.rawValue)
     hasher.combine(model.titlebarToast?.message)
     hasher.combine(String(describing: model.titlebarToast?.style))
     hasher.combine(String(describing: model.titlebarToast?.lifetime))

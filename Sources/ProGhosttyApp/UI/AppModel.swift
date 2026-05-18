@@ -72,6 +72,7 @@ final class AppModel: ObservableObject {
   @Published var isAICompanionPresented = false
   @Published var activeAISession: AISession?
   @Published var aiErrorMessage: String?
+  @Published var commandCapsuleState = CommandCapsuleState()
 
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
@@ -88,6 +89,8 @@ final class AppModel: ObservableObject {
   private var pluginManagerWindowController: NSWindowController?
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
   private var titlebarToastTask: Task<Void, Never>?
+  private var commandCapsuleVoiceTask: Task<Void, Never>?
+  private var commandCapsuleRefineTask: Task<Void, Never>?
 
   struct TitlebarToast: Equatable, Sendable {
     var message: String
@@ -837,6 +840,121 @@ final class AppModel: ObservableObject {
     isHistoryPresented = false
     isWorkspaceSwitcherPresented = false
     isAICompanionPresented = false
+    commandCapsuleState.dismiss()
+  }
+
+  func openCodexCommandCapsule() {
+    isHistoryPresented = false
+    isWorkspaceSwitcherPresented = false
+    isAICompanionPresented = false
+    aiErrorMessage = nil
+    commandCapsuleState.open()
+  }
+
+  func dismissCodexCommandCapsule() {
+    commandCapsuleVoiceTask?.cancel()
+    commandCapsuleVoiceTask = nil
+    commandCapsuleRefineTask?.cancel()
+    commandCapsuleRefineTask = nil
+    commandCapsuleState.dismiss()
+  }
+
+  func toggleCommandCapsuleContext(_ option: AIPromptContextOption) {
+    if commandCapsuleState.includedContext.contains(option) {
+      commandCapsuleState.includedContext.remove(option)
+    } else {
+      commandCapsuleState.includedContext.insert(option)
+    }
+  }
+
+  func useRawCommandCapsuleRequestAsDraft() {
+    let trimmed = commandCapsuleState.request.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    commandCapsuleState.finishRefining(draft: trimmed)
+  }
+
+  func startCommandCapsuleVoiceInput() {
+    guard commandCapsuleState.phase != .listening else { return }
+    commandCapsuleState.startListening()
+    let service = makeASRService()
+    commandCapsuleVoiceTask?.cancel()
+    commandCapsuleVoiceTask = Task { [weak self] in
+      for await event in service.transcribe() {
+        await MainActor.run {
+          guard let self else { return }
+          switch event {
+          case .partial(let text):
+            self.commandCapsuleState.updateVoicePartial(text)
+          case .final(let text):
+            self.commandCapsuleState.appendFinalTranscript(text)
+          case .error(let message):
+            self.commandCapsuleState.fail(message)
+          case .completed:
+            self.commandCapsuleState.stopListening()
+          }
+        }
+      }
+    }
+  }
+
+  func stopCommandCapsuleVoiceInput() {
+    commandCapsuleVoiceTask?.cancel()
+    commandCapsuleVoiceTask = nil
+    commandCapsuleState.stopListening()
+  }
+
+  func refineCommandCapsulePrompt() {
+    let request = commandCapsuleState.request.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !request.isEmpty else { return }
+    commandCapsuleState.startRefining()
+    let context = makeAIContext(includeDiff: false)
+    let included = commandCapsuleState.includedContext
+    let config = OpenAICompatibleProviderConfig(
+      baseURL: settings.openAICompatibleBaseURL,
+      apiKey: settings.openAICompatibleAPIKey,
+      model: settings.openAICompatibleModel
+    )
+    commandCapsuleRefineTask?.cancel()
+    commandCapsuleRefineTask = Task { [weak self] in
+      let result = await CodexPromptRefiner().refine(
+        userRequest: request,
+        context: context,
+        includedContext: included,
+        config: config
+      )
+      await MainActor.run {
+        guard let self else { return }
+        switch result {
+        case .refined(let text), .raw(let text):
+          self.commandCapsuleState.finishRefining(draft: text)
+        case .failed(let message, let fallback):
+          self.commandCapsuleState.draft = fallback
+          self.commandCapsuleState.fail(message)
+        }
+      }
+    }
+  }
+
+  func sendCommandCapsuleDraftToCodex(enter: Bool) {
+    let rawDraft = commandCapsuleState.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let rawRequest = commandCapsuleState.request.trimmingCharacters(in: .whitespacesAndNewlines)
+    let draft = rawDraft.isEmpty ? rawRequest : rawDraft
+    guard !draft.isEmpty else { return }
+    if activeAISession == nil {
+      launchAI(profile: .codex, mode: .rightSplit)
+    }
+    guard let activeAISession else {
+      commandCapsuleState.fail("Start Codex before sending this prompt.")
+      return
+    }
+    do {
+      try aiSessionManager.sendPrompt(draft, to: activeAISession.id, mode: enter ? .bracketedPasteAndEnter : .bracketedPasteOnly)
+      _ = aiSessionManager.focusAISession(id: activeAISession.id)
+      restoreTerminalKeyboardFocus()
+      commandCapsuleState.markSent()
+    } catch {
+      commandCapsuleState.fail("Unable to send prompt to Codex: \(error.localizedDescription)")
+    }
   }
 
   func openAICompanion(profile: AICLIProfile = .codex, mode: AIOpenMode = .rightSplit) {

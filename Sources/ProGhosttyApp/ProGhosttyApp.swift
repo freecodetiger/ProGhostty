@@ -65,6 +65,13 @@ struct ProGhosttyApp: App {
       }
 
       CommandMenu("AI") {
+        Button("Open Codex Command Capsule") {
+          model.openCodexCommandCapsule()
+        }
+        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule).swiftUIShortcut)
+
+        Divider()
+
         Button("Open Codex Companion") {
           model.openAICompanion(profile: .codex, mode: .rightSplit)
         }

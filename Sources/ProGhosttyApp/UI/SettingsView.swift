@@ -180,7 +180,31 @@ struct SettingsView: View {
               .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
             }
 
-            Text("Used for Aliyun Fun-ASR voice input. Keychain is checked first, then this setting, then DASHSCOPE_API_KEY.")
+            SettingsRow("OpenAI Base URL") {
+              TextField("https://api.openai.com/v1", text: $model.settings.openAICompatibleBaseURL)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+            }
+
+            SettingsRow("OpenAI API Key") {
+              SecureField("OPENAI_API_KEY", text: Binding(
+                get: { model.settings.openAICompatibleAPIKey ?? "" },
+                set: { model.settings.openAICompatibleAPIKey = $0.isEmpty ? nil : $0 }
+              ))
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 13, design: .monospaced))
+              .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+            }
+
+            SettingsRow("OpenAI Model") {
+              TextField("gpt-5.1", text: $model.settings.openAICompatibleModel)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+            }
+
+            Text("DashScope is used for Aliyun Fun-ASR voice input. OpenAI-compatible settings are used only for Codex prompt refinement.")
               .font(.system(size: 12))
               .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
           }
