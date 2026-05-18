@@ -7,10 +7,12 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
   let tooltip: String?
   let backgroundColor: NSColor
   let usesDarkAppearance: Bool
+  let toast: AppModel.TitlebarToast?
   let onSettings: () -> Void
+  let onToastClick: () -> Void
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(onSettings: onSettings)
+    Coordinator(onSettings: onSettings, onToastClick: onToastClick)
   }
 
   func makeNSView(context: Context) -> NSView {
@@ -22,7 +24,9 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     context.coordinator.tooltip = tooltip
     context.coordinator.backgroundColor = backgroundColor
     context.coordinator.usesDarkAppearance = usesDarkAppearance
+    context.coordinator.toast = toast
     context.coordinator.onSettings = onSettings
+    context.coordinator.onToastClick = onToastClick
 
     if let window = view.window {
       apply(to: window, context: context)
@@ -45,17 +49,22 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     var tooltip: String?
     var backgroundColor: NSColor = .black
     var usesDarkAppearance = true
+    var toast: AppModel.TitlebarToast?
     var onSettings: () -> Void
+    var onToastClick: () -> Void
 
     private weak var installedWindow: NSWindow?
-    private var accessory: NSTitlebarAccessoryViewController?
+    private let titlebarControlsStack = NSStackView()
+    private let toastView = TitlebarToastCapsuleView()
     private let button = NSButton(title: "ProGhostty", target: nil, action: nil)
     private let titlebarBackgroundView = TitlebarBackgroundView()
     private var titlebarBackgroundConstraints: [NSLayoutConstraint] = []
+    private var titlebarControlsConstraints: [NSLayoutConstraint] = []
     private let notificationObservers = NotificationObserverBag()
 
-    init(onSettings: @escaping () -> Void) {
+    init(onSettings: @escaping () -> Void, onToastClick: @escaping () -> Void) {
       self.onSettings = onSettings
+      self.onToastClick = onToastClick
       super.init()
       titlebarBackgroundView.identifier = ProGhosttyWindowAppearance.titlebarBackgroundIdentifier
       button.target = self
@@ -71,25 +80,25 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       button.cell?.wraps = false
       button.setContentHuggingPriority(.required, for: .horizontal)
       button.widthAnchor.constraint(lessThanOrEqualToConstant: 360).isActive = true
+      titlebarControlsStack.orientation = .horizontal
+      titlebarControlsStack.alignment = .centerY
+      titlebarControlsStack.spacing = 8
+      titlebarControlsStack.detachesHiddenViews = true
+      titlebarControlsStack.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 12)
+      titlebarControlsStack.addArrangedSubview(toastView)
+      titlebarControlsStack.addArrangedSubview(button)
       titlebarBackgroundView.wantsLayer = true
+      toastView.target = self
+      toastView.action = #selector(openToastAction)
     }
 
     func installIfNeeded(in window: NSWindow) {
       guard installedWindow !== window else { return }
-      if let accessory, let installedWindow {
-        if let index = installedWindow.titlebarAccessoryViewControllers.firstIndex(where: { $0 === accessory }) {
-          installedWindow.removeTitlebarAccessoryViewController(at: index)
-        }
-      }
 
       installedWindow = window
       updateWindowAppearance(window)
-      let controller = NSTitlebarAccessoryViewController()
-      controller.layoutAttribute = .right
-      controller.view = button
-      accessory = controller
-      window.addTitlebarAccessoryViewController(controller)
       installTitlebarBackground(in: window)
+      installTitlebarControls(in: window)
       installWindowObservers(for: window)
     }
 
@@ -97,6 +106,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       window.title = title
       button.title = title
       button.toolTip = tooltip
+      updateToast()
     }
 
     func updateWindowAppearance(_ window: NSWindow) {
@@ -106,10 +116,15 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         usesDarkAppearance: usesDarkAppearance
       )
       titlebarBackgroundView.layer?.backgroundColor = backgroundColor.cgColor
+      button.contentTintColor = usesDarkAppearance
+        ? NSColor(calibratedWhite: 0.78, alpha: 1)
+        : .secondaryLabelColor
+      updateToast()
       window.isMovableByWindowBackground = false
       installTitlebarBackground(in: window)
+      installTitlebarControls(in: window)
       harmonizeTitlebarMaterials(in: window)
-      keepTitlebarBackgroundOrdered(in: window)
+      keepTitlebarViewsOrdered(in: window)
       DispatchQueue.main.async { [weak self, weak window] in
         guard let self, let window else { return }
         ProGhosttyWindowAppearance.applyTerminalChrome(
@@ -118,9 +133,41 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
           usesDarkAppearance: self.usesDarkAppearance
         )
         self.installTitlebarBackground(in: window)
+        self.installTitlebarControls(in: window)
         self.harmonizeTitlebarMaterials(in: window)
-        self.keepTitlebarBackgroundOrdered(in: window)
+        self.keepTitlebarViewsOrdered(in: window)
+        self.updateToast()
       }
+    }
+
+    private func updateToast() {
+      guard let toast else {
+        toastView.update(message: nil, colors: nil, isActionable: false)
+        refreshAccessoryLayout()
+        return
+      }
+
+      let colors: ProGhosttyTitlebarToastColors
+      switch toast.style {
+      case .success:
+        colors = ProGhosttyTitlebarToastPalette.success(usesDarkAppearance: usesDarkAppearance)
+      case .info:
+        colors = ProGhosttyTitlebarToastPalette.info(usesDarkAppearance: usesDarkAppearance)
+      case .error:
+        colors = ProGhosttyTitlebarToastPalette.error(usesDarkAppearance: usesDarkAppearance)
+      case .update:
+        colors = ProGhosttyTitlebarToastPalette.info(usesDarkAppearance: usesDarkAppearance)
+      }
+      toastView.update(message: toast.message, colors: colors, isActionable: toast.isActionable)
+      refreshAccessoryLayout()
+    }
+
+    private func refreshAccessoryLayout() {
+      titlebarControlsStack.invalidateIntrinsicContentSize()
+      titlebarControlsStack.needsLayout = true
+      titlebarControlsStack.layoutSubtreeIfNeeded()
+      installedWindow?.contentView?.superview?.needsLayout = true
+      installedWindow?.contentView?.superview?.layoutSubtreeIfNeeded()
     }
 
     private func installTitlebarBackground(in window: NSWindow) {
@@ -141,7 +188,27 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         NSLayoutConstraint.activate(titlebarBackgroundConstraints)
       }
 
-      keepTitlebarBackgroundOrdered(in: window)
+      keepTitlebarViewsOrdered(in: window)
+    }
+
+    private func installTitlebarControls(in window: NSWindow) {
+      guard let host = titlebarOverlayHost(in: window) else { return }
+
+      if titlebarControlsStack.superview !== host {
+        NSLayoutConstraint.deactivate(titlebarControlsConstraints)
+        titlebarControlsConstraints.removeAll()
+        titlebarControlsStack.removeFromSuperview()
+        titlebarControlsStack.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(titlebarControlsStack, positioned: .above, relativeTo: nil)
+        titlebarControlsConstraints = [
+          titlebarControlsStack.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+          titlebarControlsStack.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
+          titlebarControlsStack.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
+        ]
+        NSLayoutConstraint.activate(titlebarControlsConstraints)
+      }
+
+      keepTitlebarViewsOrdered(in: window)
     }
 
     private func installWindowObservers(for window: NSWindow) {
@@ -179,7 +246,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       }
     }
 
-    private func keepTitlebarBackgroundOrdered(in window: NSWindow) {
+    private func keepTitlebarViewsOrdered(in window: NSWindow) {
       guard
         let titlebarHost = titlebarHost(in: window),
         titlebarBackgroundView.superview === titlebarHost
@@ -193,16 +260,17 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         window.standardWindowButton(.closeButton),
         window.standardWindowButton(.miniaturizeButton),
         window.standardWindowButton(.zoomButton),
-        button,
+        titlebarControlsStack,
       ].compactMap { $0 }
 
       for control in controlsToPreserve {
-        guard let directChild = titlebarHost.directChild(containing: control),
-          directChild !== titlebarBackgroundView
-        else {
-          continue
+        if let directChild = titlebarHost.directChild(containing: control),
+          directChild !== titlebarBackgroundView {
+          titlebarHost.addSubview(directChild, positioned: .above, relativeTo: titlebarBackgroundView)
+        } else if let overlayHost = titlebarOverlayHost(in: window),
+          let directChild = overlayHost.directChild(containing: control) {
+          overlayHost.addSubview(directChild, positioned: .above, relativeTo: nil)
         }
-        titlebarHost.addSubview(directChild, positioned: .above, relativeTo: titlebarBackgroundView)
       }
     }
 
@@ -211,8 +279,27 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         ?? window.contentView?.superview
     }
 
+    private func titlebarOverlayHost(in window: NSWindow) -> NSView? {
+      window.contentView?.superview ?? titlebarHost(in: window)
+    }
+
     @objc private func openSettings() {
       onSettings()
+    }
+
+    @objc private func openToastAction() {
+      onToastClick()
+    }
+  }
+}
+
+private extension AppModel.TitlebarToast {
+  var isActionable: Bool {
+    switch style {
+    case .update:
+      return true
+    case .success, .info, .error:
+      return false
     }
   }
 }
@@ -220,6 +307,151 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
 private final class TitlebarBackgroundView: NSView {
   override func hitTest(_ point: NSPoint) -> NSView? {
     nil
+  }
+}
+
+private final class TitlebarToastCapsuleView: NSView {
+  private let label = NSTextField(labelWithString: "")
+  private var colors: ProGhosttyTitlebarToastColors?
+  weak var target: AnyObject?
+  var action: Selector?
+  private var isActionable = false
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    wantsLayer = true
+    layer?.masksToBounds = false
+    isHidden = true
+
+    label.font = .systemFont(ofSize: 11, weight: .medium)
+    label.lineBreakMode = .byTruncatingTail
+    label.maximumNumberOfLines = 1
+    label.drawsBackground = false
+    label.isBordered = false
+    label.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(label)
+
+    NSLayoutConstraint.activate([
+      label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ProGhosttyTitlebarToastMetrics.horizontalPadding),
+      label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -ProGhosttyTitlebarToastMetrics.horizontalPadding),
+      label.topAnchor.constraint(equalTo: topAnchor, constant: ProGhosttyTitlebarToastMetrics.verticalPadding),
+      label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -ProGhosttyTitlebarToastMetrics.verticalPadding),
+      widthAnchor.constraint(lessThanOrEqualToConstant: ProGhosttyTitlebarToastMetrics.maximumWidth),
+    ])
+
+    setContentHuggingPriority(.required, for: .horizontal)
+    setContentCompressionResistancePriority(.required, for: .horizontal)
+    updateBackingScale()
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    nil
+  }
+
+  func update(message: String?, colors: ProGhosttyTitlebarToastColors?, isActionable: Bool) {
+    guard let message, let colors else {
+      isHidden = true
+      self.colors = nil
+      self.isActionable = false
+      label.stringValue = ""
+      invalidateIntrinsicContentSize()
+      needsDisplay = true
+      return
+    }
+
+    isHidden = false
+    self.colors = colors
+    self.isActionable = isActionable
+    label.stringValue = message
+    label.textColor = colors.foreground
+    label.toolTip = isActionable ? message : nil
+    invalidateIntrinsicContentSize()
+    superview?.invalidateIntrinsicContentSize()
+    needsDisplay = true
+  }
+
+  override var intrinsicContentSize: NSSize {
+    guard !isHidden, !label.stringValue.isEmpty else {
+      return NSSize(width: 0, height: 0)
+    }
+    let fitting = label.intrinsicContentSize
+    return NSSize(
+      width: min(
+        ProGhosttyTitlebarToastMetrics.maximumWidth,
+        fitting.width + ProGhosttyTitlebarToastMetrics.horizontalPadding * 2
+      ),
+      height: fitting.height + ProGhosttyTitlebarToastMetrics.verticalPadding * 2
+    )
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    updateBackingScale()
+  }
+
+  override func viewDidChangeBackingProperties() {
+    super.viewDidChangeBackingProperties()
+    updateBackingScale()
+    needsDisplay = true
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    super.draw(dirtyRect)
+    guard let colors, !isHidden, bounds.width > 0, bounds.height > 0 else { return }
+
+    let scale = backingScaleFactor
+    let borderWidth = ProGhosttyTitlebarToastMetrics.borderWidth(backingScaleFactor: scale)
+    let rect = pixelAligned(bounds, scale: scale).insetBy(dx: borderWidth / 2, dy: borderWidth / 2)
+    guard rect.width > 0, rect.height > 0 else { return }
+
+    let radius = ProGhosttyTitlebarToastMetrics.capsuleRadius(for: rect.height)
+    let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+    path.lineWidth = borderWidth
+
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current?.cgContext.setShouldAntialias(true)
+    colors.background.setFill()
+    path.fill()
+    colors.border.setStroke()
+    path.stroke()
+    NSGraphicsContext.restoreGraphicsState()
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    guard isActionable, !isHidden, bounds.contains(point) else { return nil }
+    return self
+  }
+
+  override func resetCursorRects() {
+    super.resetCursorRects()
+    if isActionable {
+      addCursorRect(bounds, cursor: .pointingHand)
+    }
+  }
+
+  override func mouseUp(with event: NSEvent) {
+    guard isActionable, bounds.contains(convert(event.locationInWindow, from: nil)), let action else {
+      return
+    }
+    _ = NSApp.sendAction(action, to: target, from: self)
+  }
+
+  private var backingScaleFactor: CGFloat {
+    window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+  }
+
+  private func updateBackingScale() {
+    layer?.contentsScale = backingScaleFactor
+  }
+
+  private func pixelAligned(_ rect: NSRect, scale: CGFloat) -> NSRect {
+    guard scale > 0 else { return rect.integral }
+    let minX = round(rect.minX * scale) / scale
+    let minY = round(rect.minY * scale) / scale
+    let maxX = round(rect.maxX * scale) / scale
+    let maxY = round(rect.maxY * scale) / scale
+    return NSRect(x: minX, y: minY, width: max(0, maxX - minX), height: max(0, maxY - minY))
   }
 }
 

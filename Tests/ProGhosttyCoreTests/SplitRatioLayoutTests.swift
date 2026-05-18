@@ -4,6 +4,83 @@ import Testing
 
 @Suite("Split ratio layout")
 struct SplitRatioLayoutTests {
+  @Test func mainWindowMinimumIsLowerThanLegacyLargeDefault() {
+    #expect(ProGhosttyWindowSizing.minimumContentWidth < 980)
+    #expect(ProGhosttyWindowSizing.minimumContentHeight < 640)
+  }
+
+  @Test func mainWindowMinimumStillLeavesRoomForStableSinglePane() {
+    #expect(ProGhosttyWindowSizing.minimumContentWidth >= SplitRatioLayout.minimumPaneLength * 3)
+    #expect(ProGhosttyWindowSizing.minimumContentHeight >= SplitRatioLayout.minimumPaneLength * 2)
+  }
+
+  @Test func mainWindowDefaultCanStayLargerThanMinimum() {
+    #expect(ProGhosttyWindowSizing.defaultContentWidth >= ProGhosttyWindowSizing.minimumContentWidth)
+    #expect(ProGhosttyWindowSizing.defaultContentHeight >= ProGhosttyWindowSizing.minimumContentHeight)
+  }
+
+  @Test func pluginManagerWindowHasIndependentConfigurationSize() {
+    #expect(ProGhosttyWindowSizing.pluginManagerDefaultContentWidth > ProGhosttyWindowSizing.minimumContentWidth)
+    #expect(ProGhosttyWindowSizing.pluginManagerDefaultContentHeight > ProGhosttyWindowSizing.minimumContentHeight)
+    #expect(ProGhosttyWindowSizing.pluginManagerMinimumContentWidth >= 680)
+    #expect(ProGhosttyWindowSizing.pluginManagerMinimumContentHeight >= 520)
+  }
+
+  @Test func workspaceSwitcherOverlayFitsSmallMainWindow() {
+    let width = ProGhosttyOverlaySizing.workspaceSwitcherWidth(
+      containerWidth: ProGhosttyWindowSizing.minimumContentWidth
+    )
+
+    #expect(width < ProGhosttyOverlaySizing.workspaceSwitcherIdealWidth)
+    #expect(width <= ProGhosttyWindowSizing.minimumContentWidth - ProGhosttyOverlaySizing.edgeMargin * 2)
+    #expect(width >= ProGhosttyOverlaySizing.workspaceSwitcherMinimumWidth)
+  }
+
+  @Test func workspaceSwitcherHeightShrinksForFewWorkspaces() {
+    let panelHeight = ProGhosttyOverlaySizing.workspaceSwitcherPanelHeight(
+      workspaceCount: 2,
+      containerHeight: ProGhosttyWindowSizing.defaultContentHeight
+    )
+
+    let maxHeight = ProGhosttyWindowSizing.defaultContentHeight - ProGhosttyOverlaySizing.edgeMargin * 2
+    #expect(panelHeight < maxHeight * 0.55)
+    #expect(panelHeight >= ProGhosttyOverlaySizing.workspaceSwitcherMinimumHeight)
+  }
+
+  @Test func workspaceSwitcherHeightCapsForManyWorkspaces() {
+    let panelHeight = ProGhosttyOverlaySizing.workspaceSwitcherPanelHeight(
+      workspaceCount: 24,
+      containerHeight: ProGhosttyWindowSizing.defaultContentHeight
+    )
+
+    let maxHeight = ProGhosttyWindowSizing.defaultContentHeight - ProGhosttyOverlaySizing.edgeMargin * 2
+    #expect(panelHeight == maxHeight)
+  }
+
+  @Test func workspaceSwitcherListHeightShowsCreateCardCompletelyForFewWorkspaces() {
+    let workspaceCount = 2
+    let rowCountIncludingCreateCard = workspaceCount + 1
+    let listHeight = ProGhosttyOverlaySizing.workspaceSwitcherListHeight(
+      workspaceCount: workspaceCount,
+      containerHeight: ProGhosttyWindowSizing.defaultContentHeight
+    )
+
+    let requiredHeight = Double(rowCountIncludingCreateCard)
+      * ProGhosttyOverlaySizing.workspaceSwitcherCardMinimumHeight
+      + Double(rowCountIncludingCreateCard - 1)
+      * ProGhosttyOverlaySizing.workspaceSwitcherRowSpacing
+      + ProGhosttyOverlaySizing.workspaceSwitcherListVerticalPadding
+
+    #expect(listHeight >= requiredHeight)
+  }
+
+  @Test func splitContextMenuControlsStayCompact() {
+    #expect(ProGhosttyContextMenuSizing.splitButtonLength == 42)
+    #expect(ProGhosttyContextMenuSizing.splitButtonSpacing == 8)
+    #expect(ProGhosttyContextMenuSizing.splitControlWidth <= 180)
+    #expect(ProGhosttyContextMenuSizing.splitControlHeight <= 76)
+  }
+
   @Test func equalRatioUsesHalfOfAvailableSpaceAfterDivider() {
     let firstLength = SplitRatioLayout.firstLength(totalLength: 1000, dividerThickness: 8, ratio: 0.5)
 

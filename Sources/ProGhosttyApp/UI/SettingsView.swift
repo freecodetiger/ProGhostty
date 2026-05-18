@@ -5,6 +5,7 @@ import SwiftUI
 struct SettingsView: View {
   @EnvironmentObject private var model: AppModel
   @State private var shortcutRecorderState = ShortcutRecorderState(settings: .defaults)
+  @State private var containingWindow: NSWindow?
 
   var body: some View {
     let text = model.appText
@@ -14,9 +15,10 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 3) {
           Text(text.settings)
             .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
           Text(text.settingsCaption)
             .font(.system(size: 12))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
         }
         Spacer()
       }
@@ -31,6 +33,7 @@ struct SettingsView: View {
               TextField("/bin/zsh", text: $model.settings.defaultShell)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 13, design: .monospaced))
+                .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
             }
 
             SettingsRow(text.workingDirectory) {
@@ -41,6 +44,7 @@ struct SettingsView: View {
                 ))
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 13, design: .monospaced))
+                .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
 
                 Button(text.choose) {
                   chooseWorkingDirectory()
@@ -75,7 +79,7 @@ struct SettingsView: View {
                 Text("\(Int(model.settings.fontSize))")
                   .font(.system(size: 12, weight: .medium, design: .monospaced))
                   .frame(width: 28, alignment: .trailing)
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
               }
             }
 
@@ -101,20 +105,6 @@ struct SettingsView: View {
               }
             }
 
-            SettingsRow(text.renderer) {
-              VStack(alignment: .leading, spacing: 8) {
-                Picker("", selection: $model.settings.rendererMode) {
-                  Text(text.rendererAuto).tag(TerminalRendererMode.auto)
-                  Text(text.rendererCellGrid).tag(TerminalRendererMode.ghosttyVTCellGrid)
-                  Text(text.rendererTextFallback).tag(TerminalRendererMode.ghosttyVTTextFallback)
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-
-                Toggle(text.dirtyRowRendering, isOn: $model.settings.dirtyRowRenderingEnabled)
-                Toggle(text.forceFullRedraw, isOn: $model.settings.forceFullRedrawEnabled)
-              }
-            }
           }
 
           SettingsSection(text.history) {
@@ -127,7 +117,7 @@ struct SettingsView: View {
                 Stepper(value: $model.settings.maxOutputPreviewKB, in: 1...512, step: 1) {
                   Text("\(model.settings.maxOutputPreviewKB) KB")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
                 }
               }
             }
@@ -170,7 +160,7 @@ struct SettingsView: View {
                   .font(.system(size: 13, weight: .medium))
                 Text(text.shellToolsCaption)
                   .font(.system(size: 12))
-                  .foregroundStyle(.secondary)
+                  .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
               }
               Spacer()
               Button(text.open) {
@@ -187,18 +177,26 @@ struct SettingsView: View {
               ))
               .textFieldStyle(.roundedBorder)
               .font(.system(size: 13, design: .monospaced))
+              .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
             }
 
             Text("Used for Aliyun Fun-ASR voice input. Keychain is checked first, then this setting, then DASHSCOPE_API_KEY.")
               .font(.system(size: 12))
-              .foregroundStyle(.secondary)
+              .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
           }
 
           SettingsSection(text.about) {
             SettingsRow(text.version) {
-              Text(model.appVersionString())
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(.secondary)
+              HStack(spacing: 10) {
+                Text(model.appVersionString())
+                  .font(.system(size: 13, design: .monospaced))
+                  .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+                Spacer()
+                Button(model.isCheckingForUpdates ? text.checkingForUpdates : text.checkForUpdates) {
+                  Task { await model.checkForUpdates(manual: true) }
+                }
+                .disabled(model.isCheckingForUpdates)
+              }
             }
 
             HStack {
@@ -223,18 +221,22 @@ struct SettingsView: View {
       HStack(spacing: 10) {
         Spacer()
         Button(text.save) {
+          let window = containingWindow
           model.saveSettings()
-          model.closeSettingsWindow()
+          model.closeSettingsWindow(window)
         }
         .keyboardShortcut(.defaultAction)
       }
       .padding(.horizontal, 24)
       .padding(.vertical, 14)
-      .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+      .background(Color(nsColor: model.configurationBarBackgroundColor).opacity(0.72))
     }
     .frame(minWidth: 560, minHeight: 460)
-    .preferredColorScheme(model.appColorScheme)
-    .background(Color(nsColor: .windowBackgroundColor))
+    .preferredColorScheme(model.configurationColorScheme)
+    .environment(\.colorScheme, model.configurationColorScheme)
+    .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
+    .background(Color(nsColor: model.configurationWindowBackgroundColor))
+    .background(SettingsWindowAccessor(window: $containingWindow))
     .background(SettingsFocusResetHost())
     .background(ShortcutRecorderHost(
       isActive: shortcutRecorderState.recordingAction != nil,
@@ -347,6 +349,37 @@ private struct SettingsFocusResetHost: NSViewRepresentable {
   }
 }
 
+private struct SettingsWindowAccessor: NSViewRepresentable {
+  @Binding var window: NSWindow?
+
+  func makeNSView(context: Context) -> AccessorView {
+    let view = AccessorView()
+    view.onWindowChange = { window = $0 }
+    return view
+  }
+
+  func updateNSView(_ view: AccessorView, context: Context) {
+    view.onWindowChange = { window = $0 }
+    view.publishWindow()
+  }
+
+  final class AccessorView: NSView {
+    var onWindowChange: ((NSWindow?) -> Void)?
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      publishWindow()
+    }
+
+    func publishWindow() {
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.onWindowChange?(self.window)
+      }
+    }
+  }
+}
+
 private extension NSView {
   var hasTextInputAncestor: Bool {
     if self is NSTextView || self is NSTextField {
@@ -357,6 +390,7 @@ private extension NSView {
 }
 
 private struct ShortcutSettingsRow: View {
+  @EnvironmentObject private var model: AppModel
   let title: String
   let binding: KeyboardShortcutBinding
   let isRecording: Bool
@@ -373,16 +407,16 @@ private struct ShortcutSettingsRow: View {
           .frame(minWidth: 84, alignment: .leading)
           .padding(.horizontal, 9)
           .padding(.vertical, 5)
-          .background(Color(nsColor: .textBackgroundColor))
+          .background(Color(nsColor: model.configurationTextBackgroundColor))
           .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
           .overlay(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-              .stroke(Color(nsColor: .separatorColor).opacity(isRecording ? 0.72 : 0.36), lineWidth: 1)
+              .stroke(Color(nsColor: model.configurationSeparatorColor).opacity(isRecording ? 0.72 : 0.36), lineWidth: 1)
           )
 
         Button(text.recordShortcut, action: beginRecording)
         Button(text.resetShortcut, action: reset)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
       }
     }
   }
@@ -495,6 +529,7 @@ private extension NSEvent {
 }
 
 private struct FontPreview: View {
+  @EnvironmentObject private var model: AppModel
   let title: String
   let sample: String
   let detail: String
@@ -505,7 +540,7 @@ private struct FontPreview: View {
     VStack(alignment: .leading, spacing: 8) {
       Text(title)
         .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
 
       VStack(alignment: .leading, spacing: 5) {
         Text(sample)
@@ -514,24 +549,25 @@ private struct FontPreview: View {
           .minimumScaleFactor(0.82)
         Text(detail)
           .font(.custom(fontFamily, fixedSize: max(10, fontSize - 2)))
-          .foregroundStyle(.secondary)
+          .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
           .lineLimit(1)
           .minimumScaleFactor(0.82)
       }
       .padding(.horizontal, 12)
       .padding(.vertical, 10)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Color(nsColor: .textBackgroundColor))
+      .background(Color(nsColor: model.configurationTextBackgroundColor))
       .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       .overlay(
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-          .stroke(Color(nsColor: .separatorColor).opacity(0.36), lineWidth: 1)
+          .stroke(Color(nsColor: model.configurationSeparatorColor).opacity(0.36), lineWidth: 1)
       )
     }
   }
 }
 
 private struct SettingsSection<Content: View>: View {
+  @EnvironmentObject private var model: AppModel
   let title: String
   @ViewBuilder var content: Content
 
@@ -544,23 +580,24 @@ private struct SettingsSection<Content: View>: View {
     VStack(alignment: .leading, spacing: 10) {
       Text(title)
         .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
 
       VStack(alignment: .leading, spacing: 10) {
         content
       }
       .padding(14)
-      .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
+      .background(Color(nsColor: model.configurationSectionBackgroundColor).opacity(0.72))
       .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
       .overlay(
         RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .stroke(Color(nsColor: .separatorColor).opacity(0.38), lineWidth: 1)
+          .stroke(Color(nsColor: model.configurationSeparatorColor).opacity(0.38), lineWidth: 1)
       )
     }
   }
 }
 
 private struct SettingsRow<Content: View>: View {
+  @EnvironmentObject private var model: AppModel
   let title: String
   @ViewBuilder var content: Content
 
@@ -573,7 +610,7 @@ private struct SettingsRow<Content: View>: View {
     HStack(alignment: .center, spacing: 14) {
       Text(title)
         .font(.system(size: 13))
-        .foregroundStyle(.primary)
+        .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
         .frame(width: 150, alignment: .leading)
       content
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -247,6 +247,91 @@ struct TerminalAttributedRendererTests {
     #expect((foreground?.usingColorSpace(.deviceRGB)?.redComponent ?? 1) < 0.20)
   }
 
+  @Test func lightPaletteAdjustsLowContrastExplicitForegrounds() {
+    let frame = makeFrame(
+      cells: [
+        .init(
+          scalar: "w",
+          foreground: .init(r: 238, g: 238, b: 238),
+          background: .init(r: 0, g: 0, b: 0),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false,
+          usesDefaultForeground: false,
+          usesDefaultBackground: true
+        )
+      ])
+
+    let rendered = TerminalAttributedRenderer(palette: .light).attributedString(for: frame)
+
+    let foreground = rendered.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+    #expect(foreground?.contrastRatio(against: TerminalSurfacePalette.light.background) ?? 0 >= 3.0)
+    #expect((foreground?.lightness ?? 1) < 0.70)
+  }
+
+  @Test func darkPaletteAdjustsLowContrastExplicitForegrounds() {
+    let frame = makeFrame(
+      cells: [
+        .init(
+          scalar: "d",
+          foreground: .init(r: 22, g: 22, b: 22),
+          background: .init(r: 0, g: 0, b: 0),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false,
+          usesDefaultForeground: false,
+          usesDefaultBackground: true
+        )
+      ])
+
+    let rendered = TerminalAttributedRenderer(palette: .dark).attributedString(for: frame)
+
+    let foreground = rendered.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+    #expect(foreground?.contrastRatio(against: TerminalSurfacePalette.dark.background) ?? 0 >= 3.0)
+    #expect((foreground?.lightness ?? 0) > 0.35)
+  }
+
+  @Test func lightPaletteFaintDefaultForegroundStaysMutedButReadable() {
+    let frame = makeFrame(
+      cells: [
+        .init(
+          scalar: "n",
+          foreground: .init(r: 0, g: 0, b: 0),
+          background: .init(r: 0, g: 0, b: 0),
+          bold: false,
+          italic: false,
+          faint: false,
+          underline: false,
+          inverse: false,
+          usesDefaultForeground: true,
+          usesDefaultBackground: true
+        ),
+        .init(
+          scalar: "f",
+          foreground: .init(r: 0, g: 0, b: 0),
+          background: .init(r: 0, g: 0, b: 0),
+          bold: false,
+          italic: false,
+          faint: true,
+          underline: false,
+          inverse: false,
+          usesDefaultForeground: true,
+          usesDefaultBackground: true
+        ),
+      ])
+
+    let rendered = TerminalAttributedRenderer(palette: .light).attributedString(for: frame)
+
+    let normal = rendered.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+    let faint = rendered.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor
+    #expect((faint?.lightness ?? 0) > (normal?.lightness ?? 1))
+    #expect(faint?.contrastRatio(against: TerminalSurfacePalette.light.background) ?? 0 >= 2.0)
+  }
+
   @Test func inactiveRenderingDimsForegroundWithoutPaintingBackground() {
     let frame = makeFrame(
       cells: [
@@ -399,5 +484,23 @@ private extension NSColor {
     return abs(lhs.redComponent - rhs.redComponent) < 0.001
       && abs(lhs.greenComponent - rhs.greenComponent) < 0.001
       && abs(lhs.blueComponent - rhs.blueComponent) < 0.001
+  }
+
+  func contrastRatio(against other: NSColor) -> CGFloat {
+    let lhs = relativeLuminance
+    let rhs = other.relativeLuminance
+    let lighter = max(lhs, rhs)
+    let darker = min(lhs, rhs)
+    return (lighter + 0.05) / (darker + 0.05)
+  }
+
+  private var relativeLuminance: CGFloat {
+    guard let rgb = usingColorSpace(.deviceRGB) else { return 0 }
+    func channel(_ value: CGFloat) -> CGFloat {
+      value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(rgb.redComponent)
+      + 0.7152 * channel(rgb.greenComponent)
+      + 0.0722 * channel(rgb.blueComponent)
   }
 }

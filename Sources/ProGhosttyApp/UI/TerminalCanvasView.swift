@@ -730,7 +730,7 @@ final class TerminalPaneViewController: NSViewController {
     ])
   }
 
-  private func menu(
+  @MainActor private func menu(
     onSelect: @escaping (UUID) -> Void,
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
@@ -751,18 +751,25 @@ final class TerminalPaneViewController: NSViewController {
       NSPasteboard.general.string(forType: .string)?.isEmpty == false
     })
     menu.addItem(.separator())
-    menu.addItem(ClosureMenuItem(title: text.splitRight) { [weak self] in
-      DebugLog.write("context menu Split Right pane=\(paneId)")
-      self?.performSplitIfPossible(axis: .horizontal, onSelect: onSelect, onSplit: onSplit)
-    } isEnabled: { [weak self] in
-      self?.canSplit(axis: .horizontal) == true
-    })
-    menu.addItem(ClosureMenuItem(title: text.splitDown) { [weak self] in
-      DebugLog.write("context menu Split Down pane=\(paneId)")
-      self?.performSplitIfPossible(axis: .vertical, onSelect: onSelect, onSplit: onSplit)
-    } isEnabled: { [weak self] in
-      self?.canSplit(axis: .vertical) == true
-    })
+    menu.addItem(SplitControlMenuItem(
+      title: text.splitPane,
+      splitRightTitle: text.splitRight,
+      splitDownTitle: text.splitDown,
+      splitRight: { [weak self] in
+        DebugLog.write("context menu Split Right pane=\(paneId)")
+        self?.performSplitIfPossible(axis: .horizontal, onSelect: onSelect, onSplit: onSplit)
+      },
+      splitDown: { [weak self] in
+        DebugLog.write("context menu Split Down pane=\(paneId)")
+        self?.performSplitIfPossible(axis: .vertical, onSelect: onSelect, onSplit: onSplit)
+      },
+      canSplitRight: { [weak self] in
+        self?.canSplit(axis: .horizontal) == true
+      },
+      canSplitDown: { [weak self] in
+        self?.canSplit(axis: .vertical) == true
+      }
+    ))
     menu.addItem(.separator())
     menu.addItem(ClosureMenuItem(title: text.closePane) {
       onClose(paneId)
@@ -876,6 +883,269 @@ private final class ClosureMenuItem: NSMenuItem, NSMenuItemValidation {
 
   @MainActor func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
     isEnabledProvider()
+  }
+}
+
+@MainActor private final class SplitControlMenuItem: NSMenuItem, NSMenuItemValidation {
+  private let controlView: SplitControlMenuView
+
+  init(
+    title: String,
+    splitRightTitle: String,
+    splitDownTitle: String,
+    splitRight: @escaping () -> Void,
+    splitDown: @escaping () -> Void,
+    canSplitRight: @escaping () -> Bool,
+    canSplitDown: @escaping () -> Bool
+  ) {
+    controlView = SplitControlMenuView(
+      title: title,
+      splitRightTitle: splitRightTitle,
+      splitDownTitle: splitDownTitle,
+      splitRight: splitRight,
+      splitDown: splitDown,
+      canSplitRight: canSplitRight,
+      canSplitDown: canSplitDown
+    )
+    super.init(title: title, action: nil, keyEquivalent: "")
+    view = controlView
+  }
+
+  required init(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  @MainActor func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+    controlView.refreshEnabledState()
+    return true
+  }
+}
+
+@MainActor private final class SplitControlMenuView: NSView {
+  private let titleField = NSTextField(labelWithString: "")
+  private let rightButton: SplitGlyphButton
+  private let downButton: SplitGlyphButton
+  private let splitRight: () -> Void
+  private let splitDown: () -> Void
+  private let canSplitRight: () -> Bool
+  private let canSplitDown: () -> Bool
+
+  init(
+    title: String,
+    splitRightTitle: String,
+    splitDownTitle: String,
+    splitRight: @escaping () -> Void,
+    splitDown: @escaping () -> Void,
+    canSplitRight: @escaping () -> Bool,
+    canSplitDown: @escaping () -> Bool
+  ) {
+    self.splitRight = splitRight
+    self.splitDown = splitDown
+    self.canSplitRight = canSplitRight
+    self.canSplitDown = canSplitDown
+    rightButton = SplitGlyphButton(axis: .horizontal)
+    downButton = SplitGlyphButton(axis: .vertical)
+    super.init(frame: NSRect(
+      x: 0,
+      y: 0,
+      width: ProGhosttyContextMenuSizing.splitControlWidth,
+      height: ProGhosttyContextMenuSizing.splitControlHeight
+    ))
+
+    titleField.stringValue = title
+    titleField.font = .systemFont(ofSize: 11, weight: .medium)
+    titleField.textColor = .secondaryLabelColor
+    titleField.lineBreakMode = .byTruncatingTail
+    titleField.translatesAutoresizingMaskIntoConstraints = false
+
+    configure(button: rightButton, title: splitRightTitle, action: #selector(runSplitRight))
+    configure(button: downButton, title: splitDownTitle, action: #selector(runSplitDown))
+
+    addSubview(titleField)
+    addSubview(rightButton)
+    addSubview(downButton)
+
+    let buttonLength = CGFloat(ProGhosttyContextMenuSizing.splitButtonLength)
+    let spacing = CGFloat(ProGhosttyContextMenuSizing.splitButtonSpacing)
+    let horizontalPadding = CGFloat(ProGhosttyContextMenuSizing.splitControlHorizontalPadding)
+    let verticalPadding = CGFloat(ProGhosttyContextMenuSizing.splitControlVerticalPadding)
+    let titleHeight = CGFloat(ProGhosttyContextMenuSizing.splitControlTitleHeight)
+
+    NSLayoutConstraint.activate([
+      titleField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: horizontalPadding),
+      titleField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -horizontalPadding),
+      titleField.topAnchor.constraint(equalTo: topAnchor, constant: verticalPadding),
+      titleField.heightAnchor.constraint(equalToConstant: titleHeight),
+
+      rightButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: horizontalPadding),
+      rightButton.topAnchor.constraint(
+        equalTo: titleField.bottomAnchor,
+        constant: CGFloat(ProGhosttyContextMenuSizing.splitControlTitleSpacing)
+      ),
+      rightButton.widthAnchor.constraint(equalToConstant: buttonLength),
+      rightButton.heightAnchor.constraint(equalToConstant: buttonLength),
+
+      downButton.leadingAnchor.constraint(equalTo: rightButton.trailingAnchor, constant: spacing),
+      downButton.topAnchor.constraint(equalTo: rightButton.topAnchor),
+      downButton.widthAnchor.constraint(equalToConstant: buttonLength),
+      downButton.heightAnchor.constraint(equalToConstant: buttonLength),
+    ])
+
+    refreshEnabledState()
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    refreshEnabledState()
+  }
+
+  func refreshEnabledState() {
+    rightButton.isEnabled = canSplitRight()
+    downButton.isEnabled = canSplitDown()
+  }
+
+  private func configure(button: SplitGlyphButton, title: String, action: Selector) {
+    button.translatesAutoresizingMaskIntoConstraints = false
+    button.target = self
+    button.action = action
+    button.toolTip = title
+    button.setAccessibilityLabel(title)
+  }
+
+  @objc private func runSplitRight() {
+    guard canSplitRight() else {
+      NSSound.beep()
+      return
+    }
+    enclosingMenuItem?.menu?.cancelTracking()
+    splitRight()
+  }
+
+  @objc private func runSplitDown() {
+    guard canSplitDown() else {
+      NSSound.beep()
+      return
+    }
+    enclosingMenuItem?.menu?.cancelTracking()
+    splitDown()
+  }
+}
+
+@MainActor private final class SplitGlyphButton: NSButton {
+  private let axis: SplitAxis
+  private var trackingArea: NSTrackingArea?
+  private var isHovered = false {
+    didSet {
+      needsDisplay = true
+    }
+  }
+
+  init(axis: SplitAxis) {
+    self.axis = axis
+    super.init(frame: .zero)
+    isBordered = false
+    title = ""
+    imagePosition = .imageOnly
+    focusRingType = .none
+    wantsLayer = true
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let trackingArea {
+      removeTrackingArea(trackingArea)
+    }
+    let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect]
+    let next = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+    addTrackingArea(next)
+    trackingArea = next
+  }
+
+  override func mouseEntered(with event: NSEvent) {
+    isHovered = true
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    isHovered = false
+  }
+
+  override var isEnabled: Bool {
+    didSet {
+      needsDisplay = true
+    }
+  }
+
+  override var isHighlighted: Bool {
+    didSet {
+      needsDisplay = true
+    }
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    let activeAlpha: CGFloat = isEnabled ? 1 : 0.36
+    let backgroundAlpha: CGFloat = {
+      if !isEnabled { return 0.035 }
+      if isHighlighted { return 0.16 }
+      if isHovered { return 0.11 }
+      return 0.055
+    }()
+    let rect = bounds.insetBy(dx: 1, dy: 1)
+    let background = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+    NSColor.labelColor.withAlphaComponent(backgroundAlpha).setFill()
+    background.fill()
+    NSColor.separatorColor.withAlphaComponent(isHovered && isEnabled ? 0.52 : 0.32).setStroke()
+    background.lineWidth = 1
+    background.stroke()
+
+    drawSplitGlyph(in: bounds.insetBy(dx: 10, dy: 12), alpha: activeAlpha)
+  }
+
+  private func drawSplitGlyph(in rect: NSRect, alpha: CGFloat) {
+    let outer = NSBezierPath(roundedRect: rect, xRadius: 2.5, yRadius: 2.5)
+    NSColor.labelColor.withAlphaComponent(0.34 * alpha).setStroke()
+    outer.lineWidth = 1.15
+    outer.stroke()
+
+    let highlightRect: NSRect
+    switch axis {
+    case .horizontal:
+      highlightRect = NSRect(
+        x: rect.midX,
+        y: rect.minY,
+        width: rect.width / 2,
+        height: rect.height
+      ).insetBy(dx: 2, dy: 2)
+    case .vertical:
+      highlightRect = NSRect(
+        x: rect.minX,
+        y: rect.midY,
+        width: rect.width,
+        height: rect.height / 2
+      ).insetBy(dx: 2, dy: 2)
+    }
+    NSColor.labelColor.withAlphaComponent(0.13 * alpha).setFill()
+    NSBezierPath(roundedRect: highlightRect, xRadius: 1.5, yRadius: 1.5).fill()
+
+    let divider = NSBezierPath()
+    switch axis {
+    case .horizontal:
+      divider.move(to: NSPoint(x: rect.midX, y: rect.minY + 1.5))
+      divider.line(to: NSPoint(x: rect.midX, y: rect.maxY - 1.5))
+    case .vertical:
+      divider.move(to: NSPoint(x: rect.minX + 1.5, y: rect.midY))
+      divider.line(to: NSPoint(x: rect.maxX - 1.5, y: rect.midY))
+    }
+    NSColor.labelColor.withAlphaComponent(0.48 * alpha).setStroke()
+    divider.lineWidth = 1.3
+    divider.stroke()
   }
 }
 

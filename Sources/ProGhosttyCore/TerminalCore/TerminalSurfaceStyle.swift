@@ -83,3 +83,127 @@ public enum TerminalSurfaceStyle {
     textView.insertionPointColor = palette.cursorBackground
   }
 }
+
+enum TerminalColorResolver {
+  static func foreground(
+    for cell: GhosttyTerminalFrame.Cell,
+    palette: TerminalSurfacePalette,
+    isFocused: Bool
+  ) -> NSColor {
+    let colors = resolvedColors(for: cell, palette: palette, isFocused: isFocused)
+    return colors.foreground
+  }
+
+  static func background(for cell: GhosttyTerminalFrame.Cell, palette: TerminalSurfacePalette) -> NSColor {
+    baseColor(cell.background, fallback: cell.usesDefaultBackground ? palette.background : nil)
+  }
+
+  static func resolvedColors(
+    for cell: GhosttyTerminalFrame.Cell,
+    palette: TerminalSurfacePalette,
+    isFocused: Bool
+  ) -> (foreground: NSColor, background: NSColor) {
+    let baseBackground = background(for: cell, palette: palette)
+    let baseForeground = baseColor(
+      cell.foreground,
+      fallback: cell.usesDefaultForeground ? palette.foreground : nil
+    )
+
+    var foreground = cell.faint
+      ? faintColor(baseForeground, background: baseBackground, usesDefaultForeground: cell.usesDefaultForeground, palette: palette)
+      : baseForeground
+    var background = baseBackground
+
+    if cell.inverse {
+      swap(&foreground, &background)
+    }
+
+    let activeMinimumContrast: CGFloat = cell.faint ? 2.0 : 3.0
+    foreground = foreground.withMinimumContrast(activeMinimumContrast, against: background)
+
+    if !isFocused {
+      foreground = foreground.blended(toward: palette.background, amount: palette.inactiveForegroundBlend)
+      let inactiveMinimumContrast: CGFloat = cell.faint ? 1.8 : 2.4
+      foreground = foreground.withMinimumContrast(inactiveMinimumContrast, against: background)
+    }
+
+    return (foreground, background)
+  }
+
+  private static func faintColor(
+    _ foreground: NSColor,
+    background: NSColor,
+    usesDefaultForeground: Bool,
+    palette: TerminalSurfacePalette
+  ) -> NSColor {
+    if usesDefaultForeground {
+      return palette.faintForeground
+    }
+    return foreground.blended(toward: background, amount: 0.46)
+  }
+
+  private static func baseColor(_ rgb: GhosttyTerminalFrame.RGB, fallback: NSColor?) -> NSColor {
+    if let fallback {
+      return fallback
+    }
+    return NSColor(
+      calibratedRed: CGFloat(rgb.r) / 255.0,
+      green: CGFloat(rgb.g) / 255.0,
+      blue: CGFloat(rgb.b) / 255.0,
+      alpha: 1
+    )
+  }
+}
+
+private extension NSColor {
+  func withMinimumContrast(_ minimumContrast: CGFloat, against background: NSColor) -> NSColor {
+    guard contrastRatio(against: background) < minimumContrast else { return self }
+    let backgroundIsLight = background.relativeLuminance >= 0.5
+    let target = backgroundIsLight ? NSColor.black : NSColor.white
+
+    var lower: CGFloat = 0
+    var upper: CGFloat = 1
+    var candidate = self
+    for _ in 0..<14 {
+      let midpoint = (lower + upper) / 2
+      let next = blended(toward: target, amount: midpoint)
+      if next.contrastRatio(against: background) >= minimumContrast {
+        candidate = next
+        upper = midpoint
+      } else {
+        lower = midpoint
+      }
+    }
+    return candidate
+  }
+
+  func blended(toward target: NSColor, amount: CGFloat) -> NSColor {
+    let lhs = usingColorSpace(.deviceRGB) ?? self
+    let rhs = target.usingColorSpace(.deviceRGB) ?? target
+    let amount = min(1, max(0, amount))
+    return NSColor(
+      calibratedRed: lhs.redComponent + (rhs.redComponent - lhs.redComponent) * amount,
+      green: lhs.greenComponent + (rhs.greenComponent - lhs.greenComponent) * amount,
+      blue: lhs.blueComponent + (rhs.blueComponent - lhs.blueComponent) * amount,
+      alpha: lhs.alphaComponent + (rhs.alphaComponent - lhs.alphaComponent) * amount
+    )
+  }
+
+  func contrastRatio(against other: NSColor) -> CGFloat {
+    let lhs = relativeLuminance
+    let rhs = other.relativeLuminance
+    let lighter = max(lhs, rhs)
+    let darker = min(lhs, rhs)
+    return (lighter + 0.05) / (darker + 0.05)
+  }
+
+  var relativeLuminance: CGFloat {
+    let rgb = usingColorSpace(.deviceRGB) ?? self
+    func channel(_ value: CGFloat) -> CGFloat {
+      value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(rgb.redComponent)
+      + 0.7152 * channel(rgb.greenComponent)
+      + 0.0722 * channel(rgb.blueComponent)
+  }
+}

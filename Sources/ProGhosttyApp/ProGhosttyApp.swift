@@ -9,8 +9,15 @@ struct ProGhosttyApp: App {
     WindowGroup("ProGhostty") {
       RootView()
         .environmentObject(model)
-        .frame(minWidth: 980, minHeight: 640)
+        .frame(
+          minWidth: ProGhosttyWindowSizing.minimumContentWidth,
+          minHeight: ProGhosttyWindowSizing.minimumContentHeight
+        )
     }
+    .defaultSize(
+      width: ProGhosttyWindowSizing.defaultContentWidth,
+      height: ProGhosttyWindowSizing.defaultContentHeight
+    )
     .commands {
       CommandGroup(replacing: .appSettings) {
         Button(model.appText.settings + "...") {

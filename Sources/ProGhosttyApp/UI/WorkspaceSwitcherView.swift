@@ -8,106 +8,118 @@ struct WorkspaceSwitcherView: View {
   @State private var renameDraft = ""
   @State private var isCreatingWorkspace = false
   @State private var createDraft = ""
-  @FocusState private var focusedField: FocusTarget?
-
-  private enum FocusTarget: Hashable {
-    case create
-    case rename
-  }
+  @State private var createFocusRequest = 0
+  @State private var renameFocusRequest = 0
 
   var body: some View {
     let text = model.appText
 
-    ZStack {
-      Color.black.opacity(0.18)
-        .ignoresSafeArea()
-        .onTapGesture {
-          model.closeWorkspaceSwitcher()
-        }
-
-      VStack(spacing: 0) {
-        VStack(spacing: 2) {
-          ForEach(model.workspaceSwitcherState.decoratedWorkspaces) { item in
-            let isRenaming = renamingWorkspaceID == item.workspace.id
-            WorkspaceSwitcherRow(
-              item: item,
-              isSelected: !isCreatingWorkspace
-                && model.workspaceSwitcherState.selectedWorkspaceID == item.workspace.id,
-              isRenaming: isRenaming,
-              renameDraft: $renameDraft,
-              sessionCount: model.sessionCount(forWorkspaceListID: item.workspace.id),
-              canDelete: true,
-              text: text
-            ) {
-              model.activateWorkspaceFromSwitcher(item.workspace.id)
-            } deleteAction: {
-              model.deleteWorkspaceFromSwitcher(item.workspace.id)
-            } renameAction: {
-              beginRenaming(item.workspace)
-            } commitRename: {
-              commitRenaming()
-            } cancelRename: {
-              cancelRenaming()
-            }
-          }
-
-          WorkspaceCreateRow(
-            title: createTitle(text),
-            caption: text.createWorkspaceCaption,
-            placeholder: text.newWorkspaceName,
-            isSelected: model.workspaceSwitcherState.isCreateWorkspaceSelected,
-            isCreating: isCreatingWorkspace,
-            draft: $createDraft,
-            begin: { beginCreatingWorkspace() },
-            commit: { commitCreatingWorkspace() }
-          )
-          .focused($focusedField, equals: .create)
-          .onChange(of: isCreatingWorkspace) { value in
-            if value {
-              focusedField = .create
-            }
-          }
-        }
-        .padding(8)
-
-        HStack(spacing: 12) {
-          Text(text.enterWorkspaceHint)
-          Text(text.renameShortcutHint)
-          Text(text.deleteWorkspaceHint)
-        }
-        .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(.tertiary)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 10)
-      }
-      .frame(width: 580)
-      .background(.regularMaterial)
-      .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-          .stroke(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1)
-      )
-      .shadow(color: .black.opacity(0.22), radius: 24, x: 0, y: 18)
-      .background(WorkspaceSwitcherKeyHandler(
-        onUp: { model.moveWorkspaceSwitcherSelection(delta: -1) },
-        onDown: { model.moveWorkspaceSwitcherSelection(delta: 1) },
-        onEnter: { activateSelectedItem() },
-        onTab: { activateSelectedItem() },
-        onSpace: { beginRenamingSelectedWorkspace() },
-        onDelete: { deleteSelectedWorkspace() },
-        onEscape: { model.closeWorkspaceSwitcher() },
-        onCommitRename: { commitRenaming() },
-        onCancelRename: { cancelRenaming() },
-        onCommitCreate: { commitCreatingWorkspace() },
-        onCancelCreate: { cancelCreatingWorkspace() },
-        isRenaming: { renamingWorkspaceID != nil },
-        isCreating: { isCreatingWorkspace },
-        canBeginRename: {
-          renamingWorkspaceID == nil
-            && !isCreatingWorkspace
-            && model.workspaceSwitcherState.selectedWorkspaceID != nil
-        }
+    GeometryReader { proxy in
+      let panelWidth = CGFloat(ProGhosttyOverlaySizing.workspaceSwitcherWidth(
+        containerWidth: Double(proxy.size.width)
       ))
+      let workspaceCount = model.workspaceSwitcherState.decoratedWorkspaces.count
+      let panelHeight = CGFloat(ProGhosttyOverlaySizing.workspaceSwitcherPanelHeight(
+        workspaceCount: workspaceCount,
+        containerHeight: Double(proxy.size.height)
+      ))
+      let listHeight = CGFloat(ProGhosttyOverlaySizing.workspaceSwitcherListHeight(
+        workspaceCount: workspaceCount,
+        containerHeight: Double(proxy.size.height)
+      ))
+
+      ZStack {
+        Color.black.opacity(ProGhosttyOverlayStyle.workspaceSwitcherBackdropOpacity)
+          .ignoresSafeArea()
+          .contentShape(Rectangle())
+          .onTapGesture {
+            model.closeWorkspaceSwitcher()
+          }
+
+        VStack(spacing: 0) {
+          ScrollView {
+            VStack(spacing: 2) {
+              ForEach(model.workspaceSwitcherState.decoratedWorkspaces) { item in
+                let isRenaming = renamingWorkspaceID == item.workspace.id
+                WorkspaceSwitcherRow(
+                  item: item,
+                isSelected: !isCreatingWorkspace
+                  && model.workspaceSwitcherState.selectedWorkspaceID == item.workspace.id,
+                isRenaming: isRenaming,
+                renameDraft: $renameDraft,
+                focusRequest: renameFocusRequest,
+                sessionCount: model.sessionCount(forWorkspaceListID: item.workspace.id),
+                canDelete: true,
+                text: text
+                ) {
+                  model.activateWorkspaceFromSwitcher(item.workspace.id)
+                } deleteAction: {
+                  model.deleteWorkspaceFromSwitcher(item.workspace.id)
+                } renameAction: {
+                  beginRenaming(item.workspace)
+                } commitRename: {
+                  commitRenaming()
+                } cancelRename: {
+                  cancelRenaming()
+                }
+              }
+
+              WorkspaceCreateRow(
+                title: createTitle(text),
+                caption: text.createWorkspaceCaption,
+                placeholder: text.newWorkspaceName,
+                isSelected: model.workspaceSwitcherState.isCreateWorkspaceSelected,
+                isCreating: isCreatingWorkspace,
+                draft: $createDraft,
+                focusRequest: createFocusRequest,
+                begin: { beginCreatingWorkspace() },
+                commit: { commitCreatingWorkspace() }
+              )
+            }
+            .padding(8)
+          }
+          .scrollIndicators(.hidden)
+          .frame(height: listHeight)
+
+          HStack(spacing: 12) {
+            Text(text.enterWorkspaceHint)
+            Text(text.renameShortcutHint)
+            Text(text.deleteWorkspaceHint)
+          }
+          .font(.system(size: 10, weight: .medium))
+          .foregroundStyle(.tertiary)
+          .padding(.horizontal, 16)
+          .padding(.bottom, 10)
+        }
+        .frame(width: panelWidth, height: panelHeight)
+        .background(.regularMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+          RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .stroke(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 24, x: 0, y: 18)
+        .background(WorkspaceSwitcherKeyHandler(
+          onUp: { model.moveWorkspaceSwitcherSelection(delta: -1) },
+          onDown: { model.moveWorkspaceSwitcherSelection(delta: 1) },
+          onEnter: { activateSelectedItem() },
+          onTab: { activateSelectedItem() },
+          onSpace: { beginRenamingSelectedWorkspace() },
+          onDelete: { deleteSelectedWorkspace() },
+          onEscape: { model.closeWorkspaceSwitcher() },
+          onCommitRename: { commitRenaming() },
+          onCancelRename: { cancelRenaming() },
+          onCommitCreate: { commitCreatingWorkspace() },
+          onCancelCreate: { cancelCreatingWorkspace() },
+          isRenaming: { renamingWorkspaceID != nil },
+          isCreating: { isCreatingWorkspace },
+          canBeginRename: {
+            renamingWorkspaceID == nil
+              && !isCreatingWorkspace
+              && model.workspaceSwitcherState.selectedWorkspaceID != nil
+          }
+        ))
+      }
     }
   }
 
@@ -127,14 +139,14 @@ struct WorkspaceSwitcherView: View {
     model.selectWorkspaceCreationCard()
     isCreatingWorkspace = true
     createDraft = ""
-    focusedField = .create
+    createFocusRequest &+= 1
   }
 
   private func commitCreatingWorkspace() {
     guard isCreatingWorkspace else { return }
     guard !createDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       NSSound.beep()
-      focusedField = .create
+      createFocusRequest &+= 1
       return
     }
     model.createAndOpenWorkspace(name: createDraft)
@@ -161,7 +173,7 @@ struct WorkspaceSwitcherView: View {
   private func beginRenaming(_ workspace: Workspace) {
     renamingWorkspaceID = workspace.id
     renameDraft = workspace.name
-    focusedField = .rename
+    renameFocusRequest &+= 1
   }
 
   private func commitRenaming() {
@@ -191,6 +203,7 @@ private struct WorkspaceSwitcherRow: View {
   let isSelected: Bool
   let isRenaming: Bool
   @Binding var renameDraft: String
+  let focusRequest: Int
   let sessionCount: Int
   let canDelete: Bool
   let text: AppText
@@ -215,6 +228,9 @@ private struct WorkspaceSwitcherRow: View {
             .font(.system(size: 13, weight: .medium))
             .focused($isRenameFocused)
             .onSubmit(commitRename)
+            .onAppear {
+              requestRenameFocus()
+            }
         } else {
           Text(item.workspace.name)
             .font(.system(size: 13, weight: .medium))
@@ -256,6 +272,7 @@ private struct WorkspaceSwitcherRow: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
+    .frame(minHeight: CGFloat(ProGhosttyOverlaySizing.workspaceSwitcherCardMinimumHeight))
     .background(background)
     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     .contentShape(Rectangle())
@@ -266,11 +283,20 @@ private struct WorkspaceSwitcherRow: View {
     }
     .onAppear {
       if isRenaming {
-        isRenameFocused = true
+        requestRenameFocus()
       }
     }
     .onChange(of: isRenaming) { value in
-      isRenameFocused = value
+      if value {
+        requestRenameFocus()
+      } else {
+        isRenameFocused = false
+      }
+    }
+    .onChange(of: focusRequest) { _ in
+      if isRenaming {
+        requestRenameFocus()
+      }
     }
     .contextMenu {
       Button(text.renameWorkspace) {
@@ -328,6 +354,13 @@ private struct WorkspaceSwitcherRow: View {
       return Color.clear
     }
   }
+
+  private func requestRenameFocus() {
+    isRenameFocused = true
+    DispatchQueue.main.async {
+      isRenameFocused = true
+    }
+  }
 }
 
 private struct WorkspaceCreateRow: View {
@@ -337,6 +370,7 @@ private struct WorkspaceCreateRow: View {
   let isSelected: Bool
   let isCreating: Bool
   @Binding var draft: String
+  let focusRequest: Int
   let begin: () -> Void
   let commit: () -> Void
   @FocusState private var isFocused: Bool
@@ -353,6 +387,9 @@ private struct WorkspaceCreateRow: View {
             .font(.system(size: 13, weight: .medium))
             .focused($isFocused)
             .onSubmit(commit)
+            .onAppear {
+              requestCreateFocus()
+            }
         } else {
           Text(title)
             .font(.system(size: 13, weight: .medium))
@@ -367,6 +404,7 @@ private struct WorkspaceCreateRow: View {
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
+    .frame(minHeight: CGFloat(ProGhosttyOverlaySizing.workspaceSwitcherCardMinimumHeight))
     .contentShape(Rectangle())
     .foregroundStyle(.secondary)
     .background(background)
@@ -376,11 +414,20 @@ private struct WorkspaceCreateRow: View {
     }
     .onAppear {
       if isCreating {
-        isFocused = true
+        requestCreateFocus()
       }
     }
     .onChange(of: isCreating) { value in
-      isFocused = value
+      if value {
+        requestCreateFocus()
+      } else {
+        isFocused = false
+      }
+    }
+    .onChange(of: focusRequest) { _ in
+      if isCreating {
+        requestCreateFocus()
+      }
     }
   }
 
@@ -389,6 +436,13 @@ private struct WorkspaceCreateRow: View {
       return Color.primary.opacity(0.12)
     }
     return isSelected ? Color.primary.opacity(0.08) : Color.clear
+  }
+
+  private func requestCreateFocus() {
+    isFocused = true
+    DispatchQueue.main.async {
+      isFocused = true
+    }
   }
 }
 

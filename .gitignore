@@ -4,6 +4,8 @@
 .tools/
 .zig-cache-global/
 DerivedData/
+dist/
+Resources/ProGhostty.icns
 zig-out/
 Vendor/ghostty/zig-out/
 Vendor/ghostty/.zig-cache/

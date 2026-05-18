@@ -54,7 +54,6 @@ final class AppModel: ObservableObject {
   @Published var activeWorkspaceID: UUID?
   @Published var isWorkspaceSwitcherPresented = false
   @Published var isHistoryPresented = false
-  @Published var isPluginManagerPresented = false
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
   @Published var titlebarToast: TitlebarToast?
   @Published var commandLine = ""
@@ -67,6 +66,8 @@ final class AppModel: ObservableObject {
     }
   }
   @Published var requestedPluginPlanID: String?
+  @Published var requestedPluginScanToken = 0
+  @Published var isCheckingForUpdates = false
   @Published var shellIntegrationState = "partial"
   @Published var isAICompanionPresented = false
   @Published var activeAISession: AISession?
@@ -76,6 +77,7 @@ final class AppModel: ObservableObject {
   private let surfaceRegistry: TerminalSurfaceRegistry
   private let paneWorkspaceController: PaneWorkspaceController
   private let aiSessionManager: AISessionManager
+  private let updateChecker = AppUpdateChecker()
   private let focusStore = TerminalFocusStore()
   private var indexer: CommandBlockIndexer
   private let historyStore: HistoryStore?
@@ -83,15 +85,20 @@ final class AppModel: ObservableObject {
   private let settingsStore: SettingsStore
   private let terminalActionDispatcher = TerminalActionDispatcher()
   private var settingsWindowController: NSWindowController?
+  private var pluginManagerWindowController: NSWindowController?
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
   private var titlebarToastTask: Task<Void, Never>?
 
   struct TitlebarToast: Equatable, Sendable {
     var message: String
     var style: Style
+    var lifetime: ProGhosttyTitlebarToastLifetime
 
     enum Style: Equatable, Sendable {
       case success
+      case info
+      case error
+      case update(URL)
     }
   }
 
@@ -131,6 +138,7 @@ final class AppModel: ObservableObject {
     Task { await consumeEvents() }
     refreshWorkspaces()
     createAndActivateWorkspace()
+    Task { await checkForUpdates(manual: false) }
   }
 
   func createAndActivateWorkspace(workspace: Workspace? = nil) {
@@ -246,6 +254,46 @@ final class AppModel: ObservableObject {
 
   var terminalBackgroundColor: NSColor {
     terminalPalette.background
+  }
+
+  var configurationColorScheme: ColorScheme {
+    usesDarkAppearance ? .dark : .light
+  }
+
+  var settingsThemePalette: ProGhosttySettingsThemeColors {
+    usesDarkAppearance ? ProGhosttySettingsThemePalette.dark : ProGhosttySettingsThemePalette.light
+  }
+
+  var configurationWindowBackgroundColor: NSColor {
+    settingsThemePalette.windowBackground
+  }
+
+  var configurationBarBackgroundColor: NSColor {
+    settingsThemePalette.footerBackground
+  }
+
+  var configurationSectionBackgroundColor: NSColor {
+    settingsThemePalette.controlBackground
+  }
+
+  var configurationTextBackgroundColor: NSColor {
+    settingsThemePalette.textFieldBackground
+  }
+
+  var configurationSeparatorColor: NSColor {
+    settingsThemePalette.separator
+  }
+
+  var configurationPrimaryTextColor: NSColor {
+    settingsThemePalette.primaryText
+  }
+
+  var configurationSecondaryTextColor: NSColor {
+    settingsThemePalette.secondaryText
+  }
+
+  var configurationTertiaryTextColor: NSColor {
+    settingsThemePalette.tertiaryText
   }
 
   var selectedSessionID: TerminalSessionID? {
@@ -499,7 +547,51 @@ final class AppModel: ObservableObject {
 
   func saveSettings() {
     try? settingsStore.save(settings)
-    showTitlebarToast(appText.settingsSavedToast, style: .success)
+    showTitlebarToast(appText.settingsSavedToast, style: .success, lifetime: .settingsSaved)
+  }
+
+  func checkForUpdates(manual: Bool) async {
+    if manual {
+      isCheckingForUpdates = true
+    }
+    defer {
+      if manual {
+        isCheckingForUpdates = false
+      }
+    }
+
+    do {
+      let availability = try await updateChecker.check(currentVersion: appShortVersionString())
+      switch availability {
+      case .upToDate:
+        if manual {
+          showTitlebarToast(appText.upToDateToast, style: .success, lifetime: .transient(2.4))
+        }
+      case .available(let update):
+        showTitlebarToast(
+          "\(appText.updateAvailableToast) \(update.version)",
+          style: .update(update.releaseURL),
+          lifetime: .persistent
+        )
+      }
+    } catch {
+      if manual {
+        showTitlebarToast(appText.updateCheckFailedToast, style: .error, lifetime: .transient(2.8))
+      }
+    }
+  }
+
+  func openTitlebarToastAction() {
+    guard let titlebarToast else { return }
+    switch titlebarToast.style {
+    case .update(let url):
+      NSWorkspace.shared.open(url)
+      self.titlebarToast = nil
+      titlebarToastTask?.cancel()
+      titlebarToastTask = nil
+    case .success, .info, .error:
+      break
+    }
   }
 
   func resetSettings() {
@@ -507,14 +599,23 @@ final class AppModel: ObservableObject {
     saveSettings()
   }
 
-  func closeSettingsWindow() {
+  func closeSettingsWindow(_ window: NSWindow? = nil) {
+    if let window {
+      window.close()
+      if window === settingsWindowController?.window {
+        settingsWindowController = nil
+      }
+      return
+    }
+
     settingsWindowController?.window?.close()
+    settingsWindowController = nil
   }
 
   func appVersionString() -> String {
-    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+    let version = appShortVersionString()
     let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
-    switch (version?.isEmpty == false ? version : nil, build?.isEmpty == false ? build : nil) {
+    switch (version.isEmpty == false ? version : nil, build?.isEmpty == false ? build : nil) {
     case (.some(let version), .some(let build)):
       return "\(version) (\(build))"
     case (.some(let version), .none):
@@ -526,9 +627,13 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private func appShortVersionString() -> String {
+    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+  }
+
   func openSettingsWindow() {
     if let window = settingsWindowController?.window {
-      applySettingsWindowAppearance(to: window)
+      applyConfigurationWindowAppearance(to: window)
       window.makeKeyAndOrderFront(nil)
       NSApp.activate(ignoringOtherApps: true)
       return
@@ -537,7 +642,7 @@ final class AppModel: ObservableObject {
     let controller = NSHostingController(
       rootView: SettingsView()
         .environmentObject(self)
-        .preferredColorScheme(appColorScheme)
+        .preferredColorScheme(configurationColorScheme)
     )
     let window = NSWindow(contentViewController: controller)
     window.title = "Settings"
@@ -547,7 +652,7 @@ final class AppModel: ObservableObject {
     window.isReleasedWhenClosed = false
     window.center()
     window.toolbarStyle = .preference
-    applySettingsWindowAppearance(to: window)
+    applyConfigurationWindowAppearance(to: window)
 
     let windowController = NSWindowController(window: window)
     settingsWindowController = windowController
@@ -560,7 +665,10 @@ final class AppModel: ObservableObject {
     surfaceRegistry.applyFont(family: settings.fontFamily, size: CGFloat(settings.fontSize))
     surfaceRegistry.applyRendererOptions(settings.terminalRendererOptions)
     applyFocusedTerminalSurface()
-    for window in NSApp.windows where window !== settingsWindowController?.window {
+    for window in NSApp.windows
+      where window !== settingsWindowController?.window
+        && window !== pluginManagerWindowController?.window
+    {
       ProGhosttyWindowAppearance.applyTerminalChrome(
         to: window,
         backgroundColor: terminalBackgroundColor,
@@ -568,15 +676,24 @@ final class AppModel: ObservableObject {
       )
     }
     if let window = settingsWindowController?.window {
-      applySettingsWindowAppearance(to: window)
+      applyConfigurationWindowAppearance(to: window)
+    }
+    if let window = pluginManagerWindowController?.window {
+      applyConfigurationWindowAppearance(to: window)
     }
   }
 
-  private func applySettingsWindowAppearance(to window: NSWindow) {
-    window.appearance = NSAppearance(named: usesDarkAppearance ? .darkAqua : .aqua)
-    window.backgroundColor = .controlBackgroundColor
+  private func applyConfigurationWindowAppearance(to window: NSWindow) {
+    let appearance = NSAppearance(named: usesDarkAppearance ? .darkAqua : .aqua)
+    window.appearance = appearance
+    window.contentView?.appearance = appearance
+    window.contentViewController?.view.appearance = appearance
+    let background = settingsThemePalette.windowBackground
+    window.backgroundColor = background
     window.contentView?.wantsLayer = true
-    window.contentView?.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+    window.contentView?.layer?.backgroundColor = background.cgColor
+    window.contentViewController?.view.wantsLayer = true
+    window.contentViewController?.view.layer?.backgroundColor = background.cgColor
   }
 
   private func applyFocusedTerminalSurface() {
@@ -590,11 +707,17 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func showTitlebarToast(_ message: String, style: TitlebarToast.Style) {
+  private func showTitlebarToast(
+    _ message: String,
+    style: TitlebarToast.Style,
+    lifetime: ProGhosttyTitlebarToastLifetime = .transient(1.8)
+  ) {
     titlebarToastTask?.cancel()
-    titlebarToast = TitlebarToast(message: message, style: style)
+    titlebarToastTask = nil
+    titlebarToast = TitlebarToast(message: message, style: style, lifetime: lifetime)
+    guard let delay = lifetime.dismissDelay else { return }
     titlebarToastTask = Task { [weak self] in
-      try? await Task.sleep(nanoseconds: 1_800_000_000)
+      try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
       await MainActor.run {
         self?.titlebarToast = nil
       }
@@ -647,7 +770,6 @@ final class AppModel: ObservableObject {
     if let query {
       historySearch = query
     }
-    isPluginManagerPresented = false
     isWorkspaceSwitcherPresented = false
     isHistoryPresented = true
     searchHistory()
@@ -663,35 +785,62 @@ final class AppModel: ObservableObject {
   }
 
   func openPlugins(scan: Bool = false) {
-    if let window = settingsWindowController?.window {
-      window.close()
-      settingsWindowController = nil
+    if scan {
+      requestedPluginScanToken += 1
     }
-    isHistoryPresented = false
-    isWorkspaceSwitcherPresented = false
-    isPluginManagerPresented = true
+
+    if let window = pluginManagerWindowController?.window {
+      applyConfigurationWindowAppearance(to: window)
+      window.makeKeyAndOrderFront(nil)
+      NSApp.activate(ignoringOtherApps: true)
+      return
+    }
+
+    let controller = NSHostingController(
+      rootView: PluginManagerView()
+        .environmentObject(self)
+        .preferredColorScheme(configurationColorScheme)
+    )
+    let window = NSWindow(contentViewController: controller)
+    window.title = appText.shellEnhancements
+    window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+    window.setContentSize(NSSize(
+      width: ProGhosttyWindowSizing.pluginManagerDefaultContentWidth,
+      height: ProGhosttyWindowSizing.pluginManagerDefaultContentHeight
+    ))
+    window.minSize = NSSize(
+      width: ProGhosttyWindowSizing.pluginManagerMinimumContentWidth,
+      height: ProGhosttyWindowSizing.pluginManagerMinimumContentHeight
+    )
+    window.isReleasedWhenClosed = false
+    window.center()
+    window.toolbarStyle = .unified
+    applyConfigurationWindowAppearance(to: window)
+
+    let windowController = NSWindowController(window: window)
+    pluginManagerWindowController = windowController
+    windowController.showWindow(nil)
     NSApp.activate(ignoringOtherApps: true)
   }
 
   func openPluginPlan(_ pack: String) {
-    openPlugins()
     requestedPluginPlanID = pack
+    openPlugins()
   }
 
   func closePlugins() {
-    isPluginManagerPresented = false
+    pluginManagerWindowController?.window?.close()
+    pluginManagerWindowController = nil
   }
 
   func closeUtilityOverlays() {
     isHistoryPresented = false
-    isPluginManagerPresented = false
     isWorkspaceSwitcherPresented = false
     isAICompanionPresented = false
   }
 
   func openAICompanion(profile: AICLIProfile = .codex, mode: AIOpenMode = .rightSplit) {
     isHistoryPresented = false
-    isPluginManagerPresented = false
     isWorkspaceSwitcherPresented = false
     aiErrorMessage = nil
     if activeAISession == nil {
@@ -901,7 +1050,6 @@ final class AppModel: ObservableObject {
 
   func openWorkspaceSwitcher() {
     isHistoryPresented = false
-    isPluginManagerPresented = false
     syncWorkspaceSwitcherState()
     isWorkspaceSwitcherPresented = true
   }

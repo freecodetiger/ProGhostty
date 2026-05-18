@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  macos-dmg:
+    name: Build macOS DMG
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show Swift toolchain
+        run: swift --version
+
+      - name: Install Zig
+        run: |
+          mkdir -p .tools
+          curl -L https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz -o .tools/zig.tar.xz
+          tar -xf .tools/zig.tar.xz -C .tools
+
+      - name: Build Ghostty VT
+        run: |
+          cd Vendor/ghostty
+          ../../.tools/zig-aarch64-macos-0.15.2/zig build \
+            --global-cache-dir ../../.zig-cache-global \
+            -Demit-lib-vt=true
+
+      - name: Test
+        run: swift test --no-parallel
+
+      - name: Build DMG
+        env:
+          VERSION: ${{ github.ref_name }}
+          BUILD: ${{ github.run_number }}
+        run: |
+          VERSION="${VERSION#v}" BUILD="$BUILD" scripts/build-dmg.sh release
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ProGhostty v0.1.0 is the first formal DMG build.
+
+            Highlights:
+            - Native macOS terminal window with real PTY-backed sessions.
+            - Ghostty VT cell-grid rendering path for terminal output.
+            - Split panes, workspaces, settings, plugin manager, and update checks.
+            - Ad-hoc signed DMG. macOS may warn that the developer cannot be verified.

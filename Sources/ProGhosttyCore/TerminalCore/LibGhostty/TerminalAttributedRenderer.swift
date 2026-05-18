@@ -9,8 +9,6 @@ extension NSAttributedString.Key {
 public final class TerminalAttributedRenderer {
   private let font: NSFont
   private let boldFont: NSFont
-  private let defaultBackground: NSColor
-  private let defaultForeground: NSColor
   private let cursorBackground: NSColor
   private let cursorForeground: NSColor
   private let palette: TerminalSurfacePalette
@@ -26,8 +24,6 @@ public final class TerminalAttributedRenderer {
     boldFont = Self.font(family: fontFamily, size: fontSize, weight: .semibold)
     self.palette = palette
     self.isFocused = isFocused
-    defaultBackground = palette.background
-    defaultForeground = palette.foreground
     cursorBackground = palette.cursorBackground
     cursorForeground = palette.cursorForeground
   }
@@ -42,21 +38,14 @@ public final class TerminalAttributedRenderer {
         let cell = frame.cells[index]
         let isCursor = frame.cursorVisible && row == frame.cursorY && col == frame.cursorX
 
-        let foregroundBase = color(cell.foreground, faint: cell.faint, fallback: cell.usesDefaultForeground ? defaultForeground : nil)
-        let backgroundBase = color(cell.background, faint: false, fallback: cell.usesDefaultBackground ? defaultBackground : nil)
-        let (foreground, background) = resolvedColors(
-          foreground: foregroundBase,
-          background: backgroundBase,
-          inverse: cell.inverse
-        )
-        let displayForeground = adjustedForeground(foreground)
+        let colors = TerminalColorResolver.resolvedColors(for: cell, palette: palette, isFocused: isFocused)
 
         var attributes: [NSAttributedString.Key: Any] = [
           .font: cell.bold ? boldFont : font,
-          .foregroundColor: displayForeground,
+          .foregroundColor: colors.foreground,
         ]
         if cell.inverse || !cell.usesDefaultBackground {
-          attributes[.backgroundColor] = background
+          attributes[.backgroundColor] = colors.background
         }
         if isCursor {
           attributes[.proGhosttyCursorShape] = frame.cursorShape
@@ -77,47 +66,6 @@ public final class TerminalAttributedRenderer {
     }
 
     return output
-  }
-
-  private func resolvedColors(
-    foreground: NSColor,
-    background: NSColor,
-    inverse: Bool
-  ) -> (NSColor, NSColor) {
-    guard inverse else { return (foreground, background) }
-    return (background, foreground)
-  }
-
-  private func color(_ rgb: GhosttyTerminalFrame.RGB, faint: Bool, fallback: NSColor? = nil) -> NSColor {
-    let factor: CGFloat = faint ? 0.48 : 1.0
-    if let fallback {
-      let rgb = fallback.usingColorSpace(.deviceRGB) ?? fallback
-      return NSColor(
-        calibratedRed: rgb.redComponent * factor,
-        green: rgb.greenComponent * factor,
-        blue: rgb.blueComponent * factor,
-        alpha: 1
-      )
-    }
-    return NSColor(
-      calibratedRed: CGFloat(rgb.r) / 255.0 * factor,
-      green: CGFloat(rgb.g) / 255.0 * factor,
-      blue: CGFloat(rgb.b) / 255.0 * factor,
-      alpha: 1
-    )
-  }
-
-  private func adjustedForeground(_ color: NSColor) -> NSColor {
-    guard !isFocused else { return color }
-    let rgb = color.usingColorSpace(.deviceRGB) ?? color
-    let background = palette.background.usingColorSpace(.deviceRGB) ?? palette.background
-    let amount = palette.inactiveForegroundBlend
-    return NSColor(
-      calibratedRed: rgb.redComponent + (background.redComponent - rgb.redComponent) * amount,
-      green: rgb.greenComponent + (background.greenComponent - rgb.greenComponent) * amount,
-      blue: rgb.blueComponent + (background.blueComponent - rgb.blueComponent) * amount,
-      alpha: 1
-    )
   }
 
   private static func font(family: String, size: CGFloat, weight: NSFont.Weight) -> NSFont {

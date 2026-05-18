@@ -44,6 +44,9 @@ struct PluginManagerView: View {
     .onChange(of: model.requestedPluginPlanID) { _ in
       consumeRequestedPlan()
     }
+    .onChange(of: model.requestedPluginScanToken) { _ in
+      viewModel.scan()
+    }
     .sheet(item: $viewModel.selectedPlan) { plan in
       PluginInstallPlanView(plan: plan, text: text, isApplying: viewModel.isApplying) {
         viewModel.applySelectedPlan()

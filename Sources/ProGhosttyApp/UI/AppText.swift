@@ -16,6 +16,7 @@ struct AppText {
   var workspaces: String { text("Workspaces...", "工作区...") }
   var copy: String { text("Copy", "复制") }
   var paste: String { text("Paste", "粘贴") }
+  var splitPane: String { text("Split", "分屏") }
   var splitRight: String { text("Split Right", "向右分屏") }
   var splitDown: String { text("Split Down", "向下分屏") }
   var closePane: String { text("Close Pane", "关闭分屏") }
@@ -112,6 +113,11 @@ struct AppText {
   }
   var about: String { text("About", "关于") }
   var version: String { text("Version", "版本") }
+  var checkForUpdates: String { text("Check for Updates", "检查更新") }
+  var checkingForUpdates: String { text("Checking...", "正在检查...") }
+  var updateAvailableToast: String { text("Update available", "发现新版本") }
+  var upToDateToast: String { text("ProGhostty is up to date", "ProGhostty 已是最新版本") }
+  var updateCheckFailedToast: String { text("Update check failed", "检查更新失败") }
   var settingsSavedToast: String { text("Settings saved", "设置已保存") }
   var save: String { text("Save", "保存") }
   var saved: String { text("Saved.", "已保存。") }

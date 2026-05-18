@@ -1728,23 +1728,16 @@ public final class PTYGridView: NSView {
       width: CGFloat(run.range.count) * cellSize.width,
       height: cellSize.height
     )
-    let foregroundBase = color(
-      run.style.foreground,
-      faint: run.style.faint,
-      fallback: run.style.usesDefaultForeground ? palette.foreground : nil
+    let colors = TerminalColorResolver.resolvedColors(
+      for: run.style,
+      palette: palette,
+      isFocused: isFocusedTerminalStorage
     )
-    let backgroundBase = color(
-      run.style.background,
-      faint: false,
-      fallback: run.style.usesDefaultBackground ? palette.background : nil
-    )
-    let foreground = run.style.inverse ? backgroundBase : foregroundBase
-    let background = run.style.inverse ? foregroundBase : backgroundBase
     if run.style.inverse || !run.style.usesDefaultBackground {
-      background.setFill()
+      colors.background.setFill()
       rect.fill()
     }
-    let attributes = textAttributes(for: run.style, foreground: foreground)
+    let attributes = textAttributes(for: run.style, foreground: colors.foreground)
     for (offset, scalar) in run.text.unicodeScalars.enumerated() {
       guard offset < run.range.count else { break }
       guard scalar != " " else { continue }
@@ -1773,16 +1766,17 @@ public final class PTYGridView: NSView {
   }
 
   private func drawCell(_ cell: GhosttyTerminalFrame.Cell, in rect: NSRect, isSelected: Bool) {
-    let foregroundBase = color(cell.foreground, faint: cell.faint, fallback: cell.usesDefaultForeground ? palette.foreground : nil)
-    let backgroundBase = color(cell.background, faint: false, fallback: cell.usesDefaultBackground ? palette.background : nil)
-    let foreground = cell.inverse ? backgroundBase : foregroundBase
-    let background = cell.inverse ? foregroundBase : backgroundBase
+    let colors = TerminalColorResolver.resolvedColors(
+      for: cell,
+      palette: palette,
+      isFocused: isFocusedTerminalStorage
+    )
     if cell.inverse || !cell.usesDefaultBackground || isSelected {
-      (isSelected ? palette.cursorBackground.withAlphaComponent(0.18) : background).setFill()
+      (isSelected ? palette.cursorBackground.withAlphaComponent(0.18) : colors.background).setFill()
       rect.fill()
     }
     guard cell.scalar != " " else { return }
-    drawText(String(cell.scalar), in: rect, attributes: textAttributes(for: cell, foreground: foreground))
+    drawText(String(cell.scalar), in: rect, attributes: textAttributes(for: cell, foreground: colors.foreground))
   }
 
   private func drawCursor(_ frame: GhosttyTerminalFrame, rowOffset: Int = 0, dirtyRect: NSRect) {
@@ -1833,7 +1827,7 @@ public final class PTYGridView: NSView {
   ) -> [NSAttributedString.Key: Any] {
     [
       .font: cell.bold ? boldFont : font,
-      .foregroundColor: adjustedForeground(foreground),
+      .foregroundColor: foreground,
       .underlineStyle: cell.underline ? NSUnderlineStyle.single.rawValue : 0,
       .obliqueness: cell.italic ? 0.18 : 0,
     ]
@@ -1911,40 +1905,6 @@ public final class PTYGridView: NSView {
     guard let range = normalizedSelectionRange() else { return false }
     let coordinate = GridCoordinate(row: row, col: col)
     return coordinate >= range.lower && coordinate <= range.upper
-  }
-
-  private func color(_ rgb: GhosttyTerminalFrame.RGB, faint: Bool, fallback: NSColor? = nil) -> NSColor {
-    let factor: CGFloat = faint ? 0.48 : 1.0
-    if let fallback {
-      let rgb = fallback.usingColorSpace(.deviceRGB) ?? fallback
-      return NSColor(
-        calibratedRed: rgb.redComponent * factor,
-        green: rgb.greenComponent * factor,
-        blue: rgb.blueComponent * factor,
-        alpha: 1
-      )
-    }
-    return NSColor(
-      calibratedRed: CGFloat(rgb.r) / 255.0 * factor,
-      green: CGFloat(rgb.g) / 255.0 * factor,
-      blue: CGFloat(rgb.b) / 255.0 * factor,
-      alpha: 1
-    )
-  }
-
-  private func adjustedForeground(_ color: NSColor) -> NSColor {
-    guard isFocusedTerminalStorage else {
-      let rgb = color.usingColorSpace(.deviceRGB) ?? color
-      let background = palette.background.usingColorSpace(.deviceRGB) ?? palette.background
-      let amount = palette.inactiveForegroundBlend
-      return NSColor(
-        calibratedRed: rgb.redComponent + (background.redComponent - rgb.redComponent) * amount,
-        green: rgb.greenComponent + (background.greenComponent - rgb.greenComponent) * amount,
-        blue: rgb.blueComponent + (background.blueComponent - rgb.blueComponent) * amount,
-        alpha: 1
-      )
-    }
-    return color
   }
 
   private func encodedInput(for event: NSEvent) -> Data? {
