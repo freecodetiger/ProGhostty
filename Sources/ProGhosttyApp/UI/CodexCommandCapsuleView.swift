@@ -9,7 +9,7 @@ struct CodexCommandCapsuleView: View {
     VStack(alignment: .leading, spacing: 12) {
       header
       requestEditor
-      if model.commandCapsuleState.phase == .listening {
+      if model.commandCapsuleState.phase == .listening || model.commandCapsuleState.phase == .paused {
         listeningRow
       }
       if shouldShowDraft {
@@ -76,17 +76,33 @@ struct CodexCommandCapsuleView: View {
   private var listeningRow: some View {
     HStack(spacing: 8) {
       Circle()
-        .fill(Color.red)
+        .fill(model.commandCapsuleState.phase == .listening ? Color.red : Color.secondary.opacity(0.65))
         .frame(width: 8, height: 8)
-      Text(model.commandCapsuleState.voicePartial.isEmpty ? "Listening..." : model.commandCapsuleState.voicePartial)
+      Text(voiceStatusText)
         .font(.system(size: 12))
         .foregroundStyle(.secondary)
         .lineLimit(2)
       Spacer()
+      if model.commandCapsuleState.phase == .paused {
+        Button("Resume") {
+          model.toggleCommandCapsuleVoiceInput()
+        }
+      } else {
+        Button("Pause") {
+          model.toggleCommandCapsuleVoiceInput()
+        }
+      }
       Button("Stop") {
         model.stopCommandCapsuleVoiceInput()
       }
     }
+  }
+
+  private var voiceStatusText: String {
+    if model.commandCapsuleState.phase == .paused {
+      return "Paused"
+    }
+    return model.commandCapsuleState.voicePartial.isEmpty ? "Listening..." : model.commandCapsuleState.voicePartial
   }
 
   private var shouldShowDraft: Bool {
@@ -133,12 +149,8 @@ struct CodexCommandCapsuleView: View {
 
   private var actions: some View {
     HStack(spacing: 8) {
-      Button(model.commandCapsuleState.phase == .listening ? "Cancel Voice" : "Voice") {
-        if model.commandCapsuleState.phase == .listening {
-          model.stopCommandCapsuleVoiceInput()
-        } else {
-          model.startCommandCapsuleVoiceInput()
-        }
+      Button(voiceButtonTitle) {
+        model.toggleCommandCapsuleVoiceInput()
       }
       Button("Use Raw") {
         model.useRawCommandCapsuleRequestAsDraft()
@@ -162,6 +174,17 @@ struct CodexCommandCapsuleView: View {
     [.workspacePath, .gitBranch, .gitStatus, .changedFileList, .selectedTerminalText]
   }
 
+  private var voiceButtonTitle: String {
+    switch model.commandCapsuleState.phase {
+    case .listening:
+      return "Pause Voice"
+    case .paused:
+      return "Resume Voice"
+    default:
+      return "Voice"
+    }
+  }
+
   private func label(for option: AIPromptContextOption) -> String {
     switch option {
     case .workspacePath: return "Workspace"
@@ -177,6 +200,7 @@ struct CodexCommandCapsuleView: View {
     switch phase {
     case .idle: return "Ready"
     case .listening: return "Listening"
+    case .paused: return "Paused"
     case .refining: return "Refining"
     case .ready: return "Draft"
     case .error: return "Needs attention"

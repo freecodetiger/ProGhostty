@@ -324,7 +324,7 @@ struct SettingsView: View {
     case .focusNextPane:
       return text.focusNextPane
     case .openCodexCommandCapsule:
-      return "Open Codex Command Capsule"
+      return "Codex Command Capsule"
     }
   }
 }

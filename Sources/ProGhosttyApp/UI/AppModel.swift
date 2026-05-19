@@ -710,6 +710,15 @@ final class AppModel: ObservableObject {
     }
   }
 
+  func activateMainWindowAndFocusTerminal() {
+    NSApp.setActivationPolicy(.regular)
+    NSApp.activate(ignoringOtherApps: true)
+    NSApp.windows.first { window in
+      window.title == "ProGhostty" || window.contentViewController != nil
+    }?.makeKeyAndOrderFront(nil)
+    restoreTerminalKeyboardFocus()
+  }
+
   private func showTitlebarToast(
     _ message: String,
     style: TitlebarToast.Style,
@@ -851,6 +860,14 @@ final class AppModel: ObservableObject {
     commandCapsuleState.open()
   }
 
+  func handleCodexCommandCapsuleShortcut() {
+    if commandCapsuleState.isPresented {
+      toggleCommandCapsuleVoiceInput()
+    } else {
+      openCodexCommandCapsule()
+    }
+  }
+
   func dismissCodexCommandCapsule() {
     commandCapsuleVoiceTask?.cancel()
     commandCapsuleVoiceTask = nil
@@ -884,12 +901,16 @@ final class AppModel: ObservableObject {
           guard let self else { return }
           switch event {
           case .partial(let text):
+            guard self.commandCapsuleState.phase == .listening else { return }
             self.commandCapsuleState.updateVoicePartial(text)
           case .final(let text):
+            guard self.commandCapsuleState.phase == .listening else { return }
             self.commandCapsuleState.appendFinalTranscript(text)
           case .error(let message):
+            guard self.commandCapsuleState.phase == .listening else { return }
             self.commandCapsuleState.fail(message)
           case .completed:
+            guard self.commandCapsuleState.phase == .listening else { return }
             self.commandCapsuleState.stopListening()
           }
         }
@@ -897,10 +918,27 @@ final class AppModel: ObservableObject {
     }
   }
 
+  func pauseCommandCapsuleVoiceInput() {
+    commandCapsuleVoiceTask?.cancel()
+    commandCapsuleVoiceTask = nil
+    commandCapsuleState.pauseListening()
+  }
+
   func stopCommandCapsuleVoiceInput() {
     commandCapsuleVoiceTask?.cancel()
     commandCapsuleVoiceTask = nil
     commandCapsuleState.stopListening()
+  }
+
+  func toggleCommandCapsuleVoiceInput() {
+    switch commandCapsuleState.phase {
+    case .listening:
+      pauseCommandCapsuleVoiceInput()
+    case .paused, .idle, .error, .ready, .sent:
+      startCommandCapsuleVoiceInput()
+    case .refining:
+      break
+    }
   }
 
   func refineCommandCapsulePrompt() {

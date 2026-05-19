@@ -1102,6 +1102,8 @@ public final class PTYGridView: NSView {
   private var drawCount = 0
   private var selectionAnchor: GridCoordinate?
   private var selectionHead: GridCoordinate?
+  private var markedText = NSAttributedString(string: "")
+  private var markedTextRange = NSRange(location: NSNotFound, length: 0)
 
   public override var acceptsFirstResponder: Bool { true }
   public override var isFlipped: Bool { true }
@@ -1323,6 +1325,7 @@ public final class PTYGridView: NSView {
       drawRow(row, frame: drawFrame, dirtyRect: contentDirtyRect)
     }
     drawCursor(viewportFrame, rowOffset: topOverscanRows, dirtyRect: contentDirtyRect)
+    drawMarkedText(viewportFrame, rowOffset: topOverscanRows, dirtyRect: contentDirtyRect)
     NSGraphicsContext.current?.restoreGraphicsState()
   }
 
@@ -1546,10 +1549,30 @@ public final class PTYGridView: NSView {
 
   public override func keyDown(with event: NSEvent) {
     activationHandler?()
-    if let data = encodedInput(for: event) {
+    if hasMarkedText(), !event.modifierFlags.contains(.command) {
+      interpretKeyEvents([event])
+      return
+    }
+    if let data = controlInput(for: event) {
       inputHandler?(data)
     } else {
-      super.keyDown(with: event)
+      interpretKeyEvents([event])
+    }
+  }
+
+  public override func doCommand(by selector: Selector) {
+    if hasMarkedText() {
+      return
+    }
+    switch selector {
+    case #selector(insertNewline(_:)):
+      inputHandler?(Data([0x0D]))
+    case #selector(deleteBackward(_:)):
+      inputHandler?(Data([0x7F]))
+    case #selector(insertTab(_:)):
+      inputHandler?(Data([0x09]))
+    default:
+      super.doCommand(by: selector)
     }
   }
 
@@ -1779,7 +1802,60 @@ public final class PTYGridView: NSView {
     drawText(String(cell.scalar), in: rect, attributes: textAttributes(for: cell, foreground: colors.foreground))
   }
 
+  private func drawMarkedText(_ frame: GhosttyTerminalFrame, rowOffset: Int = 0, dirtyRect: NSRect) {
+    guard hasMarkedText(), !markedText.string.isEmpty else { return }
+    let originCell = rectForCell(row: frame.cursorY + rowOffset, col: frame.cursorX)
+    let terminalRect = Self.terminalContentClipRect(
+      cols: frame.cols,
+      rows: frame.rows,
+      cellSize: cellSize,
+      inset: contentInset
+    )
+    let text = markedText.string as NSString
+    let attributes = markedTextAttributes()
+    let textSize = text.size(withAttributes: attributes)
+    let rect = NSRect(
+      x: originCell.minX,
+      y: originCell.minY,
+      width: min(max(cellSize.width, ceil(textSize.width) + 4), max(0, terminalRect.maxX - originCell.minX)),
+      height: cellSize.height
+    )
+    guard rect.width > 0, dirtyRect.intersects(rect) else { return }
+    palette.cursorBackground.withAlphaComponent(0.12).setFill()
+    NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
+    text.draw(
+      at: NSPoint(x: rect.minX + 2, y: rect.minY + baselineOffset),
+      withAttributes: attributes
+    )
+  }
+
+  private func markedTextAttributes() -> [NSAttributedString.Key: Any] {
+    [
+      .font: font,
+      .foregroundColor: palette.foreground.withAlphaComponent(isFocusedTerminalStorage ? 0.92 : 0.62),
+      .underlineStyle: NSUnderlineStyle.single.rawValue,
+    ]
+  }
+
+  private func markedTextDirtyRect() -> NSRect? {
+    guard hasMarkedText(), let frame = frameSnapshot else { return nil }
+    let originCell = rectForCell(row: frame.cursorY, col: frame.cursorX)
+    let terminalRect = Self.terminalContentClipRect(
+      cols: frame.cols,
+      rows: frame.rows,
+      cellSize: cellSize,
+      inset: contentInset
+    )
+    let width = min(
+      max(cellSize.width, ceil((markedText.string as NSString).size(withAttributes: markedTextAttributes()).width) + 4),
+      max(0, terminalRect.maxX - originCell.minX)
+    )
+    guard width > 0 else { return nil }
+    return NSRect(x: originCell.minX, y: originCell.minY, width: width, height: cellSize.height)
+  }
+
   private func drawCursor(_ frame: GhosttyTerminalFrame, rowOffset: Int = 0, dirtyRect: NSRect) {
+    guard !hasMarkedText() else { return }
     guard isFocusedTerminalStorage, frame.cursorVisible else { return }
     let rect = rectForCell(row: frame.cursorY + rowOffset, col: frame.cursorX)
     guard dirtyRect.intersects(rect) else { return }
@@ -1907,7 +1983,7 @@ public final class PTYGridView: NSView {
     return coordinate >= range.lower && coordinate <= range.upper
   }
 
-  private func encodedInput(for event: NSEvent) -> Data? {
+  private func controlInput(for event: NSEvent) -> Data? {
     if event.modifierFlags.contains(.command) {
       return nil
     }
@@ -1941,7 +2017,7 @@ public final class PTYGridView: NSView {
       }
     }
 
-    return event.characters.flatMap { Data($0.utf8) }
+    return nil
   }
 
   private static func cellSize(for font: NSFont) -> CGSize {
@@ -2005,6 +2081,85 @@ public final class PTYGridView: NSView {
 }
 
 public typealias CellGridView = PTYGridView
+
+extension PTYGridView: @preconcurrency NSTextInputClient {
+  public func insertText(_ string: Any, replacementRange: NSRange) {
+    activationHandler?()
+    let oldRect = markedTextDirtyRect()
+    unmarkText()
+    if let oldRect {
+      setNeedsDisplay(oldRect)
+    }
+    guard let text = committedText(from: string), !text.isEmpty else { return }
+    inputHandler?(Data(text.utf8))
+  }
+
+  public func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+    let oldRect = markedTextDirtyRect()
+    if let attributed = string as? NSAttributedString {
+      markedText = attributed
+    } else if let text = string as? String {
+      markedText = NSAttributedString(string: text)
+    } else {
+      markedText = NSAttributedString(string: "")
+    }
+    markedTextRange = markedText.length > 0 ? NSRange(location: 0, length: markedText.length) : NSRange(location: NSNotFound, length: 0)
+    if let oldRect {
+      setNeedsDisplay(oldRect)
+    }
+    if let newRect = markedTextDirtyRect() {
+      setNeedsDisplay(newRect)
+    }
+  }
+
+  public func unmarkText() {
+    let oldRect = markedTextDirtyRect()
+    markedText = NSAttributedString(string: "")
+    markedTextRange = NSRange(location: NSNotFound, length: 0)
+    if let oldRect {
+      setNeedsDisplay(oldRect)
+    }
+  }
+
+  public func selectedRange() -> NSRange {
+    NSRange(location: 0, length: 0)
+  }
+
+  public func markedRange() -> NSRange {
+    markedTextRange
+  }
+
+  public func hasMarkedText() -> Bool {
+    markedTextRange.location != NSNotFound && markedTextRange.length > 0
+  }
+
+  public func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
+    actualRange?.pointee = NSRange(location: NSNotFound, length: 0)
+    return nil
+  }
+
+  public func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+    []
+  }
+
+  public func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+    actualRange?.pointee = selectedRange()
+    guard let window, let cursorCellRect else { return .zero }
+    let screenRect = convert(cursorCellRect, to: nil)
+    return window.convertToScreen(screenRect)
+  }
+
+  public func characterIndex(for point: NSPoint) -> Int {
+    0
+  }
+
+  private func committedText(from string: Any) -> String? {
+    if let attributed = string as? NSAttributedString {
+      return attributed.string
+    }
+    return string as? String
+  }
+}
 
 struct GridSelectionCoordinate: Equatable, Sendable {
   var row: Int
@@ -2081,11 +2236,11 @@ final class PTYTextView: NSTextView {
 
   override func keyDown(with event: NSEvent) {
     activationHandler?()
-    if let data = encodedInput(for: event) {
+    if let data = controlInput(for: event) {
       scrollToBottomHandler?()
       inputHandler?(data)
     } else {
-      super.keyDown(with: event)
+      interpretKeyEvents([event])
     }
   }
 
@@ -2121,6 +2276,13 @@ final class PTYTextView: NSTextView {
     guard let selectedText else { return }
     pasteboard.clearContents()
     pasteboard.setString(selectedText, forType: .string)
+  }
+
+  override func insertText(_ insertString: Any, replacementRange: NSRange) {
+    activationHandler?()
+    scrollToBottomHandler?()
+    guard let text = committedText(from: insertString), !text.isEmpty else { return }
+    inputHandler?(Data(text.utf8))
   }
 
   override func paste(_ sender: Any?) {
@@ -2290,7 +2452,7 @@ final class PTYTextView: NSTextView {
     }
   }
 
-  private func encodedInput(for event: NSEvent) -> Data? {
+  private func controlInput(for event: NSEvent) -> Data? {
     if event.modifierFlags.contains(.command) {
       return nil
     }
@@ -2324,6 +2486,13 @@ final class PTYTextView: NSTextView {
       }
     }
 
-    return event.characters.flatMap { Data($0.utf8) }
+    return nil
+  }
+
+  private func committedText(from string: Any) -> String? {
+    if let attributed = string as? NSAttributedString {
+      return attributed.string
+    }
+    return string as? String
   }
 }

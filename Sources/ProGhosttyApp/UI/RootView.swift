@@ -77,6 +77,16 @@ struct RootView: View {
       )
       .frame(width: 0, height: 0)
     )
+    .background(
+      CommandCapsuleShortcutHost(
+        binding: model.settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule),
+        onOpen: { model.handleCodexCommandCapsuleShortcut() }
+      )
+      .frame(width: 0, height: 0)
+    )
+    .onAppear {
+      model.activateMainWindowAndFocusTerminal()
+    }
   }
 
   private var terminalChromeSyncToken: Int {
@@ -105,6 +115,106 @@ private extension NSColor {
       rgb.blueComponent,
       rgb.alphaComponent
     )
+  }
+}
+
+private struct CommandCapsuleShortcutHost: NSViewRepresentable {
+  let binding: KeyboardShortcutBinding
+  let onOpen: () -> Void
+
+  func makeNSView(context: Context) -> KeyView {
+    let view = KeyView()
+    view.binding = binding
+    view.onOpen = onOpen
+    view.installMonitor()
+    return view
+  }
+
+  func updateNSView(_ view: KeyView, context: Context) {
+    view.binding = binding
+    view.onOpen = onOpen
+    view.installMonitor()
+  }
+
+  static func dismantleNSView(_ view: KeyView, coordinator: ()) {
+    view.removeMonitor()
+  }
+
+  final class KeyView: NSView {
+    var binding: KeyboardShortcutBinding?
+    var onOpen: (() -> Void)?
+    private var monitor: Any?
+
+    func installMonitor() {
+      guard monitor == nil else { return }
+      monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        guard let self else { return event }
+        guard NSApp.modalWindow == nil else { return event }
+        guard let window, event.window === window else { return event }
+        guard binding?.matches(key: event.proGhosttyShortcutKey, modifiers: event.proGhosttyShortcutModifiers) == true else {
+          return event
+        }
+        onOpen?()
+        return nil
+      }
+    }
+
+    func removeMonitor() {
+      if let monitor {
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+      }
+    }
+
+    deinit {
+      MainActor.assumeIsolated {
+        removeMonitor()
+      }
+    }
+  }
+}
+
+private extension NSEvent {
+  var proGhosttyShortcutModifiers: Set<KeyboardShortcutModifier> {
+    var result: Set<KeyboardShortcutModifier> = []
+    if modifierFlags.contains(.command) {
+      result.insert(.command)
+    }
+    if modifierFlags.contains(.control) {
+      result.insert(.control)
+    }
+    if modifierFlags.contains(.option) {
+      result.insert(.option)
+    }
+    if modifierFlags.contains(.shift) {
+      result.insert(.shift)
+    }
+    return result
+  }
+
+  var proGhosttyShortcutKey: String? {
+    switch keyCode {
+    case 36, 76:
+      return "return"
+    case 48:
+      return "tab"
+    case 49:
+      return "space"
+    case 51, 117:
+      return "delete"
+    case 53:
+      return "escape"
+    case 123:
+      return "leftArrow"
+    case 124:
+      return "rightArrow"
+    case 125:
+      return "downArrow"
+    case 126:
+      return "upArrow"
+    default:
+      return charactersIgnoringModifiers?.lowercased()
+    }
   }
 }
 

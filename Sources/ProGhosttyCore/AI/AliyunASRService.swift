@@ -28,18 +28,120 @@ public enum AliyunASRError: Error, LocalizedError, Equatable {
   }
 }
 
-public final class AliyunASRService: NSObject, Sendable {
-  public let endpoint: URL
-  public let model: String
-  private let apiKeyProvider: AliyunAPIKeyProvider
+public struct DashScopeASRConfiguration: Equatable, Sendable {
+  public var endpoint: URL
+  public var model: String
+  public var sampleRate: Int
+  public var format: String
+  public var semanticPunctuationEnabled: Bool
+  public var maxSentenceSilence: Int
+  public var heartbeat: Bool
+  public var languageHints: [String]
 
   public init(
     endpoint: URL = URL(string: "wss://dashscope.aliyuncs.com/api-ws/v1/inference/")!,
-    model: String = "fun-asr-realtime-2026-02-28",
-    apiKeyProvider: AliyunAPIKeyProvider
+    model: String = "fun-asr-realtime",
+    sampleRate: Int = 16_000,
+    format: String = "pcm",
+    semanticPunctuationEnabled: Bool = false,
+    maxSentenceSilence: Int = 800,
+    heartbeat: Bool = true,
+    languageHints: [String] = []
   ) {
     self.endpoint = endpoint
     self.model = model
+    self.sampleRate = sampleRate
+    self.format = format
+    self.semanticPunctuationEnabled = semanticPunctuationEnabled
+    self.maxSentenceSilence = maxSentenceSilence
+    self.heartbeat = heartbeat
+    self.languageHints = languageHints
+  }
+
+  public static let defaultRealtime = DashScopeASRConfiguration()
+}
+
+public enum DashScopeASRProtocolEvent: Equatable, Sendable {
+  case taskStarted
+  case taskFinished
+  case transcript(ASRTranscriptEvent)
+  case taskFailed(String)
+}
+
+public enum DashScopeASRProtocol {
+  public static func makeRunTaskRequest(
+    taskID: String,
+    configuration: DashScopeASRConfiguration
+  ) -> [String: Any] {
+    var parameters: [String: Any] = [
+      "sample_rate": configuration.sampleRate,
+      "format": configuration.format,
+      "semantic_punctuation_enabled": configuration.semanticPunctuationEnabled,
+      "max_sentence_silence": configuration.maxSentenceSilence,
+      "heartbeat": configuration.heartbeat,
+    ]
+    if !configuration.languageHints.isEmpty {
+      parameters["language_hints"] = configuration.languageHints
+    }
+
+    return [
+      "header": ["action": "run-task", "task_id": taskID, "streaming": "duplex"],
+      "payload": [
+        "task_group": "audio",
+        "task": "asr",
+        "function": "recognition",
+        "model": configuration.model,
+        "parameters": parameters,
+        "input": [:],
+      ],
+    ]
+  }
+
+  public static func makeFinishTaskRequest(taskID: String) -> [String: Any] {
+    ["header": ["action": "finish-task", "task_id": taskID, "streaming": "duplex"], "payload": ["input": [:]]]
+  }
+
+  public static func parse(_ text: String) -> DashScopeASRProtocolEvent? {
+    guard
+      let data = text.data(using: .utf8),
+      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+
+    let header = json["header"] as? [String: Any]
+    let event = header?["event"] as? String
+    switch event {
+    case "task-started":
+      return .taskStarted
+    case "task-finished":
+      return .taskFinished
+    case "task-failed":
+      let message = header?["error_message"] as? String ?? "network or recognition error"
+      return .taskFailed(message)
+    default:
+      break
+    }
+
+    let payload = json["payload"] as? [String: Any]
+    guard let output = (payload?["output"] as? [String: Any]) ?? (json["output"] as? [String: Any]) else {
+      return nil
+    }
+    let sentence = output["sentence"] as? [String: Any]
+    let text = (sentence?["text"] as? String) ?? (output["text"] as? String) ?? ""
+    guard !text.isEmpty else { return nil }
+    let isFinal = (sentence?["sentence_end"] as? Bool) ?? (output["is_final"] as? Bool) ?? false
+    return .transcript(isFinal ? .final(text) : .partial(text))
+  }
+}
+
+public final class AliyunASRService: NSObject, Sendable {
+  public let configuration: DashScopeASRConfiguration
+  private let apiKeyProvider: AliyunAPIKeyProvider
+
+  public init(
+    configuration: DashScopeASRConfiguration = .defaultRealtime,
+    apiKeyProvider: AliyunAPIKeyProvider
+  ) {
+    self.configuration = configuration
     self.apiKeyProvider = apiKeyProvider
   }
 
@@ -64,10 +166,16 @@ public final class AliyunASRService: NSObject, Sendable {
       return
     }
 
-    let client = ASRWebSocketClient(endpoint: endpoint, apiKey: apiKey, model: model)
+    let client = ASRWebSocketClient(apiKey: apiKey, configuration: configuration)
     do {
       try await client.connect(continuation: continuation)
       try await streamAudio(to: client)
+      if Task.isCancelled {
+        Task.detached {
+          try? await client.finish()
+        }
+        return
+      }
       try await client.finish()
       continuation.yield(.completed)
     } catch {
@@ -99,9 +207,13 @@ public final class AliyunASRService: NSObject, Sendable {
     final class AudioBufferQueue: @unchecked Sendable {
       var buffers: [Data] = []
       let lock = NSLock()
+      let maximumBufferedChunks = 24
 
       func push(_ data: Data) {
         lock.lock()
+        if buffers.count >= maximumBufferedChunks {
+          buffers.removeFirst(buffers.count - maximumBufferedChunks + 1)
+        }
         buffers.append(data)
         lock.unlock()
       }
@@ -156,37 +268,26 @@ public final class AliyunASRService: NSObject, Sendable {
 }
 
 private final class ASRWebSocketClient: @unchecked Sendable {
-  private let endpoint: URL
   private let apiKey: String
-  private let model: String
+  private let configuration: DashScopeASRConfiguration
   private var webSocket: URLSessionWebSocketTask?
+  private let lifecycle = ASRTaskLifecycle()
   private let taskID = UUID().uuidString
 
-  init(endpoint: URL, apiKey: String, model: String) {
-    self.endpoint = endpoint
+  init(apiKey: String, configuration: DashScopeASRConfiguration) {
     self.apiKey = apiKey
-    self.model = model
+    self.configuration = configuration
   }
 
   func connect(continuation: AsyncStream<ASRTranscriptEvent>.Continuation) async throws {
-    var request = URLRequest(url: endpoint)
+    var request = URLRequest(url: configuration.endpoint)
     request.setValue("bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-    request.setValue("enable", forHTTPHeaderField: "X-DashScope-DataInspection")
     let task = URLSession.shared.webSocketTask(with: request)
     webSocket = task
     task.resume()
-    try await sendJSON([
-      "header": ["action": "run-task", "task_id": taskID, "streaming": "duplex"],
-      "payload": [
-        "task_group": "audio",
-        "task": "asr",
-        "function": "recognition",
-        "model": model,
-        "parameters": ["sample_rate": 16000, "format": "pcm"],
-        "input": [:],
-      ],
-    ])
     Task { await receiveLoop(continuation: continuation) }
+    try await sendJSON(DashScopeASRProtocol.makeRunTaskRequest(taskID: taskID, configuration: configuration))
+    try await lifecycle.waitForStart()
   }
 
   func sendAudio(_ data: Data) async throws {
@@ -194,7 +295,8 @@ private final class ASRWebSocketClient: @unchecked Sendable {
   }
 
   func finish() async throws {
-    try await sendJSON(["header": ["action": "finish-task", "task_id": taskID, "streaming": "duplex"], "payload": [:]])
+    try await sendJSON(DashScopeASRProtocol.makeFinishTaskRequest(taskID: taskID))
+    try await lifecycle.waitForFinish()
     webSocket?.cancel(with: .normalClosure, reason: nil)
   }
 
@@ -217,28 +319,117 @@ private final class ASRWebSocketClient: @unchecked Sendable {
         }
       }
     } catch {
-      continuation.yield(.error(AliyunASRError.connectionFailed(error.localizedDescription).localizedDescription))
+      let message = AliyunASRError.connectionFailed(error.localizedDescription).localizedDescription
+      lifecycle.fail(message)
+      continuation.yield(.error(message))
     }
   }
 
   private func handle(_ text: String, continuation: AsyncStream<ASRTranscriptEvent>.Continuation) {
-    guard
-      let data = text.data(using: .utf8),
-      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else { return }
-    if let output = json["output"] as? [String: Any] {
-      let sentence = output["sentence"] as? [String: Any]
-      let text = (sentence?["text"] as? String) ?? (output["text"] as? String) ?? ""
-      guard !text.isEmpty else { return }
-      let isFinal = (sentence?["sentence_end"] as? Bool) ?? (output["is_final"] as? Bool) ?? false
-      continuation.yield(isFinal ? .final(text) : .partial(text))
+    guard let event = DashScopeASRProtocol.parse(text) else { return }
+    switch event {
+    case .taskStarted:
+      lifecycle.markStarted()
+    case .taskFinished:
+      lifecycle.markFinished()
+    case .transcript(let event):
+      continuation.yield(event)
+    case .taskFailed(let message):
+      let localized = AliyunASRError.connectionFailed(message).localizedDescription
+      lifecycle.fail(localized)
+      continuation.yield(.error(localized))
     }
-    if let header = json["header"] as? [String: Any],
-      let event = header["event"] as? String,
-      event == "task-failed"
-    {
-      let message = header["error_message"] as? String ?? "network or recognition error"
-      continuation.yield(.error(AliyunASRError.connectionFailed(message).localizedDescription))
+  }
+}
+
+private final class ASRTaskLifecycle: @unchecked Sendable {
+  private enum State {
+    case pending
+    case completed
+    case failed(String)
+  }
+
+  private let lock = NSLock()
+  private var startState: State = .pending
+  private var finishState: State = .pending
+  private var startContinuations: [CheckedContinuation<Void, Error>] = []
+  private var finishContinuations: [CheckedContinuation<Void, Error>] = []
+
+  func waitForStart() async throws {
+    try await wait(state: \.startState, continuations: \.startContinuations)
+  }
+
+  func waitForFinish() async throws {
+    try await wait(state: \.finishState, continuations: \.finishContinuations)
+  }
+
+  func markStarted() {
+    complete(state: \.startState, continuations: \.startContinuations)
+  }
+
+  func markFinished() {
+    complete(state: \.finishState, continuations: \.finishContinuations)
+  }
+
+  func fail(_ message: String) {
+    fail(state: \.startState, continuations: \.startContinuations, message: message)
+    fail(state: \.finishState, continuations: \.finishContinuations, message: message)
+  }
+
+  private func wait(
+    state: ReferenceWritableKeyPath<ASRTaskLifecycle, State>,
+    continuations: ReferenceWritableKeyPath<ASRTaskLifecycle, [CheckedContinuation<Void, Error>]>
+  ) async throws {
+    try await withCheckedThrowingContinuation { continuation in
+      lock.lock()
+      switch self[keyPath: state] {
+      case .pending:
+        self[keyPath: continuations].append(continuation)
+        lock.unlock()
+      case .completed:
+        lock.unlock()
+        continuation.resume()
+      case .failed(let message):
+        lock.unlock()
+        continuation.resume(throwing: AliyunASRError.connectionFailed(message))
+      }
+    }
+  }
+
+  private func complete(
+    state: ReferenceWritableKeyPath<ASRTaskLifecycle, State>,
+    continuations: ReferenceWritableKeyPath<ASRTaskLifecycle, [CheckedContinuation<Void, Error>]>
+  ) {
+    lock.lock()
+    guard case .pending = self[keyPath: state] else {
+      lock.unlock()
+      return
+    }
+    self[keyPath: state] = .completed
+    let waiting = self[keyPath: continuations]
+    self[keyPath: continuations] = []
+    lock.unlock()
+    for continuation in waiting {
+      continuation.resume()
+    }
+  }
+
+  private func fail(
+    state: ReferenceWritableKeyPath<ASRTaskLifecycle, State>,
+    continuations: ReferenceWritableKeyPath<ASRTaskLifecycle, [CheckedContinuation<Void, Error>]>,
+    message: String
+  ) {
+    lock.lock()
+    guard case .pending = self[keyPath: state] else {
+      lock.unlock()
+      return
+    }
+    self[keyPath: state] = .failed(message)
+    let waiting = self[keyPath: continuations]
+    self[keyPath: continuations] = []
+    lock.unlock()
+    for continuation in waiting {
+      continuation.resume(throwing: AliyunASRError.connectionFailed(message))
     }
   }
 }

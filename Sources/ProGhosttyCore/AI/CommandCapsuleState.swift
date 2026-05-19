@@ -3,6 +3,7 @@ import Foundation
 public enum CommandCapsulePhase: String, Codable, Equatable, Sendable {
   case idle
   case listening
+  case paused
   case refining
   case ready
   case error
@@ -56,8 +57,21 @@ public struct CommandCapsuleState: Equatable, Sendable {
     errorMessage = nil
   }
 
+  public mutating func pauseListening() {
+    guard phase == .listening else { return }
+    phase = .paused
+    voicePartial = ""
+  }
+
+  public mutating func resumeListening() {
+    guard phase == .paused || phase == .idle || phase == .error else { return }
+    phase = .listening
+    voicePartial = ""
+    errorMessage = nil
+  }
+
   public mutating func stopListening() {
-    if phase == .listening {
+    if phase == .listening || phase == .paused {
       phase = .idle
     }
     voicePartial = ""
@@ -75,7 +89,6 @@ public struct CommandCapsuleState: Equatable, Sendable {
       .filter { !$0.isEmpty }
       .joined(separator: "\n")
     voicePartial = ""
-    phase = .idle
   }
 
   public mutating func startRefining() {

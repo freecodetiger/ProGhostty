@@ -223,6 +223,11 @@ public struct KeyboardShortcutBinding: Codable, Equatable, Sendable {
     !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !modifiers.isEmpty
   }
 
+  public func matches(key candidateKey: String?, modifiers candidateModifiers: Set<KeyboardShortcutModifier>) -> Bool {
+    guard let candidateKey else { return false }
+    return key.lowercased() == candidateKey.lowercased() && modifiers == candidateModifiers
+  }
+
   private static func displayKey(_ key: String) -> String {
     switch key {
     case "leftArrow":

@@ -112,6 +112,14 @@ struct AppSettingsTests {
     #expect(binding.displayString == "⌘⌥←")
   }
 
+  @Test func keyboardShortcutBindingMatchesNormalizedEventKeyAndModifiers() {
+    let binding = KeyboardShortcutBinding(key: "i", modifiers: [.command, .shift])
+
+    #expect(binding.matches(key: "I", modifiers: [.command, .shift]))
+    #expect(!binding.matches(key: "i", modifiers: [.command]))
+    #expect(!binding.matches(key: "k", modifiers: [.command, .shift]))
+  }
+
   @Test func defaultTerminalWorkingDirectoryFallsBackToHomeDirectory() {
     #expect(
       AppSettings.terminalWorkingDirectory(

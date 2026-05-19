@@ -165,6 +165,62 @@ struct AICLICompanionTests {
     #expect(events == [.error("Missing DashScope API key. Configure it in Settings or set DASHSCOPE_API_KEY.")])
   }
 
+  @Test func dashScopeASRRunTaskPayloadUsesRealtimeLowLatencyDefaults() throws {
+    let configuration = DashScopeASRConfiguration.defaultRealtime
+    let request = DashScopeASRProtocol.makeRunTaskRequest(
+      taskID: "task-1",
+      configuration: configuration
+    )
+
+    let payload = try #require(request["payload"] as? [String: Any])
+    let parameters = try #require(payload["parameters"] as? [String: Any])
+    let header = try #require(request["header"] as? [String: Any])
+
+    #expect(header["action"] as? String == "run-task")
+    #expect(header["streaming"] as? String == "duplex")
+    #expect(payload["model"] as? String == "fun-asr-realtime")
+    #expect(parameters["format"] as? String == "pcm")
+    #expect(parameters["sample_rate"] as? Int == 16000)
+    #expect(parameters["semantic_punctuation_enabled"] as? Bool == false)
+    #expect(parameters["max_sentence_silence"] as? Int == 800)
+    #expect(parameters["heartbeat"] as? Bool == true)
+  }
+
+  @Test func dashScopeASRProtocolParsesLifecycleAndTranscriptEvents() throws {
+    let started = try #require(DashScopeASRProtocol.parse("""
+    {"header":{"event":"task-started"}}
+    """))
+    let partial = try #require(DashScopeASRProtocol.parse("""
+    {"header":{"event":"result-generated"},"payload":{"output":{"sentence":{"text":"hello","sentence_end":false}}}}
+    """))
+    let final = try #require(DashScopeASRProtocol.parse("""
+    {"header":{"event":"result-generated"},"payload":{"output":{"sentence":{"text":"hello world","sentence_end":true}}}}
+    """))
+    let finished = try #require(DashScopeASRProtocol.parse("""
+    {"header":{"event":"task-finished"}}
+    """))
+
+    #expect(started == .taskStarted)
+    #expect(partial == .transcript(.partial("hello")))
+    #expect(final == .transcript(.final("hello world")))
+    #expect(finished == .taskFinished)
+  }
+
+  @Test func dashScopeASRProtocolIgnoresHeartbeatResults() throws {
+    let heartbeat = DashScopeASRProtocol.parse("""
+    {"header":{"event":"result-generated"},"payload":{"output":{"sentence":{"text":"","heartbeat":true,"sentence_end":false}}}}
+    """)
+
+    #expect(heartbeat == nil)
+  }
+
+  @Test func dashScopeASRFinishTaskPayloadContainsInputObject() throws {
+    let request = DashScopeASRProtocol.makeFinishTaskRequest(taskID: "task-1")
+    let payload = try #require(request["payload"] as? [String: Any])
+
+    #expect(payload["input"] != nil)
+  }
+
   @Test func openAICompatibleProviderConfigUsesConfiguredValuesThenEnvironment() {
     let configured = OpenAICompatibleProviderConfig(
       baseURL: "https://example.test/v1",
@@ -321,7 +377,13 @@ struct AICLICompanionTests {
     state.appendFinalTranscript("fix tests")
     #expect(state.request == "fix tests")
     #expect(state.voicePartial == "")
-    #expect(state.phase == .idle)
+    #expect(state.phase == .listening)
+
+    state.pauseListening()
+    #expect(state.phase == .paused)
+
+    state.resumeListening()
+    #expect(state.phase == .listening)
 
     state.startRefining()
     #expect(state.phase == .refining)

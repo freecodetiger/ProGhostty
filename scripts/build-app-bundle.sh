@@ -52,6 +52,8 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>ProGhostty uses the microphone only when you start voice input for Codex prompt drafting.</string>
 </dict>
 </plist>
 PLIST

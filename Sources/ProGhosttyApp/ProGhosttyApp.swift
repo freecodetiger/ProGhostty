@@ -1,8 +1,10 @@
+import AppKit
 import ProGhosttyCore
 import SwiftUI
 
 @main
 struct ProGhosttyApp: App {
+  @NSApplicationDelegateAdaptor(ProGhosttyAppDelegate.self) private var appDelegate
   @StateObject private var model = AppModel()
 
   var body: some Scene {
@@ -65,8 +67,8 @@ struct ProGhosttyApp: App {
       }
 
       CommandMenu("AI") {
-        Button("Open Codex Command Capsule") {
-          model.openCodexCommandCapsule()
+        Button("Codex Command Capsule") {
+          model.handleCodexCommandCapsuleShortcut()
         }
         .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule).swiftUIShortcut)
 
@@ -85,5 +87,16 @@ struct ProGhosttyApp: App {
         .environmentObject(model)
         .preferredColorScheme(model.appColorScheme)
     }
+  }
+}
+
+final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    NSApp.setActivationPolicy(.regular)
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    true
   }
 }

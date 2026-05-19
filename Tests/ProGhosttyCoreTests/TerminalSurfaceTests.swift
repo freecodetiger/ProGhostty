@@ -937,6 +937,138 @@ struct TerminalSurfaceTests {
     #expect(written == Data("echo hello".utf8))
   }
 
+  @MainActor @Test func ptyTextInputClientWritesCommittedChineseTextToInputHandler() {
+    var written: Data?
+    let textView = PTYTextView()
+    textView.inputHandler = { written = $0 }
+
+    textView.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    #expect(written == Data("中文".utf8))
+  }
+
+  @MainActor @Test func ptyGridInputClientWritesCommittedChineseTextToInputHandler() {
+    var written: Data?
+    let gridView = PTYGridView()
+    gridView.inputHandler = { written = $0 }
+
+    gridView.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    #expect(written == Data("中文".utf8))
+  }
+
+  @MainActor @Test func ptyGridPrintableKeyEventsUseTextInputPipeline() throws {
+    var written: Data?
+    let gridView = PTYGridView()
+    gridView.inputHandler = { written = $0 }
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      characters: "a",
+      charactersIgnoringModifiers: "a",
+      isARepeat: false,
+      keyCode: 0
+    ))
+
+    gridView.keyDown(with: event)
+
+    #expect(written == Data("a".utf8))
+  }
+
+  @MainActor @Test func ptyGridMarkedTextBackspaceDoesNotWriteDeleteToPTY() {
+    var writes: [Data] = []
+    let gridView = PTYGridView()
+    gridView.inputHandler = { writes.append($0) }
+
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    gridView.doCommand(by: #selector(NSResponder.deleteBackward(_:)))
+
+    #expect(writes.isEmpty)
+    #expect(gridView.hasMarkedText())
+  }
+
+  @MainActor @Test func ptyGridDrawsMarkedTextAtCursorBeforeCommit() throws {
+    let backend = GhosttyVTCellGridRendererBackend()
+    let gridView = backend.gridView
+    let frame = frameWithText(rows: ["      "], cols: 6, cursorX: 2, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    backend.render(frame: frame)
+    backend.flushPendingFrame()
+    gridView.display()
+    let measuredViewRect =
+      PTYGridView.textGlyphRect(row: 0, col: 2, cellSize: cellSize, inset: inset)
+        .union(PTYGridView.textGlyphRect(row: 0, col: 4, cellSize: cellSize, inset: inset))
+    let baselineImage = try #require(bitmapImage(drawing: gridView))
+    let baselinePixels = nonBackgroundPixelCount(
+      in: bitmapRect(measuredViewRect, imageHeight: baselineImage.pixelsHigh),
+      image: baselineImage,
+      background: TerminalSurfacePalette.dark.background
+    )
+
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    gridView.display()
+
+    let image = try #require(bitmapImage(drawing: gridView))
+
+    #expect(
+      nonBackgroundPixelCount(
+        in: bitmapRect(measuredViewRect, imageHeight: image.pixelsHigh),
+        image: image,
+        background: TerminalSurfacePalette.dark.background
+      ) > baselinePixels
+    )
+  }
+
+  @MainActor @Test func ptyGridMarkedTextHidesTerminalCursorDuringComposition() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["x     "], cols: 6, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+
+    let cursorImage = try #require(bitmapImage(drawing: gridView))
+    let cellRect = bitmapRect(PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset), imageHeight: cursorImage.pixelsHigh)
+    let cursorFillPixels = similarPixelCount(
+      to: TerminalSurfacePalette.dark.cursorBackground,
+      in: cellRect,
+      image: cursorImage
+    )
+    #expect(cursorFillPixels > 0)
+
+    gridView.setMarkedText("z", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    let composingImage = try #require(bitmapImage(drawing: gridView))
+    let composingCursorFillPixels = similarPixelCount(
+      to: TerminalSurfacePalette.dark.cursorBackground,
+      in: bitmapRect(PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset), imageHeight: composingImage.pixelsHigh),
+      image: composingImage
+    )
+    let composingPixels = nonBackgroundPixelCount(
+      in: bitmapRect(PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset), imageHeight: cursorImage.pixelsHigh),
+      image: composingImage,
+      background: TerminalSurfacePalette.dark.background
+    )
+
+    #expect(composingPixels > 0)
+    #expect(composingCursorFillPixels < cursorFillPixels)
+  }
+
   @MainActor @Test func ptyTextCommandCAndVUseCopyPasteActions() throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("proghostty.shortcuts.test.\(UUID().uuidString)"))
     pasteboard.clearContents()
@@ -998,6 +1130,91 @@ struct TerminalSurfaceTests {
       stop.pointee = true
     }
     return cursorIndex
+  }
+
+  private func nonBackgroundPixelCount(
+    in rect: NSRect,
+    image: NSBitmapImageRep,
+    background: NSColor
+  ) -> Int {
+    let backgroundRGB = background.usingColorSpace(.deviceRGB) ?? background
+    let minX = max(0, Int(floor(rect.minX)))
+    let maxX = min(image.pixelsWide - 1, Int(ceil(rect.maxX)))
+    let minY = max(0, Int(floor(rect.minY)))
+    let maxY = min(image.pixelsHigh - 1, Int(ceil(rect.maxY)))
+    guard minX <= maxX, minY <= maxY else { return 0 }
+
+    var count = 0
+    for x in minX...maxX {
+      for y in minY...maxY {
+        guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+        let distance = abs(color.redComponent - backgroundRGB.redComponent)
+          + abs(color.greenComponent - backgroundRGB.greenComponent)
+          + abs(color.blueComponent - backgroundRGB.blueComponent)
+        if distance > 0.08 {
+          count += 1
+        }
+      }
+    }
+    return count
+  }
+
+  private func similarPixelCount(
+    to target: NSColor,
+    in rect: NSRect,
+    image: NSBitmapImageRep
+  ) -> Int {
+    let targetRGB = target.usingColorSpace(.deviceRGB) ?? target
+    let minX = max(0, Int(floor(rect.minX)))
+    let maxX = min(image.pixelsWide - 1, Int(ceil(rect.maxX)))
+    let minY = max(0, Int(floor(rect.minY)))
+    let maxY = min(image.pixelsHigh - 1, Int(ceil(rect.maxY)))
+    guard minX <= maxX, minY <= maxY else { return 0 }
+
+    var count = 0
+    for x in minX...maxX {
+      for y in minY...maxY {
+        guard let color = image.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+        let distance = abs(color.redComponent - targetRGB.redComponent)
+          + abs(color.greenComponent - targetRGB.greenComponent)
+          + abs(color.blueComponent - targetRGB.blueComponent)
+        if distance < 0.08 {
+          count += 1
+        }
+      }
+    }
+    return count
+  }
+
+  private func bitmapRect(_ viewRect: NSRect, imageHeight: Int) -> NSRect {
+    NSRect(
+      x: viewRect.minX,
+      y: CGFloat(imageHeight) - viewRect.maxY,
+      width: viewRect.width,
+      height: viewRect.height
+    )
+  }
+
+  @MainActor private func bitmapImage(drawing view: NSView) -> NSBitmapImageRep? {
+    guard let image = NSBitmapImageRep(
+      bitmapDataPlanes: nil,
+      pixelsWide: max(1, Int(ceil(view.bounds.width))),
+      pixelsHigh: max(1, Int(ceil(view.bounds.height))),
+      bitsPerSample: 8,
+      samplesPerPixel: 4,
+      hasAlpha: true,
+      isPlanar: false,
+      colorSpaceName: .deviceRGB,
+      bytesPerRow: 0,
+      bitsPerPixel: 0
+    ) else {
+      return nil
+    }
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: image)
+    view.draw(view.bounds)
+    NSGraphicsContext.restoreGraphicsState()
+    return image
   }
 
   private func frameWithText(rows: [String], cols: Int, cursorX: Int, cursorY: Int) -> GhosttyTerminalFrame {
