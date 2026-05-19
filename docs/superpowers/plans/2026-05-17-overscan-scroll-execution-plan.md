@@ -489,7 +489,7 @@ Expected: remote `main` receives all commits.
 - Do not implement pixel scrolling by moving the current viewport snapshot without real overscan rows.
 - Do not use `grid_ref` for the visible viewport render loop.
 - Do not expose a normal Settings toggle for pixel scrolling.
-- Do not make pixel scrolling block split panes, workspace management, plugin manager, or AI CLI companion work.
+- Do not make pixel scrolling block split panes, workspace management, or plugin manager work.
 
 ## Success Criteria
 

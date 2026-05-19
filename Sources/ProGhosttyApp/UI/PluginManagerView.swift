@@ -1,3 +1,4 @@
+import AppKit
 import ProGhosttyCore
 import SwiftUI
 
@@ -11,6 +12,10 @@ struct PluginManagerView: View {
   @StateObject private var viewModel = ShellEnhancementsViewModel()
   @State private var selectedPluginID: String?
   @State private var isRollbackConfirmationPresented = false
+  @State private var showsReloadCommand = false
+  @State private var reloadCommandCopied = false
+
+  private let reloadCommand = "source \"$HOME/.your-terminal/shell/zshrc\""
 
   var body: some View {
     let text = model.appText
@@ -51,6 +56,10 @@ struct PluginManagerView: View {
       PluginInstallPlanView(plan: plan, text: text, isApplying: viewModel.isApplying) {
         viewModel.applySelectedPlan()
       }
+    }
+    .onChange(of: viewModel.appliedPlanToken) { _ in
+      showsReloadCommand = true
+      reloadCommandCopied = false
     }
     .sheet(isPresented: $isRollbackConfirmationPresented) {
       if let manifest = viewModel.latestRollbackManifest {
@@ -222,6 +231,10 @@ struct PluginManagerView: View {
               .padding(.top, 2)
               .textSelection(.enabled)
           }
+
+          if showsReloadCommand {
+            reloadCommandView(text)
+          }
         }
         .padding(18)
       }
@@ -312,6 +325,40 @@ struct PluginManagerView: View {
         .font(.system(size: 11, weight: .semibold))
         .foregroundStyle(.secondary)
       content()
+    }
+  }
+
+  private func reloadCommandView(_ text: AppText) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(text.pluginReloadCommandHint)
+        .font(.system(size: 11))
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      HStack(spacing: 8) {
+        Text(reloadCommand)
+          .font(.system(size: 11, design: .monospaced))
+          .foregroundStyle(.primary)
+          .lineLimit(1)
+          .truncationMode(.middle)
+
+        if reloadCommandCopied {
+          Text(text.pluginReloadCommandCopied)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+        }
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 7)
+      .background(Color.primary.opacity(0.055))
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .onTapGesture {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(reloadCommand, forType: .string)
+        reloadCommandCopied = true
+      }
+      .help(reloadCommand)
     }
   }
 

@@ -65,12 +65,17 @@ struct SettingsView: View {
             }
 
             SettingsRow(text.font) {
-              Picker("", selection: $model.settings.fontFamily) {
-                ForEach(FontManager.monospacedFonts(), id: \.self) { font in
-                  Text(font).tag(font)
+              VStack(alignment: .leading, spacing: 6) {
+                Picker("", selection: $model.settings.fontFamily) {
+                  ForEach(FontManager.monospacedFonts(), id: \.self) { font in
+                    Text(font).tag(font)
+                  }
                 }
+                .labelsHidden()
+                Text(text.installedMonospacedFontsHint)
+                  .font(.system(size: 11))
+                  .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
               }
-              .labelsHidden()
             }
 
             SettingsRow(text.fontSize) {
@@ -105,24 +110,6 @@ struct SettingsView: View {
               }
             }
 
-          }
-
-          SettingsSection(text.history) {
-            Toggle(text.commandBlocks, isOn: $model.settings.commandBlocksEnabled)
-            Toggle(text.history, isOn: $model.settings.historyEnabled)
-            Toggle(text.outputPreviews, isOn: $model.settings.saveOutputPreview)
-
-            SettingsRow(text.previewLimit) {
-              HStack(spacing: 10) {
-                Stepper(value: $model.settings.maxOutputPreviewKB, in: 1...512, step: 1) {
-                  Text("\(model.settings.maxOutputPreviewKB) KB")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
-                }
-              }
-            }
-
-            Toggle(text.rerunCommandsWithReturn, isOn: $model.settings.rerunAutoEnter)
           }
 
           SettingsSection(text.shortcuts) {
@@ -167,46 +154,6 @@ struct SettingsView: View {
                 model.openPlugins()
               }
             }
-          }
-
-          SettingsSection("AI Companion") {
-            SettingsRow("DashScope API Key") {
-              SecureField("DASHSCOPE_API_KEY", text: Binding(
-                get: { model.settings.aliyunASRAPIKey ?? "" },
-                set: { model.settings.aliyunASRAPIKey = $0.isEmpty ? nil : $0 }
-              ))
-              .textFieldStyle(.roundedBorder)
-              .font(.system(size: 13, design: .monospaced))
-              .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
-            }
-
-            SettingsRow("OpenAI Base URL") {
-              TextField("https://api.openai.com/v1", text: $model.settings.openAICompatibleBaseURL)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
-            }
-
-            SettingsRow("OpenAI API Key") {
-              SecureField("OPENAI_API_KEY", text: Binding(
-                get: { model.settings.openAICompatibleAPIKey ?? "" },
-                set: { model.settings.openAICompatibleAPIKey = $0.isEmpty ? nil : $0 }
-              ))
-              .textFieldStyle(.roundedBorder)
-              .font(.system(size: 13, design: .monospaced))
-              .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
-            }
-
-            SettingsRow("OpenAI Model") {
-              TextField("gpt-5.1", text: $model.settings.openAICompatibleModel)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
-            }
-
-            Text("DashScope is used for Aliyun Fun-ASR voice input. OpenAI-compatible settings are used only for Codex prompt refinement.")
-              .font(.system(size: 12))
-              .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
           }
 
           SettingsSection(text.about) {
@@ -323,8 +270,6 @@ struct SettingsView: View {
       return text.focusPreviousPane
     case .focusNextPane:
       return text.focusNextPane
-    case .openCodexCommandCapsule:
-      return "Codex Command Capsule"
     }
   }
 }

@@ -82,6 +82,19 @@ struct TerminalSurfaceTests {
     #expect(textView.font?.familyName == "Menlo")
   }
 
+  @MainActor @Test func ptySurfaceAppliesPendingKeyboardFocusWhenAttachedToWindow() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    registry.focusSessionView(session)
+
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView = surfaceView
+
+    #expect(window.firstResponder === surfaceView.scrollView.documentView || window.firstResponder === surfaceView.liveGridView)
+  }
+
   @MainActor @Test func ptySurfaceRendersScrollableScrollbackDocument() throws {
     let registry = PTYTerminalSurfaceRegistry()
     registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTTextFallback))

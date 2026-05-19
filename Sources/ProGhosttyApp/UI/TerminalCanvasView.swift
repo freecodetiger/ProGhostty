@@ -739,6 +739,8 @@ final class TerminalPaneViewController: NSViewController {
     onSettings: @escaping () -> Void
   ) -> NSMenu {
     let menu = NSMenu()
+    menu.allowsContextMenuPlugIns = false
+    menu.autoenablesItems = false
     let paneId = pane.paneId
     menu.addItem(ClosureMenuItem(title: text.copy) { [weak self] in
       self?.copyFromTerminalSurface()
@@ -1150,6 +1152,8 @@ private final class ClosureMenuItem: NSMenuItem, NSMenuItemValidation {
 }
 
 @MainActor private func install(menu: NSMenu, in view: NSView) {
+  menu.allowsContextMenuPlugIns = false
+  menu.autoenablesItems = false
   view.menu = menu
   if let textView = view as? NSTextView {
     textView.menu = menu

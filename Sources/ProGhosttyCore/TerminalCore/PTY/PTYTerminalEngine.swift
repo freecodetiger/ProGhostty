@@ -426,6 +426,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   private var fontFamily = FontManager.defaultMonospacedFontName()
   private var fontSize: CGFloat = 14
   private var focusedSessionID: TerminalSessionID?
+  private var pendingFocusSessionID: TerminalSessionID?
   private var inputHandler: (@MainActor (TerminalSessionID, Data) -> Void)?
   private var activationHandler: (@MainActor (TerminalSessionID) -> Void)?
   private var rendererOptions = TerminalRendererOptions()
@@ -471,6 +472,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     gridView.applyRendererOptions(rendererOptions)
 
     let containerView = PTYTerminalSurfaceView(scrollView: scrollView, liveGridView: gridView)
+    containerView.onWindowAvailable = { [weak self] in
+      self?.focusPendingSessionIfNeeded()
+    }
     containerView.applyPalette(palette)
     surfaces[id] = SurfaceState(
       containerView: containerView,
@@ -588,8 +592,23 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   public func focusSessionView(_ id: TerminalSessionID?) {
     guard let id, let surface = surfaces[id] else { return }
+    pendingFocusSessionID = id
+    if focus(surface: surface) {
+      pendingFocusSessionID = nil
+    }
+  }
+
+  private func focusPendingSessionIfNeeded() {
+    guard let pendingFocusSessionID, let surface = surfaces[pendingFocusSessionID] else { return }
+    if focus(surface: surface) {
+      self.pendingFocusSessionID = nil
+    }
+  }
+
+  private func focus(surface: SurfaceState) -> Bool {
     let responder: NSView = surface.containerView.isShowingLiveGrid ? surface.gridView : surface.textView
-    responder.window?.makeFirstResponder(responder)
+    guard let window = responder.window else { return false }
+    return window.makeFirstResponder(responder)
   }
 
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {
@@ -1027,6 +1046,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 public final class PTYTerminalSurfaceView: NSView {
   public let scrollView: NSScrollView
   public let liveGridView: PTYGridView
+  var onWindowAvailable: (() -> Void)?
 
   public var isShowingLiveGrid: Bool {
     !liveGridView.isHidden
@@ -1044,6 +1064,12 @@ public final class PTYTerminalSurfaceView: NSView {
 
   required init?(coder: NSCoder) {
     nil
+  }
+
+  public override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    guard window != nil else { return }
+    onWindowAvailable?()
   }
 
   func applyPalette(_ palette: TerminalSurfacePalette) {
@@ -1645,6 +1671,7 @@ public final class PTYGridView: NSView {
       super.rightMouseDown(with: event)
       return
     }
+    menu.removeTerminalIncompatibleSystemItems()
     NSMenu.popUpContextMenu(menu, with: event, for: self)
   }
 
@@ -2250,6 +2277,7 @@ final class PTYTextView: NSTextView {
       super.rightMouseDown(with: event)
       return
     }
+    menu.removeTerminalIncompatibleSystemItems()
     NSMenu.popUpContextMenu(menu, with: event, for: self)
   }
 
@@ -2494,5 +2522,48 @@ final class PTYTextView: NSTextView {
       return attributed.string
     }
     return string as? String
+  }
+}
+
+private extension NSMenu {
+  func removeTerminalIncompatibleSystemItems() {
+    allowsContextMenuPlugIns = false
+    autoenablesItems = false
+    for item in items {
+      item.submenu?.removeTerminalIncompatibleSystemItems()
+    }
+    for item in items.reversed() where item.isTerminalIncompatibleSystemItem {
+      removeItem(item)
+    }
+    trimRedundantSeparators()
+  }
+
+  private func trimRedundantSeparators() {
+    while items.first?.isSeparatorItem == true {
+      removeItem(at: 0)
+    }
+    while items.last?.isSeparatorItem == true {
+      removeItem(at: max(0, numberOfItems - 1))
+    }
+
+    var previousWasSeparator = false
+    for index in stride(from: numberOfItems - 1, through: 0, by: -1) {
+      let item = items[index]
+      if item.isSeparatorItem, previousWasSeparator {
+        removeItem(at: index)
+      }
+      previousWasSeparator = item.isSeparatorItem
+    }
+  }
+}
+
+private extension NSMenuItem {
+  var isTerminalIncompatibleSystemItem: Bool {
+    let normalizedTitle = title
+      .replacingOccurrences(of: " ", with: "")
+      .replacingOccurrences(of: "-", with: "")
+      .lowercased()
+    return normalizedTitle.contains("autofill")
+      || normalizedTitle.contains("自动填充")
   }
 }

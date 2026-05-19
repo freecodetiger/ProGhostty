@@ -32,20 +32,6 @@ struct AppSettingsTests {
     #expect(settings.smoothPixelScrollingEnabled == true)
     #expect(settings.dirtyRowRenderingEnabled == true)
     #expect(settings.forceFullRedrawEnabled == false)
-    #expect(settings.openAICompatibleBaseURL == "https://api.openai.com/v1")
-    #expect(settings.openAICompatibleAPIKey == nil)
-    #expect(settings.openAICompatibleModel == "")
-    #expect(settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule).key == "i")
-  }
-
-  @Test func openAICompatibleSettingsHaveStableDefaults() {
-    let settings = AppSettings.defaults
-
-    #expect(settings.openAICompatibleBaseURL == "https://api.openai.com/v1")
-    #expect(settings.openAICompatibleAPIKey == nil)
-    #expect(settings.openAICompatibleModel == "")
-    #expect(settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule).key == "i")
-    #expect(settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule).modifiers == [.command, .shift])
   }
 
   @Test func rendererOptionsEnablePixelScrollByDefault() {
@@ -113,10 +99,10 @@ struct AppSettingsTests {
   }
 
   @Test func keyboardShortcutBindingMatchesNormalizedEventKeyAndModifiers() {
-    let binding = KeyboardShortcutBinding(key: "i", modifiers: [.command, .shift])
+    let binding = KeyboardShortcutBinding(key: "o", modifiers: [.command, .shift])
 
-    #expect(binding.matches(key: "I", modifiers: [.command, .shift]))
-    #expect(!binding.matches(key: "i", modifiers: [.command]))
+    #expect(binding.matches(key: "O", modifiers: [.command, .shift]))
+    #expect(!binding.matches(key: "o", modifiers: [.command]))
     #expect(!binding.matches(key: "k", modifiers: [.command, .shift]))
   }
 

@@ -10,6 +10,7 @@ final class ShellEnhancementsViewModel: ObservableObject {
   @Published private(set) var applyingPluginIDs: Set<String> = []
   @Published private(set) var message: String?
   @Published private(set) var latestRollbackManifest: BackupManifest?
+  @Published private(set) var appliedPlanToken = UUID()
 
   private let homeDirectory: String
   private let configWriter: ShellConfigWriter
@@ -108,6 +109,7 @@ final class ShellEnhancementsViewModel: ObservableObject {
       }.value
       selectedPlan = nil
       message = "Applied. Backup manifest: \(receipt.manifestPath)"
+      appliedPlanToken = UUID()
       await scanNow()
     } catch {
       message = "Plan failed: \(error.localizedDescription)"

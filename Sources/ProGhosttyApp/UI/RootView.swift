@@ -29,31 +29,9 @@ struct RootView: View {
         .transition(.opacity.combined(with: .scale(scale: 0.985)))
       }
 
-      if model.isAICompanionPresented {
-        UtilityOverlay(
-          width: 860,
-          height: 620,
-          onClose: { model.closeAICompanion() }
-        ) {
-          AICompanionView()
-        }
-        .transition(.opacity.combined(with: .scale(scale: 0.985)))
-      }
-
-      if model.commandCapsuleState.isPresented {
-        VStack {
-          Spacer()
-          CodexCommandCapsuleView()
-            .environmentObject(model)
-            .padding(.bottom, 28)
-        }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-      }
     }
     .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
     .animation(.easeOut(duration: 0.12), value: model.isHistoryPresented)
-    .animation(.easeOut(duration: 0.12), value: model.isAICompanionPresented)
-    .animation(.easeOut(duration: 0.14), value: model.commandCapsuleState.isPresented)
     .animation(.easeOut(duration: 0.14), value: model.titlebarToast)
     .preferredColorScheme(model.appColorScheme)
     .background(Color(nsColor: model.terminalBackgroundColor).ignoresSafeArea())
@@ -78,9 +56,9 @@ struct RootView: View {
       .frame(width: 0, height: 0)
     )
     .background(
-      CommandCapsuleShortcutHost(
-        binding: model.settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule),
-        onOpen: { model.handleCodexCommandCapsuleShortcut() }
+      TerminalShortcutHost(
+        closePaneBinding: model.settings.keyboardShortcuts.shortcut(for: .closePane),
+        onClosePane: { model.closeSelectedPane() }
       )
       .frame(width: 0, height: 0)
     )
@@ -93,9 +71,6 @@ struct RootView: View {
     var hasher = Hasher()
     hasher.combine(model.isWorkspaceSwitcherPresented)
     hasher.combine(model.isHistoryPresented)
-    hasher.combine(model.isAICompanionPresented)
-    hasher.combine(model.commandCapsuleState.isPresented)
-    hasher.combine(model.commandCapsuleState.phase.rawValue)
     hasher.combine(model.titlebarToast?.message)
     hasher.combine(String(describing: model.titlebarToast?.style))
     hasher.combine(String(describing: model.titlebarToast?.lifetime))
@@ -118,21 +93,21 @@ private extension NSColor {
   }
 }
 
-private struct CommandCapsuleShortcutHost: NSViewRepresentable {
-  let binding: KeyboardShortcutBinding
-  let onOpen: () -> Void
+private struct TerminalShortcutHost: NSViewRepresentable {
+  let closePaneBinding: KeyboardShortcutBinding
+  let onClosePane: () -> Void
 
   func makeNSView(context: Context) -> KeyView {
     let view = KeyView()
-    view.binding = binding
-    view.onOpen = onOpen
+    view.closePaneBinding = closePaneBinding
+    view.onClosePane = onClosePane
     view.installMonitor()
     return view
   }
 
   func updateNSView(_ view: KeyView, context: Context) {
-    view.binding = binding
-    view.onOpen = onOpen
+    view.closePaneBinding = closePaneBinding
+    view.onClosePane = onClosePane
     view.installMonitor()
   }
 
@@ -141,8 +116,8 @@ private struct CommandCapsuleShortcutHost: NSViewRepresentable {
   }
 
   final class KeyView: NSView {
-    var binding: KeyboardShortcutBinding?
-    var onOpen: (() -> Void)?
+    var closePaneBinding: KeyboardShortcutBinding?
+    var onClosePane: (() -> Void)?
     private var monitor: Any?
 
     func installMonitor() {
@@ -151,11 +126,11 @@ private struct CommandCapsuleShortcutHost: NSViewRepresentable {
         guard let self else { return event }
         guard NSApp.modalWindow == nil else { return event }
         guard let window, event.window === window else { return event }
-        guard binding?.matches(key: event.proGhosttyShortcutKey, modifiers: event.proGhosttyShortcutModifiers) == true else {
-          return event
+        if closePaneBinding?.matches(key: event.proGhosttyShortcutKey, modifiers: event.proGhosttyShortcutModifiers) == true {
+          onClosePane?()
+          return nil
         }
-        onOpen?()
-        return nil
+        return event
       }
     }
 

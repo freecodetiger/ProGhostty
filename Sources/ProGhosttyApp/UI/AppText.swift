@@ -12,7 +12,7 @@ struct AppText {
   }
 
   var settings: String { text("Settings", "设置") }
-  var settingsCaption: String { text("Quiet defaults for terminal behavior, appearance, and shell tools.", "调整终端行为、外观和 Shell 工具的克制默认值。") }
+  var settingsCaption: String { text("Quiet defaults for terminal behavior, appearance, and plugins.", "调整终端行为、外观和插件管理的克制默认值。") }
   var workspaces: String { text("Workspaces...", "工作区...") }
   var copy: String { text("Copy", "复制") }
   var paste: String { text("Paste", "粘贴") }
@@ -32,6 +32,7 @@ struct AppText {
   var english: String { text("English", "英文") }
   var simplifiedChinese: String { text("Simplified Chinese", "简体中文") }
   var font: String { text("Font", "字体") }
+  var installedMonospacedFontsHint: String { text("Installed monospaced fonts appear here.", "已安装的等宽字体会显示在这里。") }
   var fontSize: String { text("Font size", "字号") }
   var followSystem: String { text("Follow system appearance", "跟随系统外观") }
   var theme: String { text("Theme", "主题") }
@@ -49,8 +50,8 @@ struct AppText {
   var previewLimit: String { text("Preview limit", "预览上限") }
   var rerunCommandsWithReturn: String { text("Rerun commands with Return", "按回车重新运行命令") }
   var pgControlCommands: String { text("Enable pg control commands", "启用 pg 控制命令") }
-  var shellEnhancements: String { text("Shell Enhancements", "Shell 增强") }
-  var shellEnhancementsCaption: String { text("Inspect shell tools without changing your terminal until a plan is reviewed.", "检查 Shell 工具；只有在确认计划后才会修改环境。") }
+  var shellEnhancements: String { text("Plugin Management", "插件管理") }
+  var shellEnhancementsCaption: String { text("Inspect and manage terminal plugins without changing your environment until a plan is reviewed.", "检查和管理终端插件；只有在确认计划后才会修改环境。") }
   var shortcuts: String { text("Shortcuts", "快捷键") }
   var shortcutConflict: String { text("Shortcut is already used.", "快捷键已被占用。") }
   var recordShortcut: String { text("Record", "录制") }
@@ -59,8 +60,8 @@ struct AppText {
   var openWorkspaceSwitcher: String { text("Switch Workspace", "切换工作区") }
   var focusPreviousPane: String { text("Focus Previous Pane", "聚焦上一个分屏") }
   var focusNextPane: String { text("Focus Next Pane", "聚焦下一个分屏") }
-  var shellTools: String { text("Shell tools", "Shell 工具") }
-  var shellToolsCaption: String { text("Detect-only by default; installs require an explicit plan.", "默认仅检测；安装需要明确的计划。") }
+  var shellTools: String { text("Terminal plugins", "终端插件") }
+  var shellToolsCaption: String { text("Detect-only by default; installs and removals require an explicit plan.", "默认仅检测；安装和卸载都需要明确的计划。") }
   var refresh: String { text("Refresh", "刷新") }
   var recommended: String { text("Recommended", "推荐") }
   var plan: String { text("Plan", "计划") }
@@ -97,7 +98,7 @@ struct AppText {
   var noDetectedPaths: String { text("No detected paths", "未检测到路径") }
   var issues: String { text("Issues", "问题") }
   var environmentSummary: String { text("Environment", "环境") }
-  var selectShellEnhancement: String { text("Select a shell enhancement", "选择一个 Shell 增强") }
+  var selectShellEnhancement: String { text("Select a plugin", "选择一个插件") }
   var noPlanAvailable: String { text("No plan available", "暂无可用计划") }
   var shellDefault: String { text("Default shell", "默认 Shell") }
   var homebrew: String { text("Homebrew", "Homebrew") }
@@ -107,8 +108,8 @@ struct AppText {
   var restoreDefaultsTitle: String { text("Restore default settings?", "恢复默认设置？") }
   var restoreDefaultsMessage: String {
     text(
-      "This will reset terminal, appearance, history, shortcut, and shell tool settings.",
-      "这会重置终端、外观、历史、快捷键和 Shell 工具设置。"
+      "This will reset terminal, appearance, history, shortcut, and plugin settings.",
+      "这会重置终端、外观、历史、快捷键和插件设置。"
     )
   }
   var about: String { text("About", "关于") }
@@ -119,6 +120,13 @@ struct AppText {
   var upToDateToast: String { text("ProGhostty is up to date", "ProGhostty 已是最新版本") }
   var updateCheckFailedToast: String { text("Update check failed", "检查更新失败") }
   var settingsSavedToast: String { text("Settings saved", "设置已保存") }
+  var pluginReloadCommandHint: String {
+    text(
+      "To apply plugin changes in an existing pane, copy and paste this command when you need it.",
+      "如需让已有分屏中的插件变更生效，可复制并按需粘贴运行这行命令。"
+    )
+  }
+  var pluginReloadCommandCopied: String { text("Copied", "已复制") }
   var save: String { text("Save", "保存") }
   var saved: String { text("Saved.", "已保存。") }
   var defaultsRestored: String { text("Defaults restored.", "已恢复默认设置。") }

@@ -66,21 +66,6 @@ struct ProGhosttyApp: App {
         .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .focusNextPane).swiftUIShortcut)
       }
 
-      CommandMenu("AI") {
-        Button("Codex Command Capsule") {
-          model.handleCodexCommandCapsuleShortcut()
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .openCodexCommandCapsule).swiftUIShortcut)
-
-        Divider()
-
-        Button("Open Codex Companion") {
-          model.openAICompanion(profile: .codex, mode: .rightSplit)
-        }
-        Button("Open Claude Code Companion") {
-          model.openAICompanion(profile: .claudeCode, mode: .rightSplit)
-        }
-      }
     }
     Settings {
       SettingsView()
@@ -91,6 +76,12 @@ struct ProGhosttyApp: App {
 }
 
 final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
+  func applicationWillFinishLaunching(_ notification: Notification) {
+    UserDefaults.standard.register(defaults: [
+      "NSAutoFillHeuristicControllerEnabled": false,
+    ])
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
