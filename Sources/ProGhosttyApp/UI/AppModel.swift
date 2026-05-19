@@ -558,18 +558,7 @@ final class AppModel: ObservableObject {
   }
 
   func appVersionString() -> String {
-    let version = appShortVersionString()
-    let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
-    switch (version.isEmpty == false ? version : nil, build?.isEmpty == false ? build : nil) {
-    case (.some(let version), .some(let build)):
-      return "\(version) (\(build))"
-    case (.some(let version), .none):
-      return version
-    case (.none, .some(let build)):
-      return build
-    case (.none, .none):
-      return "0.1.0"
-    }
+    appShortVersionString()
   }
 
   private func appShortVersionString() -> String {

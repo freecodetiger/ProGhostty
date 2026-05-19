@@ -45,6 +45,7 @@ private struct TerminalTreeLayoutView: NSViewControllerRepresentable {
       onSplit: { paneID, axis in model.splitPane(paneID, axis: axis) },
       onClose: { paneID in model.closePane(paneID) },
       menuText: model.appText,
+      keyboardShortcuts: model.settings.keyboardShortcuts,
       palette: model.terminalPalette,
       onResize: { paneID, rows, cols in model.resizePane(paneID, rows: rows, cols: cols) },
       isResizeSensitiveScreen: { paneID in model.paneIsResizeSensitiveScreen(paneID) },
@@ -67,6 +68,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
   private var onSplit: ((UUID, SplitAxis) -> Void)?
   private var onClose: ((UUID) -> Void)?
   private var menuText = AppText(language: "system")
+  private var keyboardShortcuts = KeyboardShortcutSettings.defaults
   private var palette = TerminalSurfacePalette.dark
   private var onResize: ((UUID, Int, Int) -> Void)?
   private var isResizeSensitiveScreen: ((UUID) -> Bool)?
@@ -89,6 +91,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
     menuText: AppText,
+    keyboardShortcuts: KeyboardShortcutSettings,
     palette: TerminalSurfacePalette,
     onResize: @escaping (UUID, Int, Int) -> Void,
     isResizeSensitiveScreen: @escaping (UUID) -> Bool,
@@ -105,6 +108,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     self.onSplit = onSplit
     self.onClose = onClose
     self.menuText = menuText
+    self.keyboardShortcuts = keyboardShortcuts
     self.palette = palette
     view.layer?.backgroundColor = palette.background.cgColor
     self.onResize = onResize
@@ -202,7 +206,8 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
         onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
         isResizeSensitiveScreen: { [weak self] paneID in self?.isResizeSensitiveScreen?(paneID) ?? false },
         onWorkspaceSwitcher: { [weak self] in self?.onWorkspaceSwitcher?() },
-        onSettings: { [weak self] in self?.onSettings?() }
+        onSettings: { [weak self] in self?.onSettings?() },
+        keyboardShortcuts: keyboardShortcuts
       )
       return controller
     case .split(let split):
@@ -401,7 +406,8 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
       isResizeSensitiveScreen: { [weak self] paneID in self?.isResizeSensitiveScreen?(paneID) ?? false },
       onWorkspaceSwitcher: { [weak self] in self?.onWorkspaceSwitcher?() },
-      onSettings: { [weak self] in self?.onSettings?() }
+      onSettings: { [weak self] in self?.onSettings?() },
+      keyboardShortcuts: keyboardShortcuts
     )
   }
 
@@ -574,7 +580,8 @@ final class TerminalPaneViewController: NSViewController {
     onResize: @escaping (UUID, Int, Int) -> Void,
     isResizeSensitiveScreen: @escaping (UUID) -> Bool,
     onWorkspaceSwitcher: @escaping () -> Void,
-    onSettings: @escaping () -> Void
+    onSettings: @escaping () -> Void,
+    keyboardShortcuts: KeyboardShortcutSettings
   ) {
     self.onSelect = onSelect
     self.onResize = onResize
@@ -585,6 +592,7 @@ final class TerminalPaneViewController: NSViewController {
       onSplit: onSplit,
       onClose: onClose,
       text: menuText,
+      keyboardShortcuts: keyboardShortcuts,
       onWorkspaceSwitcher: onWorkspaceSwitcher,
       onSettings: onSettings
     ), in: view)
@@ -735,6 +743,7 @@ final class TerminalPaneViewController: NSViewController {
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
     text: AppText,
+    keyboardShortcuts: KeyboardShortcutSettings,
     onWorkspaceSwitcher: @escaping () -> Void,
     onSettings: @escaping () -> Void
   ) -> NSMenu {
@@ -742,16 +751,28 @@ final class TerminalPaneViewController: NSViewController {
     menu.allowsContextMenuPlugIns = false
     menu.autoenablesItems = false
     let paneId = pane.paneId
-    menu.addItem(ClosureMenuItem(title: text.copy) { [weak self] in
-      self?.copyFromTerminalSurface()
-    } isEnabled: { [weak self] in
-      self?.hasTerminalSelection() == true
-    })
-    menu.addItem(ClosureMenuItem(title: text.paste) { [weak self] in
-      self?.pasteIntoTerminalSurface()
-    } isEnabled: {
-      NSPasteboard.general.string(forType: .string)?.isEmpty == false
-    })
+    menu.addItem(ClosureMenuItem(
+      title: text.copy,
+      handler: { [weak self] in
+        self?.copyFromTerminalSurface()
+      },
+      keyEquivalent: "c",
+      modifierMask: [.command],
+      isEnabled: { [weak self] in
+        self?.hasTerminalSelection() == true
+      }
+    ))
+    menu.addItem(ClosureMenuItem(
+      title: text.paste,
+      handler: { [weak self] in
+        self?.pasteIntoTerminalSurface()
+      },
+      keyEquivalent: "v",
+      modifierMask: [.command],
+      isEnabled: {
+        NSPasteboard.general.string(forType: .string)?.isEmpty == false
+      }
+    ))
     menu.addItem(.separator())
     menu.addItem(SplitControlMenuItem(
       title: text.splitPane,
@@ -773,9 +794,15 @@ final class TerminalPaneViewController: NSViewController {
       }
     ))
     menu.addItem(.separator())
-    menu.addItem(ClosureMenuItem(title: text.closePane) {
-      onClose(paneId)
-    })
+    let closePaneShortcut = keyboardShortcuts.shortcut(for: .closePane)
+    menu.addItem(ClosureMenuItem(
+      title: text.closePane,
+      handler: {
+        onClose(paneId)
+      },
+      keyEquivalent: closePaneShortcut.nsMenuKeyEquivalent,
+      modifierMask: closePaneShortcut.nsMenuModifierMask
+    ))
     menu.addItem(.separator())
     menu.addItem(ClosureMenuItem(title: text.workspaces) {
       onWorkspaceSwitcher()
@@ -862,11 +889,14 @@ private final class ClosureMenuItem: NSMenuItem, NSMenuItemValidation {
   init(
     title: String,
     handler: @escaping () -> Void,
+    keyEquivalent: String = "",
+    modifierMask: NSEvent.ModifierFlags = [],
     isEnabled: @escaping () -> Bool = { true }
   ) {
     self.handler = handler
     isEnabledProvider = isEnabled
-    super.init(title: title, action: #selector(run), keyEquivalent: "")
+    super.init(title: title, action: #selector(run), keyEquivalent: keyEquivalent)
+    keyEquivalentModifierMask = modifierMask
     target = self
   }
 
@@ -1164,6 +1194,50 @@ private final class ClosureMenuItem: NSMenuItem, NSMenuItemValidation {
   }
   for subview in view.subviews {
     install(menu: menu, in: subview)
+  }
+}
+
+private extension KeyboardShortcutBinding {
+  var nsMenuKeyEquivalent: String {
+    switch key {
+    case "leftArrow":
+      return String(Character(UnicodeScalar(NSLeftArrowFunctionKey)!))
+    case "rightArrow":
+      return String(Character(UnicodeScalar(NSRightArrowFunctionKey)!))
+    case "upArrow":
+      return String(Character(UnicodeScalar(NSUpArrowFunctionKey)!))
+    case "downArrow":
+      return String(Character(UnicodeScalar(NSDownArrowFunctionKey)!))
+    case "escape":
+      return String(Character(UnicodeScalar(0x1B)!))
+    case "delete":
+      return String(Character(UnicodeScalar(NSDeleteCharacter)!))
+    case "return":
+      return "\r"
+    case "tab":
+      return "\t"
+    case "space":
+      return " "
+    default:
+      return key.count == 1 ? key.lowercased() : ""
+    }
+  }
+
+  var nsMenuModifierMask: NSEvent.ModifierFlags {
+    var mask: NSEvent.ModifierFlags = []
+    if modifiers.contains(.command) {
+      mask.insert(.command)
+    }
+    if modifiers.contains(.control) {
+      mask.insert(.control)
+    }
+    if modifiers.contains(.option) {
+      mask.insert(.option)
+    }
+    if modifiers.contains(.shift) {
+      mask.insert(.shift)
+    }
+    return mask
   }
 }
 

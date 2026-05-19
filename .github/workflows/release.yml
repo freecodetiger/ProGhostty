@@ -53,10 +53,11 @@ jobs:
           prerelease: false
           generate_release_notes: true
           body: |
-            ProGhostty v0.1.0 is the first formal DMG build.
+            ProGhostty ${{ github.ref_name }} formal DMG build.
 
             Highlights:
             - Native macOS terminal window with real PTY-backed sessions.
             - Ghostty VT cell-grid rendering path for terminal output.
             - Split panes, workspaces, settings, plugin manager, and update checks.
+            - Context menu shortcut hints for copy, paste, and close pane.
             - Ad-hoc signed DMG. macOS may warn that the developer cannot be verified.
