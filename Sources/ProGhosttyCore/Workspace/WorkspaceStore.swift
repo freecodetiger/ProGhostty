@@ -2,9 +2,9 @@ import Foundation
 import SQLite3
 
 public final class WorkspaceStore {
-  private let database: HistoryDatabase
+  private let database: AppDatabase
 
-  public init(database: HistoryDatabase) {
+  public init(database: AppDatabase) {
     self.database = database
   }
 

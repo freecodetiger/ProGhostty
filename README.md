@@ -2,7 +2,7 @@
 
 ## 中文
 
-ProGhostty 是一个 macOS 原生终端实验项目。它以真实 PTY、用户现有 shell 环境和 Ghostty 的终端核心能力为基础，在上层补充工作区、分屏、历史和插件管理等产品能力。
+ProGhostty 是一个 macOS 原生终端实验项目。它以真实 PTY、用户现有 shell 环境和 Ghostty 的终端核心能力为基础，在上层补充工作区、分屏、设置和插件管理等产品能力。
 
 项目的目标不是重新发明 shell，也不是把终端包装成一套封闭 IDE。ProGhostty 保留真实 shell 工作流：用户的 `.zshrc`、alias、补全、prompt、shell plugin 和 TUI 程序都应继续按终端生态的方式运行。
 
@@ -12,7 +12,7 @@ ProGhostty 是一个 macOS 原生终端实验项目。它以真实 PTY、用户�
 
 - 真实 shell 优先：终端会话必须来自真实 PTY，而不是自定义命令解释器。
 - `libghostty-vt` 负责终端语义：VT 解析、光标、样式、滚动状态和终端网格不由 UI 层猜测。
-- 产品能力在终端外层实现：工作区、分屏、设置、历史和插件不污染终端核心。
+- 产品能力在终端外层实现：工作区、分屏、设置和插件不污染终端核心。
 - 不按程序名特殊处理 TUI：Codex、Claude Code、vim、tmux、fzf 等都应从同一套终端状态和输入规则中受益。
 - Ghostty 相关 API 必须封装在 bridge / adapter 后面，避免产品层直接依赖不稳定接口。
 
@@ -20,7 +20,7 @@ ProGhostty 是一个 macOS 原生终端实验项目。它以真实 PTY、用户�
 
 ```text
 SwiftUI / AppKit UI
-  -> Workspace / Split / Settings / Plugins / History
+  -> Workspace / Split / Settings / Plugins
   -> TerminalEngine
   -> PTYTerminalEngine
   -> forkpty shell
@@ -42,7 +42,7 @@ SwiftUI / AppKit UI
 - split tree 管理分屏布局，关闭 pane 只释放对应 session。
 - 多 workspace 并存，非当前 workspace 的 session 默认保持运行，只 detach UI。
 - workspace switcher 支持切换、创建、重命名和删除工作区。
-- OSC 133 / OSC 7 作为 side-channel 记录命令和 cwd 信息。
+- OSC 7 作为 side-channel 跟踪 cwd 信息。
 - 设置持久化，支持主题、字体、默认工作目录和自定义快捷键。
 - shell 插件管理支持扫描、安装计划、备份、回滚和受控写入。
 - 基于 `libghostty-vt` cell grid 的终端渲染路径，以及文本 fallback。
@@ -101,7 +101,7 @@ swift test --no-parallel
 ```text
 Sources/
   ProGhosttyApp/        macOS app, SwiftUI/AppKit UI, windows, workspace UI
-  ProGhosttyCore/       PTY engine, Ghostty bridge, settings, history
+  ProGhosttyCore/       PTY engine, Ghostty bridge, settings, plugins
   ProGhosttyGhosttyVT/  C boundary for libghostty-vt
   ProGhosttyPTY/        forkpty / resize / wait C helpers
   ProGhosttyPG/         shell-facing helper command
@@ -134,7 +134,7 @@ docs/
 
 ## English
 
-ProGhostty is an experimental native macOS terminal. It is built on real PTY sessions, the user's existing shell environment, and Ghostty's terminal core capabilities, while adding product-level features such as workspaces, splits, history, and plugin management.
+ProGhostty is an experimental native macOS terminal. It is built on real PTY sessions, the user's existing shell environment, and Ghostty's terminal core capabilities, while adding product-level features such as workspaces, splits, settings, and plugin management.
 
 The goal is not to reinvent the shell or wrap the terminal in a closed IDE. ProGhostty preserves the real terminal workflow: `.zshrc`, aliases, completions, prompts, shell plugins, and TUI applications should continue to behave as part of the normal terminal ecosystem.
 
@@ -144,7 +144,7 @@ The project is currently an MVP. The active runtime path is `PTYTerminalEngine`;
 
 - Real shell first: terminal sessions must come from a real PTY, not a custom command interpreter.
 - `libghostty-vt` owns terminal semantics: VT parsing, cursor state, styles, scrolling, and the terminal grid are not guessed by the UI layer.
-- Product features live outside the terminal core: workspaces, splits, settings, history, and plugins must not pollute terminal semantics.
+- Product features live outside the terminal core: workspaces, splits, settings, and plugins must not pollute terminal semantics.
 - No app-name-specific TUI handling: Codex, Claude Code, vim, tmux, fzf, and similar tools should benefit from the same terminal-state and input rules.
 - Ghostty APIs must stay behind bridge / adapter boundaries so product code does not depend directly on unstable interfaces.
 
@@ -152,7 +152,7 @@ The project is currently an MVP. The active runtime path is `PTYTerminalEngine`;
 
 ```text
 SwiftUI / AppKit UI
-  -> Workspace / Split / Settings / Plugins / History
+  -> Workspace / Split / Settings / Plugins
   -> TerminalEngine
   -> PTYTerminalEngine
   -> forkpty shell
@@ -166,7 +166,6 @@ Related documents:
 - `docs/architecture/terminal-rendering-rework.md`
 - `docs/renderer-scrolling.md`
 - `docs/libghostty-vt.md`
-- `docs/superpowers/specs/2026-05-18-codex-command-capsule-design.md`
 
 ### Implemented Capabilities
 
@@ -175,7 +174,7 @@ Related documents:
 - Split-tree-based pane layout; closing a pane releases only that pane's session.
 - Multiple workspaces; inactive workspaces keep their sessions running by default.
 - Workspace switcher for switching, creating, renaming, and deleting workspaces.
-- OSC 133 / OSC 7 side-channel indexing for command and cwd metadata.
+- OSC 7 side-channel tracking for cwd metadata.
 - Persistent settings for theme, font, default working directory, and custom shortcuts.
 - Shell plugin management with detection, install plans, backups, rollback, and controlled writes.
 - `libghostty-vt` cell-grid rendering path with a text fallback.
@@ -234,7 +233,7 @@ swift test --no-parallel
 ```text
 Sources/
   ProGhosttyApp/        macOS app, SwiftUI/AppKit UI, windows, workspace UI
-  ProGhosttyCore/       PTY engine, Ghostty bridge, settings, history
+  ProGhosttyCore/       PTY engine, Ghostty bridge, settings, plugins
   ProGhosttyGhosttyVT/  C boundary for libghostty-vt
   ProGhosttyPTY/        forkpty / resize / wait C helpers
   ProGhosttyPG/         shell-facing helper command

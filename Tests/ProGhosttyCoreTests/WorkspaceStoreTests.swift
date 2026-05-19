@@ -52,6 +52,6 @@ struct WorkspaceStoreTests {
     let url = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString)
       .appendingPathExtension("sqlite")
-    return try WorkspaceStore(database: HistoryDatabase(path: url.path))
+    return try WorkspaceStore(database: AppDatabase(path: url.path))
   }
 }

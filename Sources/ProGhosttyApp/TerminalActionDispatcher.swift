@@ -15,10 +15,6 @@ struct TerminalActionDispatcher {
       if let name = message.args["name"] {
         model.openWorkspaceCreation(named: name)
       }
-    case .historyOpen:
-      model.openHistory()
-    case .historySearch:
-      model.openHistory(search: message.args["query"] ?? "")
     case .pluginsOpen:
       model.openPlugins()
     case .pluginsScan:

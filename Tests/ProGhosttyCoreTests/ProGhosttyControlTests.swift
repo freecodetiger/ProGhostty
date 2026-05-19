@@ -50,8 +50,6 @@ struct ProGhosttyControlTests {
   @Test func pgMapperMapsAliasesAndArguments() {
     #expect(PGCommandMapper.map(arguments: ["ws"])?.command == .workspaceOpen)
     #expect(PGCommandMapper.map(arguments: ["workspace"])?.command == .workspaceOpen)
-    #expect(PGCommandMapper.map(arguments: ["hist"])?.command == .historyOpen)
-    #expect(PGCommandMapper.map(arguments: ["history"])?.command == .historyOpen)
     #expect(PGCommandMapper.map(arguments: ["plugins"])?.command == .pluginsOpen)
     #expect(PGCommandMapper.map(arguments: ["settings"])?.command == .settingsOpen)
     #expect(PGCommandMapper.map(arguments: ["split", "right"])?.command == .splitRight)
@@ -62,10 +60,6 @@ struct ProGhosttyControlTests {
     let switchWorkspace = PGCommandMapper.map(arguments: ["ws", "switch", "Client", "A"])
     #expect(switchWorkspace?.command == .workspaceSwitch)
     #expect(switchWorkspace?.args == ["name": "Client A"])
-
-    let historySearch = PGCommandMapper.map(arguments: ["hist", "search", "git", "status"])
-    #expect(historySearch?.command == .historySearch)
-    #expect(historySearch?.args == ["query": "git status"])
 
     let pluginPlan = PGCommandMapper.map(arguments: ["plugins", "plan", "zsh-autosuggestions"])
     #expect(pluginPlan?.command == .pluginsPlan)

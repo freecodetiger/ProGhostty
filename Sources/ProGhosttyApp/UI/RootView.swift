@@ -18,20 +18,8 @@ struct RootView: View {
           .transition(.opacity.combined(with: .scale(scale: 0.98)))
       }
 
-      if model.isHistoryPresented {
-        UtilityOverlay(
-          width: 820,
-          height: 560,
-          onClose: { model.closeHistory() }
-        ) {
-          HistoryView()
-        }
-        .transition(.opacity.combined(with: .scale(scale: 0.985)))
-      }
-
     }
     .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
-    .animation(.easeOut(duration: 0.12), value: model.isHistoryPresented)
     .animation(.easeOut(duration: 0.14), value: model.titlebarToast)
     .preferredColorScheme(model.appColorScheme)
     .background(Color(nsColor: model.terminalBackgroundColor).ignoresSafeArea())
@@ -70,7 +58,6 @@ struct RootView: View {
   private var terminalChromeSyncToken: Int {
     var hasher = Hasher()
     hasher.combine(model.isWorkspaceSwitcherPresented)
-    hasher.combine(model.isHistoryPresented)
     hasher.combine(model.titlebarToast?.message)
     hasher.combine(String(describing: model.titlebarToast?.style))
     hasher.combine(String(describing: model.titlebarToast?.lifetime))

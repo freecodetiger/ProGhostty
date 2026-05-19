@@ -44,11 +44,6 @@ struct AppText {
   var rendererTextFallback: String { text("Text fallback", "文本回退") }
   var dirtyRowRendering: String { text("Dirty row rendering", "脏行增量渲染") }
   var forceFullRedraw: String { text("Force full redraw for debug", "调试时强制全量重绘") }
-  var history: String { text("History", "历史") }
-  var commandBlocks: String { text("Command blocks", "命令块") }
-  var outputPreviews: String { text("Output previews", "输出预览") }
-  var previewLimit: String { text("Preview limit", "预览上限") }
-  var rerunCommandsWithReturn: String { text("Rerun commands with Return", "按回车重新运行命令") }
   var pgControlCommands: String { text("Enable pg control commands", "启用 pg 控制命令") }
   var shellEnhancements: String { text("Plugin Management", "插件管理") }
   var shellEnhancementsCaption: String { text("Inspect and manage terminal plugins without changing your environment until a plan is reviewed.", "检查和管理终端插件；只有在确认计划后才会修改环境。") }
@@ -108,8 +103,8 @@ struct AppText {
   var restoreDefaultsTitle: String { text("Restore default settings?", "恢复默认设置？") }
   var restoreDefaultsMessage: String {
     text(
-      "This will reset terminal, appearance, history, shortcut, and plugin settings.",
-      "这会重置终端、外观、历史、快捷键和插件设置。"
+      "This will reset terminal, appearance, shortcut, and plugin settings.",
+      "这会重置终端、外观、快捷键和插件设置。"
     )
   }
   var about: String { text("About", "关于") }

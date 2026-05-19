@@ -13,11 +13,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
   public var themeName: String
   public var followSystemAppearance: Bool
   public var appLanguage: String
-  public var commandBlocksEnabled: Bool
-  public var historyEnabled: Bool
-  public var saveOutputPreview: Bool
-  public var maxOutputPreviewKB: Int
-  public var rerunAutoEnter: Bool
   public var pgControlCommandsEnabled: Bool
   public var keyboardShortcuts: KeyboardShortcutSettings
 
@@ -33,11 +28,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     themeName: "dark",
     followSystemAppearance: true,
     appLanguage: "system",
-    commandBlocksEnabled: true,
-    historyEnabled: true,
-    saveOutputPreview: true,
-    maxOutputPreviewKB: 64,
-    rerunAutoEnter: false,
     pgControlCommandsEnabled: true,
     keyboardShortcuts: .defaults
   )
@@ -54,11 +44,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     case themeName
     case followSystemAppearance
     case appLanguage
-    case commandBlocksEnabled
-    case historyEnabled
-    case saveOutputPreview
-    case maxOutputPreviewKB
-    case rerunAutoEnter
     case pgControlCommandsEnabled
     case keyboardShortcuts
   }
@@ -75,11 +60,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     themeName: String,
     followSystemAppearance: Bool,
     appLanguage: String,
-    commandBlocksEnabled: Bool,
-    historyEnabled: Bool,
-    saveOutputPreview: Bool,
-    maxOutputPreviewKB: Int,
-    rerunAutoEnter: Bool,
     pgControlCommandsEnabled: Bool,
     keyboardShortcuts: KeyboardShortcutSettings
   ) {
@@ -94,11 +74,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     self.themeName = ThemeManager.normalizedThemeName(themeName)
     self.followSystemAppearance = followSystemAppearance
     self.appLanguage = AppLanguageManager.normalizedLanguage(appLanguage)
-    self.commandBlocksEnabled = commandBlocksEnabled
-    self.historyEnabled = historyEnabled
-    self.saveOutputPreview = saveOutputPreview
-    self.maxOutputPreviewKB = maxOutputPreviewKB
-    self.rerunAutoEnter = rerunAutoEnter
     self.pgControlCommandsEnabled = pgControlCommandsEnabled
     self.keyboardShortcuts = keyboardShortcuts.mergedWithDefaults()
   }
@@ -119,11 +94,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     appLanguage = AppLanguageManager.normalizedLanguage(
       try container.decodeIfPresent(String.self, forKey: .appLanguage) ?? Self.defaults.appLanguage
     )
-    commandBlocksEnabled = try container.decodeIfPresent(Bool.self, forKey: .commandBlocksEnabled) ?? Self.defaults.commandBlocksEnabled
-    historyEnabled = try container.decodeIfPresent(Bool.self, forKey: .historyEnabled) ?? Self.defaults.historyEnabled
-    saveOutputPreview = try container.decodeIfPresent(Bool.self, forKey: .saveOutputPreview) ?? Self.defaults.saveOutputPreview
-    maxOutputPreviewKB = try container.decodeIfPresent(Int.self, forKey: .maxOutputPreviewKB) ?? Self.defaults.maxOutputPreviewKB
-    rerunAutoEnter = try container.decodeIfPresent(Bool.self, forKey: .rerunAutoEnter) ?? Self.defaults.rerunAutoEnter
     pgControlCommandsEnabled = try container.decodeIfPresent(Bool.self, forKey: .pgControlCommandsEnabled) ?? Self.defaults.pgControlCommandsEnabled
     keyboardShortcuts = (
       try container.decodeIfPresent(KeyboardShortcutSettings.self, forKey: .keyboardShortcuts) ?? Self.defaults.keyboardShortcuts

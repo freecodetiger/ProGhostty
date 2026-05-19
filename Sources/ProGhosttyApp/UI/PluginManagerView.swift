@@ -466,8 +466,8 @@ struct PluginManagerView: View {
       return (
         text.localized("Searchable shell history with optional sync.", "可搜索、可选同步的 Shell 历史。"),
         text.localized(
-          "Atuin is powerful, but it overlaps with terminal-side command history. ProGhostty marks it as higher risk and never recommends it by default.",
-          "Atuin 很强，但会和终端侧命令历史产生重叠。ProGhostty 将它标记为较高风险，默认不会主动推荐。"
+          "Atuin is powerful, but it changes shell history behavior, key bindings, and storage. ProGhostty marks it as higher risk and never recommends it by default.",
+          "Atuin 很强，但会改变 Shell 历史行为、快捷键和存储方式。ProGhostty 将它标记为较高风险，默认不会主动推荐。"
         )
       )
     case "gh":

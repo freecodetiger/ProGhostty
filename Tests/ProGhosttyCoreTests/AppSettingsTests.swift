@@ -11,12 +11,7 @@ struct AppSettingsTests {
         "defaultShell": "/bin/zsh",
         "fontFamily": "Menlo",
         "fontSize": 14,
-        "themeName": "dark",
-        "commandBlocksEnabled": true,
-        "historyEnabled": true,
-        "saveOutputPreview": true,
-        "maxOutputPreviewKB": 64,
-        "rerunAutoEnter": false
+        "themeName": "dark"
       }
       """.data(using: .utf8)!
 
@@ -68,12 +63,7 @@ struct AppSettingsTests {
         "defaultShell": "/bin/zsh",
         "fontFamily": "Menlo",
         "fontSize": 14,
-        "themeName": "system",
-        "commandBlocksEnabled": true,
-        "historyEnabled": true,
-        "saveOutputPreview": true,
-        "maxOutputPreviewKB": 64,
-        "rerunAutoEnter": false
+        "themeName": "system"
       }
       """.data(using: .utf8)!
 

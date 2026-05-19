@@ -133,7 +133,6 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
   private func run(command: String, session id: TerminalSessionID) {
     guard let state = sessions[id] else { return }
     let cwd = state.config.workingDirectory ?? FileManager.default.currentDirectoryPath
-    continuation.yield(.commandStarted(session: id, command: command))
 
     let shell = state.config.shellPath
     let environment = state.config.environment
@@ -147,7 +146,6 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
         self.append(result.output, toSession: id)
         self.continuation.yield(.output(session: id, data: Data(result.output.utf8)))
       }
-      self.continuation.yield(.commandFinished(session: id, exitCode: result.exitCode))
       self.append("\(cwd) $ ", toSession: id)
     }
   }

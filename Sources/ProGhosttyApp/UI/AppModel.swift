@@ -9,7 +9,6 @@ final class AppModel: ObservableObject {
     var layout: WorkspaceLayout
     var workspace: Workspace?
     var cwdBySession: [TerminalSessionID: String]
-    var lastBlockBySession: [TerminalSessionID: CommandBlock]
 
     var id: UUID {
       layout.id
@@ -33,32 +32,14 @@ final class AppModel: ObservableObject {
       return cwdBySession[selectedSessionID]
     }
 
-    @MainActor func selectedLastBlock(focusStore: TerminalFocusStore) -> CommandBlock? {
-      guard let selectedSessionID = selectedSessionID(focusStore: focusStore) else { return nil }
-      return lastBlockBySession[selectedSessionID]
-    }
-
   }
 
-  enum Section: String, CaseIterable, Identifiable {
-    case terminals = "Terminals"
-    case history = "History"
-    case plugins = "Plugins"
-    case settings = "Settings"
-
-    var id: String { rawValue }
-  }
-
-  @Published var section: Section = .terminals
   @Published var workspaceRuntimes: [WorkspaceRuntime] = []
   @Published var activeWorkspaceID: UUID?
   @Published var isWorkspaceSwitcherPresented = false
-  @Published var isHistoryPresented = false
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
   @Published var titlebarToast: TitlebarToast?
   @Published var commandLine = ""
-  @Published var historySearch = ""
-  @Published var historyResults: [CommandBlock] = []
   @Published var workspaces: [Workspace] = []
   @Published var settings: AppSettings {
     didSet {
@@ -75,8 +56,6 @@ final class AppModel: ObservableObject {
   private let paneWorkspaceController: PaneWorkspaceController
   private let updateChecker = AppUpdateChecker()
   private let focusStore = TerminalFocusStore()
-  private var indexer: CommandBlockIndexer
-  private let historyStore: HistoryStore?
   private let workspaceStore: WorkspaceStore?
   private let settingsStore: SettingsStore
   private let terminalActionDispatcher = TerminalActionDispatcher()
@@ -104,10 +83,8 @@ final class AppModel: ObservableObject {
     let loadedSettings = settingsStore.load()
     settings = loadedSettings
     if let database = Self.openDatabase() {
-      historyStore = HistoryStore(database: database)
       workspaceStore = WorkspaceStore(database: database)
     } else {
-      historyStore = nil
       workspaceStore = nil
     }
     let surfaceRegistry = PTYTerminalSurfaceRegistry()
@@ -115,7 +92,6 @@ final class AppModel: ObservableObject {
     self.surfaceRegistry = surfaceRegistry
     self.sessionManager = sessionManager
     paneWorkspaceController = PaneWorkspaceController(sessionManager: sessionManager, focusStore: focusStore)
-    indexer = CommandBlockIndexer(maxPreviewBytes: loadedSettings.maxOutputPreviewKB * 1024)
 
     surfaceRegistry.setInputHandler { [weak self] sourceSession, data in
       self?.routeTerminalInput(data, from: sourceSession)
@@ -144,17 +120,14 @@ final class AppModel: ObservableObject {
         paneTitle: URL(fileURLWithPath: cwd).lastPathComponent,
         cwd: cwd
       )
-      indexer.associate(session: opened.pane.sessionId, workspaceId: workspace?.id)
       let runtime = WorkspaceRuntime(
         layout: opened.workspace,
         workspace: workspace,
-        cwdBySession: [opened.pane.sessionId: cwd],
-        lastBlockBySession: [:]
+        cwdBySession: [opened.pane.sessionId: cwd]
       )
       workspaceRuntimes.append(runtime)
       activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
       syncWorkspaceSwitcherState()
-      section = .terminals
     } catch {
       shellIntegrationState = "terminal unavailable: \(error.localizedDescription)"
     }
@@ -294,10 +267,6 @@ final class AppModel: ObservableObject {
     activeWorkspace?.selectedCwd(focusStore: focusStore)
   }
 
-  var selectedLastBlock: CommandBlock? {
-    activeWorkspace?.selectedLastBlock(focusStore: focusStore)
-  }
-
   private var activeWorkspacePaneCount: Int {
     guard let activeWorkspace else { return 0 }
     return PaneTreeReducer.listLeaves(in: activeWorkspace.layout.root).count
@@ -382,7 +351,6 @@ final class AppModel: ObservableObject {
         paneTitle: URL(fileURLWithPath: cwd).lastPathComponent,
         cwd: cwd
       )
-      indexer.associate(session: split.pane.sessionId, workspaceId: workspace?.id)
       runtime.layout = split.workspace
       runtime.cwdBySession[split.pane.sessionId] = cwd
       workspaceRuntimes[index] = runtime
@@ -420,7 +388,6 @@ final class AppModel: ObservableObject {
       guard let updatedLayout = paneWorkspaceController.workspaceLayout(id: activeWorkspaceID) else { return }
       runtime.layout = updatedLayout
       runtime.cwdBySession[closed.sessionId] = nil
-      runtime.lastBlockBySession[closed.sessionId] = nil
       workspaceRuntimes[index] = runtime
       applyFocusedTerminalSurface()
       let leavesAfter = PaneTreeReducer.listLeaves(in: runtime.layout.root)
@@ -428,13 +395,6 @@ final class AppModel: ObservableObject {
     } catch {
       DebugLog.write("closePane failed error=\(error)")
     }
-  }
-
-  func rerun(_ block: CommandBlock) {
-    guard let command = block.command, let selectedSessionID else { return }
-    let payload = settings.rerunAutoEnter ? command + "\n" : command
-    sessionManager.writeInput(Data(payload.utf8), to: selectedSessionID)
-    closeUtilityOverlays()
   }
 
   private func routeTerminalInput(_ data: Data, from sourceSession: TerminalSessionID) {
@@ -754,30 +714,6 @@ final class AppModel: ObservableObject {
     return appearance == .aqua ? "light" : "dark"
   }
 
-  func searchHistory() {
-    historyResults =
-      (try? historyStore?.search(HistoryQuery(text: historySearch.isEmpty ? nil : historySearch)))
-      ?? []
-  }
-
-  func openHistory(search query: String? = nil) {
-    if let query {
-      historySearch = query
-    }
-    isWorkspaceSwitcherPresented = false
-    isHistoryPresented = true
-    searchHistory()
-  }
-
-  func closeHistory() {
-    isHistoryPresented = false
-  }
-
-  func clearHistory() {
-    try? historyStore?.deleteAll()
-    historyResults = []
-  }
-
   func openPlugins(scan: Bool = false) {
     if scan {
       requestedPluginScanToken += 1
@@ -828,7 +764,6 @@ final class AppModel: ObservableObject {
   }
 
   func closeUtilityOverlays() {
-    isHistoryPresented = false
     isWorkspaceSwitcherPresented = false
   }
 
@@ -872,7 +807,6 @@ final class AppModel: ObservableObject {
     for session in removedSessions {
       sessionManager.closeSession(session)
       workspaceRuntimes[index].cwdBySession[session] = nil
-      workspaceRuntimes[index].lastBlockBySession[session] = nil
     }
 
     workspaceRuntimes[index].layout = saved
@@ -954,7 +888,6 @@ final class AppModel: ObservableObject {
   }
 
   func openWorkspaceSwitcher() {
-    isHistoryPresented = false
     syncWorkspaceSwitcherState()
     isWorkspaceSwitcherPresented = true
   }
@@ -1058,7 +991,6 @@ final class AppModel: ObservableObject {
     workspaceRuntimes[index].layout = updated
     for pane in PaneTreeReducer.listLeaves(in: updated.root) {
       workspaceRuntimes[index].cwdBySession[pane.sessionId] = workspaceRuntimes[index].cwdBySession[pane.sessionId] ?? pane.cwd ?? workspaceRuntimes[index].displayPath ?? ""
-      indexer.associate(session: pane.sessionId, workspaceId: workspaceRuntimes[index].workspace?.id)
     }
   }
 
@@ -1094,16 +1026,6 @@ final class AppModel: ObservableObject {
     default:
       break
     }
-
-    guard settings.commandBlocksEnabled else { return }
-    let changes = indexer.process(event)
-    for block in changes {
-      updateWorkspaceForSession(block.sessionId) { workspace in workspace.lastBlockBySession[block.sessionId] = block }
-      if settings.historyEnabled, block.status != .running {
-        try? historyStore?.upsert(block)
-        searchHistory()
-      }
-    }
   }
 
   private func updateWorkspaceForSession(_ id: TerminalSessionID, _ update: (inout WorkspaceRuntime) -> Void) {
@@ -1131,7 +1053,7 @@ final class AppModel: ObservableObject {
     terminalActionDispatcher.dispatch(message, in: self)
   }
 
-  private static func openDatabase() -> HistoryDatabase? {
+  private static func openDatabase() -> AppDatabase? {
     let appSupport = FileManager.default.urls(
       for: .applicationSupportDirectory, in: .userDomainMask
     ).first!
@@ -1139,11 +1061,11 @@ final class AppModel: ObservableObject {
     try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
 
     do {
-      return try HistoryDatabase(path: appSupport.appendingPathComponent("proghostty.sqlite").path)
+      return try AppDatabase(path: appSupport.appendingPathComponent("proghostty.sqlite").path)
     } catch {
       let fallback = FileManager.default.temporaryDirectory
         .appendingPathComponent("proghostty-\(UUID().uuidString).sqlite")
-      return try? HistoryDatabase(path: fallback.path)
+      return try? AppDatabase(path: fallback.path)
     }
   }
 }

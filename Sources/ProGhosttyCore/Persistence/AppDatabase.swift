@@ -21,7 +21,7 @@ public enum DatabaseError: Error, CustomStringConvertible {
   }
 }
 
-public final class HistoryDatabase {
+public final class AppDatabase {
   private let db: OpaquePointer?
 
   public init(path: String) throws {
@@ -68,14 +68,6 @@ public final class HistoryDatabase {
     }
   }
 
-  func bind(_ value: Int?, to index: Int32, in statement: OpaquePointer?) throws {
-    if let value {
-      sqlite3_bind_int64(statement, index, sqlite3_int64(value))
-    } else {
-      sqlite3_bind_null(statement, index)
-    }
-  }
-
   func bind(_ value: Int64?, to index: Int32, in statement: OpaquePointer?) throws {
     if let value {
       sqlite3_bind_int64(statement, index, sqlite3_int64(value))
@@ -105,35 +97,6 @@ public final class HistoryDatabase {
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
       );
-
-      CREATE TABLE IF NOT EXISTS terminal_sessions (
-          id TEXT PRIMARY KEY,
-          workspace_id TEXT,
-          shell_path TEXT,
-          initial_cwd TEXT,
-          started_at INTEGER NOT NULL,
-          ended_at INTEGER
-      );
-
-      CREATE TABLE IF NOT EXISTS command_blocks (
-          id TEXT PRIMARY KEY,
-          workspace_id TEXT,
-          session_id TEXT NOT NULL,
-          cwd TEXT,
-          command TEXT,
-          output_preview TEXT NOT NULL,
-          output_storage_ref TEXT,
-          started_at INTEGER NOT NULL,
-          ended_at INTEGER,
-          duration_ms INTEGER,
-          exit_code INTEGER,
-          status TEXT NOT NULL,
-          shell_integration_reliable INTEGER NOT NULL,
-          created_at INTEGER NOT NULL
-      );
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS command_blocks_fts
-      USING fts5(id UNINDEXED, command, output_preview, cwd);
       """)
   }
 }
@@ -153,11 +116,6 @@ func textColumn(_ statement: OpaquePointer?, _ column: Int32) -> String? {
     return nil
   }
   return String(cString: pointer)
-}
-
-func intColumn(_ statement: OpaquePointer?, _ column: Int32) -> Int? {
-  sqlite3_column_type(statement, column) == SQLITE_NULL
-    ? nil : Int(sqlite3_column_int64(statement, column))
 }
 
 func int64Column(_ statement: OpaquePointer?, _ column: Int32) -> Int64? {

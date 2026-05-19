@@ -1180,19 +1180,6 @@ struct InspectorView: View {
       Text("integration: \(model.shellIntegrationState)")
         .font(.caption)
 
-      Divider()
-
-      Text("Recent Block")
-        .font(.headline)
-      if let block = model.selectedLastBlock {
-        CommandBlockMarkerView(block: block)
-        Text(block.command ?? "(command unavailable)")
-          .font(.system(.caption, design: .monospaced))
-          .textSelection(.enabled)
-      } else {
-        Text("No command block yet")
-          .foregroundStyle(.secondary)
-      }
       Spacer()
     }
     .padding(12)
@@ -1200,36 +1187,5 @@ struct InspectorView: View {
 
   private var activeWorkspace: AppModel.WorkspaceRuntime? {
     model.activeWorkspace
-  }
-}
-
-struct CommandBlockMarkerView: View {
-  let block: CommandBlock
-
-  var body: some View {
-    HStack {
-      Text(symbol)
-      Text(block.status.rawValue)
-      if let duration = block.durationMs {
-        Text("\(duration) ms")
-      }
-      if let exitCode = block.exitCode {
-        Text("exit \(exitCode)")
-      }
-    }
-    .font(.caption)
-    .padding(6)
-    .background(.quaternary)
-    .clipShape(RoundedRectangle(cornerRadius: 6))
-  }
-
-  private var symbol: String {
-    switch block.status {
-    case .running: "..."
-    case .success: "✓"
-    case .failed: "✗"
-    case .cancelled: "!"
-    case .unknown, .partial: "?"
-    }
   }
 }

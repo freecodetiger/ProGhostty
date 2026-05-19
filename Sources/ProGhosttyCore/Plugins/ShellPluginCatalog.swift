@@ -79,7 +79,7 @@ public enum ShellPluginCatalog {
         id: "atuin",
         name: "atuin",
         category: .history,
-        description: "Searchable shell history. Optional because ProGhostty owns terminal command history.",
+        description: "Searchable shell history with optional sync.",
         homepage: "https://atuin.sh",
         detectionCommands: ["command -v atuin"],
         installCommands: ["brew install atuin"],
@@ -87,7 +87,7 @@ public enum ShellPluginCatalog {
         touched: ["~/.your-terminal/shell/init.zsh", "~/.zshrc"],
         recommend: false,
         risk: .high,
-        notes: ["Advanced optional plugin. History integrations can overlap with terminal command block history."]
+        notes: ["Advanced optional plugin. History integrations can significantly change shell key bindings and storage."]
       ),
       binary("gh", category: .git, description: "GitHub CLI.", install: "brew install gh"),
       binary("lazygit", category: .git, description: "Terminal UI for Git workflows.", install: "brew install lazygit"),

@@ -4,8 +4,6 @@ public enum ProGhosttyControlCommand: String, Codable, CaseIterable, Sendable {
   case workspaceOpen = "workspace.open"
   case workspaceSwitch = "workspace.switch"
   case workspaceNew = "workspace.new"
-  case historyOpen = "history.open"
-  case historySearch = "history.search"
   case pluginsOpen = "plugins.open"
   case pluginsScan = "plugins.scan"
   case pluginsPlan = "plugins.plan"
@@ -123,8 +121,6 @@ public enum PGCommandMapper {
     switch head {
     case "ws", "workspace":
       return mapWorkspace(tail)
-    case "hist", "history":
-      return mapHistory(tail)
     case "plugins":
       return mapPlugins(tail)
     case "settings":
@@ -139,7 +135,7 @@ public enum PGCommandMapper {
   }
 
   public static let usage =
-    "Usage: pg ws|workspace [switch <name>|new <name>], pg hist|history [search <query>], pg plugins [scan|plan <pack>], pg settings, pg split right|down, pg layout save|restore"
+    "Usage: pg ws|workspace [switch <name>|new <name>], pg plugins [scan|plan <pack>], pg settings, pg split right|down, pg layout save|restore"
 
   private static func mapWorkspace(_ arguments: [String]) -> (ProGhosttyControlCommand, [String: String])? {
     guard let subcommand = arguments.first else { return (.workspaceOpen, [:]) }
@@ -149,17 +145,6 @@ public enum PGCommandMapper {
       return (.workspaceSwitch, ["name": value!])
     case "new" where value != nil:
       return (.workspaceNew, ["name": value!])
-    default:
-      return nil
-    }
-  }
-
-  private static func mapHistory(_ arguments: [String]) -> (ProGhosttyControlCommand, [String: String])? {
-    guard let subcommand = arguments.first else { return (.historyOpen, [:]) }
-    let value = joined(Array(arguments.dropFirst()))
-    switch subcommand {
-    case "search" where value != nil:
-      return (.historySearch, ["query": value!])
     default:
       return nil
     }

@@ -101,7 +101,7 @@ The UI owns product organization and presentation:
 - Workspaces.
 - Command palette and quiet management surfaces.
 - Plugin discovery, enablement, and settings.
-- History, command blocks, and workspace context.
+- Workspace context.
 
 The UI should stay terminal-first. Features should be discoverable through
 keyboard-first flows, subtle titlebar affordances, palettes, and transient
@@ -164,8 +164,8 @@ Long-term rules:
 
 - Prefer Ghostty's native renderer and damage tracking when integrating
   GhosttyKit.
-- Keep resource-heavy features opt-in or lazy, especially history indexing,
-  workspace context capture, and plugin management.
+- Keep resource-heavy features opt-in or lazy, especially workspace context
+  capture and plugin management.
 - Let terminal sessions remain independently disposable so splits and
   workspaces do not create hidden global state.
 

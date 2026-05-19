@@ -325,9 +325,8 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     let timer = DispatchSource.makeTimerSource(queue: .main)
     timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
     timer.setEventHandler { [weak self] in
-      guard let exitCode = PTYLaunch.wait(pid: pid) else { return }
+      guard PTYLaunch.wait(pid: pid) != nil else { return }
       Task { @MainActor [weak self] in
-        self?.continuation.yield(.commandFinished(session: id, exitCode: exitCode))
         self?.closeSession(id)
       }
     }
