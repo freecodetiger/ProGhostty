@@ -1,192 +1,142 @@
 # ProGhostty
 
-## 中文
+ProGhostty is a native macOS terminal built for real shell workflows.
 
-ProGhostty 是一个 macOS 原生终端实验项目。它以真实 PTY、用户现有 shell 环境和 Ghostty 的终端核心能力为基础，在上层补充工作区、分屏、设置和插件管理等产品能力。
+It is not an IDE, not a shell replacement, and not a closed command environment. ProGhostty keeps the terminal as the first-class surface: your shell, dotfiles, prompt, completions, plugins, and TUI tools should continue to behave like they do in a normal terminal.
 
-项目的目标不是重新发明 shell，也不是把终端包装成一套封闭 IDE。ProGhostty 保留真实 shell 工作流：用户的 `.zshrc`、alias、补全、prompt、shell plugin 和 TUI 程序都应继续按终端生态的方式运行。
+The product direction is deliberately restrained: a Ghostty-inspired terminal surface, real PTY sessions, `libghostty-vt` for terminal semantics, smooth scrollback, split panes, workspaces, settings, and plugin management.
 
-当前项目仍处于 MVP 阶段。真实运行路径以 `PTYTerminalEngine` 为主，PTY 输出进入 `GhosttyVTBridge` / `libghostty-vt`，界面层使用 SwiftUI + AppKit 渲染终端表面。完整 GhosttyKit 或 Ghostty macOS 前端集成仍保留在适配层后续研究。
+> ProGhostty is not an official Ghostty release and is not affiliated with the Ghostty project. It vendors Ghostty source code and uses `libghostty-vt` as the terminal semantics layer.
 
-### 核心原则
+## Download
 
-- 真实 shell 优先：终端会话必须来自真实 PTY，而不是自定义命令解释器。
-- `libghostty-vt` 负责终端语义：VT 解析、光标、样式、滚动状态和终端网格不由 UI 层猜测。
-- 产品能力在终端外层实现：工作区、分屏、设置和插件不污染终端核心。
-- 不按程序名特殊处理 TUI：Codex、Claude Code、vim、tmux、fzf 等都应从同一套终端状态和输入规则中受益。
-- Ghostty 相关 API 必须封装在 bridge / adapter 后面，避免产品层直接依赖不稳定接口。
+Download the latest DMG from GitHub Releases:
 
-### 当前架构
+https://github.com/freecodetiger/ProGhostty/releases/latest
+
+The current DMG is ad-hoc signed. macOS may warn that the developer cannot be verified. This is expected for now. If macOS blocks launch, open it from Finder with right click -> Open.
+
+ProGhostty checks for updates on launch and from Settings. When a newer GitHub Release is available, it shows a titlebar update bubble; clicking it opens the release page so you can download the new DMG.
+
+## Why ProGhostty
+
+Most terminal experiments become heavy by adding UI around the shell until the terminal feels secondary. ProGhostty takes the opposite route.
+
+The terminal remains the product. Workspaces, split panes, plugin management, and settings are supporting tools around it. They should not take over the shell, rewrite user configuration, or special-case individual programs.
+
+The goal is to feel close to the existing terminal ecosystem:
+
+- `.zshrc`, aliases, completions, prompts, shell plugins, and TUI programs remain owned by the user's shell environment.
+- Terminal bytes flow through a real PTY.
+- VT parsing, cursor state, style attributes, scrollback, and terminal grid state are delegated to `libghostty-vt`.
+- Product features stay outside terminal semantics.
+- Codex, Claude Code, vim, tmux, fzf, htop, and similar tools should work through the same terminal path rather than through app-name-specific rendering hacks.
+
+## Core Experience
+
+### Smooth Scrollback
+
+ProGhostty treats scrollback feel as a first-order terminal experience.
+
+Normal scrollback uses an overscan-backed pixel scrolling path:
 
 ```text
-SwiftUI / AppKit UI
-  -> Workspace / Split / Settings / Plugins
-  -> TerminalEngine
-  -> PTYTerminalEngine
-  -> forkpty shell
+libghostty-vt viewport + overscan rows
+  -> AppKit cell-grid renderer
+  -> sub-row visual offset
+  -> row commits back to the libghostty viewport
+```
+
+This avoids fake UI-only scroll state. The terminal viewport remains owned by `libghostty-vt`, while the visible movement can feel smoother than terminals that only jump one row at a time.
+
+In alternate screen / TUI programs, wheel input is forwarded to the program instead of forcing ProGhostty scrollback behavior. Stability and terminal correctness come before visual tricks.
+
+### Real Terminal Sessions
+
+Each pane is backed by an independent PTY session. Splitting a pane creates a new shell process. Closing a pane releases only that pane's session.
+
+The active runtime path is:
+
+```text
+forkpty shell
+  -> PTY output bytes
   -> GhosttyVTBridge
   -> libghostty-vt
+  -> cell-grid snapshot
+  -> AppKit renderer
 ```
 
-相关文档：
+### Ghostty-Powered Terminal Semantics
 
-- `docs/architecture/terminal-core-positioning.md`
-- `docs/architecture/terminal-rendering-rework.md`
-- `docs/renderer-scrolling.md`
-- `docs/libghostty-vt.md`
+ProGhostty does not try to reinterpret terminal output in the UI layer. The expensive and error-prone parts of terminal behavior live behind `GhosttyVTBridge`:
 
-### 已实现能力
+- ANSI / VT parsing
+- cursor state
+- style attributes
+- scrollback state
+- viewport state
+- cell-grid snapshots
 
-- 基于 PTY 的真实 shell 交互。
-- 每个 pane 对应独立 terminal session。
-- split tree 管理分屏布局，关闭 pane 只释放对应 session。
-- 多 workspace 并存，非当前 workspace 的 session 默认保持运行，只 detach UI。
-- workspace switcher 支持切换、创建、重命名和删除工作区。
-- OSC 7 作为 side-channel 跟踪 cwd 信息。
-- 设置持久化，支持主题、字体、默认工作目录和自定义快捷键。
-- shell 插件管理支持扫描、安装计划、备份、回滚和受控写入。
-- 基于 `libghostty-vt` cell grid 的终端渲染路径，以及文本 fallback。
-### 构建要求
+The current renderer is an AppKit cell-grid renderer driven by `libghostty-vt` snapshots. It is not the full Ghostty macOS renderer, and the bridge boundary is kept explicit so the integration can evolve.
 
-- macOS 13 或更新版本。
-- Swift 6.1 工具链。
-- Git submodule 支持。
-- Zig `0.15.2`，用于构建 vendored Ghostty 的 `libghostty-vt`。
-- 如需生成 `ghostty-vt.xcframework`，需要完整 Xcode；仅 Command Line Tools 可能不足。
+## Workflow
 
-### 初始化和构建
+### Split Panes
 
-初始化 submodule：
+Right click in a terminal pane to split right, split down, close the current pane, copy, paste, open workspaces, or open settings.
 
-```bash
-git submodule update --init --recursive
-```
+Splits are modeled as a split tree. Pane, session, and view ownership are separated so closing one pane does not collapse unrelated sessions.
 
-从 `Vendor/ghostty` 构建 `libghostty-vt`：
+### Workspaces
 
-```bash
-../../.tools/zig-aarch64-macos-0.15.2/zig build \
-  --global-cache-dir ../../.zig-cache-global \
-  -Demit-lib-vt=true \
-  -Demit-xcframework=true
-```
+Workspaces organize independent terminal layouts without adding visible tabs or a permanent sidebar.
 
-SwiftPM 当前直接链接：
+- Multiple workspaces can exist at the same time.
+- Each workspace owns its own split tree and terminal sessions.
+- The window shows only the active workspace.
+- Inactive workspace sessions keep running by default.
+- The workspace switcher opens through keyboard shortcuts or the context menu.
 
-```text
-Vendor/ghostty/zig-out/lib/libghostty-vt.a
-```
+### Plugin Management
 
-构建并运行应用：
+The plugin manager is intentionally shell-oriented. It can detect and install a small curated set of shell tools, generate install plans, back up files before changes, and write managed shell configuration into `~/.your-terminal/shell/`.
 
-```bash
-swift build
-swift run ProGhostty
-```
+When `.zshrc` needs to be touched, ProGhostty uses a guarded source block instead of dumping large plugin configuration into user dotfiles.
 
-运行命令行辅助工具：
+### Settings
 
-```bash
-swift run pg -- help
-```
+Settings are persisted locally and include:
 
-运行测试：
+- theme: light, dark, or follow system
+- font family and size
+- default shell
+- default working directory
+- language
+- custom keyboard shortcuts
+- plugin management entry
+- update checks
 
-```bash
-swift test --no-parallel
-```
+## Project Status
 
-### 项目结构
+ProGhostty is an early native macOS terminal. It is usable, but the most important work remains terminal correctness and rendering stability.
 
-```text
-Sources/
-  ProGhosttyApp/        macOS app, SwiftUI/AppKit UI, windows, workspace UI
-  ProGhosttyCore/       PTY engine, Ghostty bridge, settings, plugins
-  ProGhosttyGhosttyVT/  C boundary for libghostty-vt
-  ProGhosttyPTY/        forkpty / resize / wait C helpers
-  ProGhosttyPG/         shell-facing helper command
+The current priority order is:
 
-Tests/
-  ProGhosttyCoreTests/
+1. Terminal semantics must be correct.
+2. PTY and `libghostty-vt` state must stay consistent.
+3. TUI programs must remain stable.
+4. Scrolling, selection, resize, and rendering should feel native and calm.
+5. Product features should remain outside the terminal core.
 
-Vendor/
-  ghostty/              vendored Ghostty source
+## Build From Source
 
-docs/
-  architecture/         terminal architecture notes
-  superpowers/          feature specs and implementation plans
-```
+Requirements:
 
-### 当前限制
-
-- 渲染路径仍是渐进式集成，还不是完整 Ghostty 原生 macOS renderer。
-- `LibGhosttyTerminalEngine` 仍是占位边界，当前真实运行路径是 `PTYTerminalEngine`。
-- `libghostty-vt` 需要从 vendored Ghostty 源码本地构建。
-
-### 下一步方向
-
-1. 继续稳定 `PTY -> libghostty-vt -> cell grid -> AppKit` 渲染链路。
-2. 在不绕过 `libghostty-vt` 的前提下提升渲染还原度、选择和滚动体验。
-3. 保持 pane / session / view 解耦，为未来 GhosttyKit 或完整 Ghostty frontend 集成保留适配空间。
-4. 让 shell integration 和插件承担特殊能力，避免把程序特例硬编码进终端渲染层。
-
----
-
-## English
-
-ProGhostty is an experimental native macOS terminal. It is built on real PTY sessions, the user's existing shell environment, and Ghostty's terminal core capabilities, while adding product-level features such as workspaces, splits, settings, and plugin management.
-
-The goal is not to reinvent the shell or wrap the terminal in a closed IDE. ProGhostty preserves the real terminal workflow: `.zshrc`, aliases, completions, prompts, shell plugins, and TUI applications should continue to behave as part of the normal terminal ecosystem.
-
-The project is currently an MVP. The active runtime path is `PTYTerminalEngine`; PTY output is passed into `GhosttyVTBridge` / `libghostty-vt`, and the UI layer renders the terminal surface with SwiftUI and AppKit. Full GhosttyKit or Ghostty macOS frontend integration remains future adapter-layer work.
-
-### Principles
-
-- Real shell first: terminal sessions must come from a real PTY, not a custom command interpreter.
-- `libghostty-vt` owns terminal semantics: VT parsing, cursor state, styles, scrolling, and the terminal grid are not guessed by the UI layer.
-- Product features live outside the terminal core: workspaces, splits, settings, and plugins must not pollute terminal semantics.
-- No app-name-specific TUI handling: Codex, Claude Code, vim, tmux, fzf, and similar tools should benefit from the same terminal-state and input rules.
-- Ghostty APIs must stay behind bridge / adapter boundaries so product code does not depend directly on unstable interfaces.
-
-### Architecture
-
-```text
-SwiftUI / AppKit UI
-  -> Workspace / Split / Settings / Plugins
-  -> TerminalEngine
-  -> PTYTerminalEngine
-  -> forkpty shell
-  -> GhosttyVTBridge
-  -> libghostty-vt
-```
-
-Related documents:
-
-- `docs/architecture/terminal-core-positioning.md`
-- `docs/architecture/terminal-rendering-rework.md`
-- `docs/renderer-scrolling.md`
-- `docs/libghostty-vt.md`
-
-### Implemented Capabilities
-
-- Real shell interaction through PTY.
-- One independent terminal session per pane.
-- Split-tree-based pane layout; closing a pane releases only that pane's session.
-- Multiple workspaces; inactive workspaces keep their sessions running by default.
-- Workspace switcher for switching, creating, renaming, and deleting workspaces.
-- OSC 7 side-channel tracking for cwd metadata.
-- Persistent settings for theme, font, default working directory, and custom shortcuts.
-- Shell plugin management with detection, install plans, backups, rollback, and controlled writes.
-- `libghostty-vt` cell-grid rendering path with a text fallback.
-### Requirements
-
-- macOS 13 or newer.
-- Swift 6.1 toolchain.
-- Git submodule support.
-- Zig `0.15.2` for building vendored Ghostty's `libghostty-vt`.
-- Full Xcode is required if you need to generate `ghostty-vt.xcframework`; Command Line Tools alone may not be enough.
-
-### Setup and Build
+- macOS 13 or newer
+- Swift 6.1 toolchain
+- Git submodule support
+- Zig 0.15.2 for building vendored Ghostty `libghostty-vt`
+- Full Xcode if you need to generate `ghostty-vt.xcframework`
 
 Initialize submodules:
 
@@ -194,32 +144,26 @@ Initialize submodules:
 git submodule update --init --recursive
 ```
 
-Build `libghostty-vt` from `Vendor/ghostty`:
+Build `libghostty-vt` from the vendored Ghostty source:
 
 ```bash
+cd Vendor/ghostty
 ../../.tools/zig-aarch64-macos-0.15.2/zig build \
   --global-cache-dir ../../.zig-cache-global \
-  -Demit-lib-vt=true \
-  -Demit-xcframework=true
+  -Demit-lib-vt=true
 ```
 
-SwiftPM currently links directly against:
-
-```text
-Vendor/ghostty/zig-out/lib/libghostty-vt.a
-```
-
-Build and run the app:
+Build and run:
 
 ```bash
 swift build
 swift run ProGhostty
 ```
 
-Run the shell-facing helper:
+Build the macOS app bundle:
 
 ```bash
-swift run pg -- help
+scripts/build-app-bundle.sh release
 ```
 
 Run tests:
@@ -228,12 +172,12 @@ Run tests:
 swift test --no-parallel
 ```
 
-### Repository Layout
+## Repository Layout
 
 ```text
 Sources/
   ProGhosttyApp/        macOS app, SwiftUI/AppKit UI, windows, workspace UI
-  ProGhosttyCore/       PTY engine, Ghostty bridge, settings, plugins
+  ProGhosttyCore/       PTY engine, Ghostty bridge, renderer, settings, plugins
   ProGhosttyGhosttyVT/  C boundary for libghostty-vt
   ProGhosttyPTY/        forkpty / resize / wait C helpers
   ProGhosttyPG/         shell-facing helper command
@@ -246,18 +190,26 @@ Vendor/
 
 docs/
   architecture/         terminal architecture notes
-  superpowers/          feature specs and implementation plans
+  superpowers/          design specs and implementation plans
 ```
 
-### Current Limitations
+## Technical Notes
 
-- Rendering is still a staged integration path, not the full native Ghostty macOS renderer.
-- `LibGhosttyTerminalEngine` is still a boundary placeholder; the active runtime path is `PTYTerminalEngine`.
-- `libghostty-vt` must be built locally from the vendored Ghostty source.
+- Current terminal scrollback defaults to 10,000 rows per session.
+- The primary renderer is `GhosttyVTCellGridRendererBackend`.
+- Text / HTML fallback code exists, but the main terminal path is the AppKit cell-grid renderer.
+- Normal scrollback can use overscan-backed pixel scrolling.
+- Alternate screen programs receive wheel input instead of ProGhostty scrollback.
+- The full Ghostty macOS renderer is not embedded.
 
-### Roadmap
+## English Summary
 
-1. Continue stabilizing the `PTY -> libghostty-vt -> cell grid -> AppKit` rendering path.
-2. Improve rendering fidelity, selection, and scrolling without bypassing `libghostty-vt`.
-3. Keep pane / session / view boundaries clean for future GhosttyKit or full Ghostty frontend integration.
-4. Let shell integration and plugins own special behavior instead of hard-coding application-specific rules into terminal rendering.
+ProGhostty is an early native macOS terminal focused on real shell workflows, Ghostty-powered terminal semantics, and smooth scrollback.
+
+It uses real PTY sessions, routes terminal bytes through `libghostty-vt`, and renders a native AppKit cell grid. Product features such as split panes, workspaces, settings, update checks, and plugin management are built around the terminal rather than replacing the user's shell ecosystem.
+
+ProGhostty is not an official Ghostty release. It vendors Ghostty source code and keeps Ghostty integration behind a bridge so the terminal core can evolve without coupling product UI to unstable internals.
+
+Download the latest DMG:
+
+https://github.com/freecodetiger/ProGhostty/releases/latest
