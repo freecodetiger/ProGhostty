@@ -33,4 +33,5 @@ public final class LibGhosttyTerminalEngine: TerminalSessionManager, TerminalSur
   public func focusSessionView(_ id: TerminalSessionID?) {}
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {}
   public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {}
+  public func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?) {}
 }

@@ -130,6 +130,8 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
     activationHandler = handler
   }
 
+  public func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?) {}
+
   private func run(command: String, session id: TerminalSessionID) {
     guard let state = sessions[id] else { return }
     let cwd = state.config.workingDirectory ?? FileManager.default.currentDirectoryPath

@@ -115,6 +115,7 @@ struct AppText {
   var upToDateToast: String { text("ProGhostty is up to date", "ProGhostty 已是最新版本") }
   var updateCheckFailedToast: String { text("Update check failed", "检查更新失败") }
   var settingsSavedToast: String { text("Settings saved", "设置已保存") }
+  var openLinkHintToast: String { text("⌘ Click to open link", "按住 ⌘ 点击打开链接") }
   var pluginReloadCommandHint: String {
     text(
       "To apply plugin changes in an existing pane, copy and paste this command when you need it.",

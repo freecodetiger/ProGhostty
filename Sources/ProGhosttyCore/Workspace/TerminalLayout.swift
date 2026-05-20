@@ -199,6 +199,38 @@ public enum PaneTreeReducer {
     }
   }
 
+  public static func cwd(
+    forPane paneId: UUID,
+    in root: PaneNode,
+    cwdBySession: [TerminalSessionID: String],
+    fallback: String?
+  ) -> String? {
+    guard let pane = findPane(in: root, paneId: paneId) else {
+      return nonEmpty(fallback)
+    }
+    return nonEmpty(cwdBySession[pane.sessionId])
+      ?? nonEmpty(pane.cwd)
+      ?? nonEmpty(fallback)
+  }
+
+  public static func mapLeaves(
+    in root: PaneNode,
+    transform: (TerminalPane) throws -> TerminalPane
+  ) rethrows -> PaneNode {
+    switch root {
+    case .leaf(let pane):
+      return .leaf(try transform(pane))
+    case .split(let split):
+      return .split(SplitPane(
+        id: split.id,
+        axis: split.axis,
+        ratio: split.ratio,
+        first: try mapLeaves(in: split.first, transform: transform),
+        second: try mapLeaves(in: split.second, transform: transform)
+      ))
+    }
+  }
+
   public static func splitIds(in root: PaneNode) -> [UUID] {
     switch root {
     case .leaf:
@@ -215,6 +247,11 @@ public enum PaneTreeReducer {
     }
     let next = (index + offset + leaves.count) % leaves.count
     return leaves[next].paneId
+  }
+
+  private static func nonEmpty(_ value: String?) -> String? {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
   }
 
   private static func closing(

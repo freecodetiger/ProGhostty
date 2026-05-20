@@ -161,6 +161,10 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
   public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {
     surfaceRegistry.setActivationHandler(handler)
   }
+
+  public func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?) {
+    surfaceRegistry.setLinkHoverHandler(handler)
+  }
 }
 
 @MainActor
@@ -428,6 +432,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   private var pendingFocusSessionID: TerminalSessionID?
   private var inputHandler: (@MainActor (TerminalSessionID, Data) -> Void)?
   private var activationHandler: (@MainActor (TerminalSessionID) -> Void)?
+  private var linkHoverHandler: (@MainActor (TerminalSessionID, Bool) -> Void)?
   private var rendererOptions = TerminalRendererOptions()
 
   public init() {}
@@ -464,6 +469,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     }
     gridView.activationHandler = { [weak self] in
       self?.activationHandler?(id)
+    }
+    gridView.linkHoverHandler = { [weak self] isHovering in
+      self?.linkHoverHandler?(id, isHovering)
     }
     gridView.pasteboard = .general
     gridView.applyPalette(palette)
@@ -616,6 +624,15 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {
     activationHandler = handler
+  }
+
+  public func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?) {
+    linkHoverHandler = handler
+    for (id, surface) in surfaces {
+      surface.gridView.linkHoverHandler = { [weak self] isHovering in
+        self?.linkHoverHandler?(id, isHovering)
+      }
+    }
   }
 
   public func render(_ bridge: GhosttyVTBridge, session id: TerminalSessionID) {
@@ -1097,6 +1114,18 @@ public final class PTYTerminalSurfaceView: NSView {
   }
 }
 
+struct GridCoordinate: Comparable {
+  var row: Int
+  var col: Int
+
+  static func < (lhs: GridCoordinate, rhs: GridCoordinate) -> Bool {
+    if lhs.row == rhs.row {
+      return lhs.col < rhs.col
+    }
+    return lhs.row < rhs.row
+  }
+}
+
 public final class PTYGridView: NSView {
   private static let scrollCommitInterval: TimeInterval = 1.0 / 120.0
 
@@ -1104,6 +1133,10 @@ public final class PTYGridView: NSView {
   public var viewportScrollHandler: ((Int) -> Bool)?
   public var viewportCanScrollHandler: ((Int) -> Bool)?
   public var activationHandler: (() -> Void)?
+  public var openURLHandler: ((URL) -> Void)? = { url in
+    _ = NSWorkspace.shared.open(url)
+  }
+  public var linkHoverHandler: ((Bool) -> Void)?
   public var pasteboard = NSPasteboard.general
 
   private var frameSnapshot: GhosttyTerminalFrame?
@@ -1127,6 +1160,10 @@ public final class PTYGridView: NSView {
   private var drawCount = 0
   private var selectionAnchor: GridCoordinate?
   private var selectionHead: GridCoordinate?
+  private var selectionFrameSnapshot: GhosttyTerminalFrame?
+  private var commandLinkMode = false
+  private var isHoveringLink = false
+  private var mouseTrackingArea: NSTrackingArea?
   private var markedText = NSAttributedString(string: "")
   private var markedTextRange = NSRange(location: NSNotFound, length: 0)
 
@@ -1159,7 +1196,7 @@ public final class PTYGridView: NSView {
 
   public var selectedText: String? {
     guard
-      let frame = frameSnapshot,
+      let frame = selectionFrameSnapshot ?? renderedGeometry()?.frame,
       let selectionRange = normalizedSelectionRange()
     else {
       return nil
@@ -1331,13 +1368,7 @@ public final class PTYGridView: NSView {
     let drawFrame = scrollFrameSnapshot.map(extendedFrame(from:)) ?? viewportFrame
 
     NSGraphicsContext.current?.saveGraphicsState()
-    Self.terminalContentClipRect(
-      cols: viewportFrame.cols,
-      rows: viewportFrame.rows,
-      cellSize: cellSize,
-      inset: contentInset
-    )
-    .clip()
+    renderedClipRect(for: viewportFrame, fallbackFrame: drawFrame).clip()
     let translationY = drawTranslationY(topOverscanRows: topOverscanRows)
     if translationY != 0 {
       let transform = NSAffineTransform()
@@ -1430,6 +1461,52 @@ public final class PTYGridView: NSView {
       width: cellSize.width,
       height: cellSize.height
     )
+  }
+
+  public static func urlCursorRects(
+    frame: GhosttyTerminalFrame,
+    cellSize: CGSize,
+    inset: CGSize,
+    verticalOffsetY: CGFloat = 0,
+    linkInteractionActive: Bool = true
+  ) -> [NSRect] {
+    guard linkInteractionActive else { return [] }
+    return urlCursorRects(
+      urlHitsByRow: urlHitsByRow(in: frame),
+      cellSize: cellSize,
+      inset: inset,
+      verticalOffsetY: verticalOffsetY
+    )
+  }
+
+  private static func urlHitsByRow(in frame: GhosttyTerminalFrame) -> [Int: [TerminalURLHit]] {
+    guard frame.rows > 0, frame.cols > 0 else { return [:] }
+    var hitsByRow: [Int: [TerminalURLHit]] = [:]
+    for row in 0..<frame.rows {
+      let hits = TerminalURLDetector.hits(inRow: row, frame: frame)
+      if !hits.isEmpty {
+        hitsByRow[row] = hits
+      }
+    }
+    return hitsByRow
+  }
+
+  private static func urlCursorRects(
+    urlHitsByRow: [Int: [TerminalURLHit]],
+    cellSize: CGSize,
+    inset: CGSize,
+    verticalOffsetY: CGFloat = 0
+  ) -> [NSRect] {
+    urlHitsByRow.keys.sorted().flatMap { row in
+      (urlHitsByRow[row] ?? []).map { hit in
+        NSRect(
+          x: inset.width + CGFloat(hit.range.lowerBound) * cellSize.width,
+          y: inset.height + CGFloat(row) * cellSize.height + verticalOffsetY,
+          width: CGFloat(hit.range.count) * cellSize.width,
+          height: cellSize.height
+        )
+      }
+    }
   }
 
   public override func scrollWheel(with event: NSEvent) {
@@ -1651,17 +1728,50 @@ public final class PTYGridView: NSView {
   public override func mouseDown(with event: NSEvent) {
     activationHandler?()
     window?.makeFirstResponder(self)
+    if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+      let hit = urlHit(at: convert(event.locationInWindow, from: nil))
+    {
+      openURLHandler?(hit.url)
+      return
+    }
     let oldDirtyRects = selectionDirtyRects()
-    let coordinate = coordinate(at: convert(event.locationInWindow, from: nil))
+    let geometry = renderedGeometry()
+    let coordinate = geometry?.coordinate(at: convert(event.locationInWindow, from: nil))
     selectionAnchor = coordinate
     selectionHead = coordinate
+    selectionFrameSnapshot = geometry?.frame
     invalidateSelectionRects(oldDirtyRects)
   }
 
   public override func mouseDragged(with event: NSEvent) {
     let oldDirtyRects = selectionDirtyRects()
-    selectionHead = coordinate(at: convert(event.locationInWindow, from: nil))
+    if let geometry = renderedGeometry() {
+      selectionHead = geometry.coordinate(at: convert(event.locationInWindow, from: nil))
+      selectionFrameSnapshot = geometry.frame
+    } else {
+      selectionHead = nil
+      selectionFrameSnapshot = nil
+    }
     invalidateSelectionRects(oldDirtyRects)
+  }
+
+  public override func mouseMoved(with event: NSEvent) {
+    updateLinkHover(at: convert(event.locationInWindow, from: nil))
+  }
+
+  public override func mouseExited(with event: NSEvent) {
+    updateLinkHover(isHovering: false)
+  }
+
+  public override func flagsChanged(with event: NSEvent) {
+    let isCommandActive = event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command)
+    if commandLinkMode != isCommandActive {
+      commandLinkMode = isCommandActive
+      window?.invalidateCursorRects(for: self)
+      needsDisplay = true
+    }
+    updateLinkHover(at: convert(event.locationInWindow, from: nil))
+    super.flagsChanged(with: event)
   }
 
   public override func rightMouseDown(with event: NSEvent) {
@@ -1675,14 +1785,46 @@ public final class PTYGridView: NSView {
   }
 
   public override func resetCursorRects() {
-    guard let frame = frameSnapshot else { return }
+    guard let geometry = renderedGeometry() else { return }
+    let frame = geometry.frame
+    let clipRect = geometry.clipRect
+    let urlHitsByRow = Self.urlHitsByRow(in: frame)
+    if commandLinkMode {
+      for rect in Self.urlCursorRects(
+        urlHitsByRow: urlHitsByRow,
+        cellSize: cellSize,
+        inset: contentInset,
+        verticalOffsetY: geometry.translationY
+      ) {
+        guard let clipped = clippedCursorRect(rect, to: clipRect) else { continue }
+        addCursorRect(clipped, cursor: .pointingHand)
+      }
+    }
     for row in 0..<frame.rows {
       for col in 0..<frame.cols {
         let index = row * frame.cols + col
         guard index < frame.cells.count, isRenderedCell(frame.cells[index]) else { continue }
-        addCursorRect(rectForCell(row: row, col: col), cursor: .iBeam)
+        if commandLinkMode, urlHitsByRow[row]?.contains(where: { $0.range.contains(col) }) == true { continue }
+        let rect = geometry.rectForCell(row: row, col: col)
+        guard let clipped = clippedCursorRect(rect, to: clipRect) else { continue }
+        addCursorRect(clipped, cursor: .iBeam)
       }
     }
+  }
+
+  public override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let mouseTrackingArea {
+      removeTrackingArea(mouseTrackingArea)
+    }
+    let area = NSTrackingArea(
+      rect: .zero,
+      options: [.activeAlways, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
+      owner: self,
+      userInfo: nil
+    )
+    addTrackingArea(area)
+    mouseTrackingArea = area
   }
 
   static func dirtyRects(
@@ -1731,7 +1873,7 @@ public final class PTYGridView: NSView {
   }
 
   private func rowRect(_ row: Int) -> NSRect {
-    guard let frameSnapshot else {
+    guard let geometry = renderedGeometry() else {
       return NSRect(
         x: contentInset.width,
         y: contentInset.height + CGFloat(max(0, row)) * cellSize.height,
@@ -1739,12 +1881,7 @@ public final class PTYGridView: NSView {
         height: cellSize.height
       )
     }
-    return NSRect(
-      x: contentInset.width,
-      y: contentInset.height + CGFloat(max(0, row)) * cellSize.height,
-      width: CGFloat(frameSnapshot.cols) * cellSize.width,
-      height: cellSize.height
-    )
+    return geometry.rowRect(row)
   }
 
   private var contentInset: CGSize {
@@ -1801,7 +1938,7 @@ public final class PTYGridView: NSView {
   }
 
   private func drawSelectedCells(in row: Int, frame: GhosttyTerminalFrame, rowStart: Int, rowEnd: Int) {
-    guard normalizedSelectionRange() != nil else { return }
+    guard normalizedSelectionRange() != nil, selectionFrameMatches(frame) else { return }
     for col in 0..<frame.cols where isSelected(row: row, col: col) {
       let index = rowStart + col
       guard index < rowEnd else { continue }
@@ -1969,6 +2106,15 @@ public final class PTYGridView: NSView {
     dirtyRect.offsetBy(dx: 0, dy: -translationY)
   }
 
+  private func renderedClipRect(for viewportFrame: GhosttyTerminalFrame?, fallbackFrame: GhosttyTerminalFrame) -> NSRect {
+    Self.terminalContentClipRect(
+      cols: viewportFrame?.cols ?? fallbackFrame.cols,
+      rows: viewportFrame?.rows ?? fallbackFrame.rows,
+      cellSize: cellSize,
+      inset: contentInset
+    )
+  }
+
   private func extendedFrame(from scrollFrame: GhosttyTerminalScrollFrame) -> GhosttyTerminalFrame {
     var frame = scrollFrame.viewport
     frame.rows = scrollFrame.overscanTop.count + scrollFrame.viewport.rows + scrollFrame.overscanBottom.count
@@ -1993,6 +2139,59 @@ public final class PTYGridView: NSView {
     let row = Int((point.y - contentInset.height) / cellSize.height)
     guard row >= 0, row < frame.rows, col >= 0, col < frame.cols else { return nil }
     return GridCoordinate(row: row, col: col)
+  }
+
+  private func urlHit(at point: NSPoint) -> TerminalURLHit? {
+    guard let geometry = renderedGeometry(),
+      let coordinate = geometry.coordinate(at: point)
+    else {
+      return nil
+    }
+    return TerminalURLDetector.hitTest(row: coordinate.row, col: coordinate.col, in: geometry.frame)
+  }
+
+  private func updateLinkHover(at point: NSPoint) {
+    updateLinkHover(isHovering: urlHit(at: point) != nil)
+  }
+
+  private func updateLinkHover(isHovering: Bool) {
+    guard isHoveringLink != isHovering else { return }
+    isHoveringLink = isHovering
+    linkHoverHandler?(isHovering)
+  }
+
+  private func renderedGeometry() -> RenderedGridGeometry? {
+    if let scrollFrameSnapshot {
+      let frame = extendedFrame(from: scrollFrameSnapshot)
+      return RenderedGridGeometry(
+        frame: frame,
+        translationY: drawTranslationY(topOverscanRows: scrollFrameSnapshot.overscanTop.count),
+        cellSize: cellSize,
+        inset: contentInset,
+        clipRect: renderedClipRect(for: frameSnapshot, fallbackFrame: frame)
+      )
+    }
+    guard let frameSnapshot else { return nil }
+    return RenderedGridGeometry(
+      frame: frameSnapshot,
+      translationY: 0,
+      cellSize: cellSize,
+      inset: contentInset,
+      clipRect: renderedClipRect(for: frameSnapshot, fallbackFrame: frameSnapshot)
+    )
+  }
+
+  private func clippedCursorRect(_ rect: NSRect, to clipRect: NSRect) -> NSRect? {
+    let clipped = rect.intersection(clipRect)
+    guard clipped.width > 0, clipped.height > 0 else { return nil }
+    return clipped
+  }
+
+  private func selectionFrameMatches(_ frame: GhosttyTerminalFrame) -> Bool {
+    guard let selectionFrameSnapshot else { return false }
+    return selectionFrameSnapshot.rows == frame.rows
+      && selectionFrameSnapshot.cols == frame.cols
+      && selectionFrameSnapshot.cells == frame.cells
   }
 
   private func normalizedSelectionRange() -> (lower: GridCoordinate, upper: GridCoordinate)? {
@@ -2093,17 +2292,6 @@ public final class PTYGridView: NSView {
     cell.scalar != " " || !cell.usesDefaultBackground
   }
 
-  private struct GridCoordinate: Comparable {
-    var row: Int
-    var col: Int
-
-    static func < (lhs: GridCoordinate, rhs: GridCoordinate) -> Bool {
-      if lhs.row == rhs.row {
-        return lhs.col < rhs.col
-      }
-      return lhs.row < rhs.row
-    }
-  }
 }
 
 public typealias CellGridView = PTYGridView
@@ -2201,6 +2389,53 @@ extension PTYGridView {
   func testSetSelection(anchor: GridSelectionCoordinate, head: GridSelectionCoordinate) {
     selectionAnchor = GridCoordinate(row: anchor.row, col: anchor.col)
     selectionHead = GridCoordinate(row: head.row, col: head.col)
+  }
+}
+
+struct RenderedGridGeometry: Equatable, Sendable {
+  var frame: GhosttyTerminalFrame
+  var translationY: CGFloat
+  var cellSize: CGSize
+  var inset: CGSize
+  var clipRect: NSRect
+
+  init(
+    frame: GhosttyTerminalFrame,
+    translationY: CGFloat,
+    cellSize: CGSize,
+    inset: CGSize,
+    clipRect: NSRect
+  ) {
+    self.frame = frame
+    self.translationY = translationY
+    self.cellSize = cellSize
+    self.inset = inset
+    self.clipRect = clipRect
+  }
+
+  func coordinate(at point: NSPoint) -> GridCoordinate? {
+    let col = Int((point.x - inset.width) / cellSize.width)
+    let row = Int((point.y - inset.height - translationY) / cellSize.height)
+    guard row >= 0, row < frame.rows, col >= 0, col < frame.cols else { return nil }
+    return GridCoordinate(row: row, col: col)
+  }
+
+  func rectForCell(row: Int, col: Int) -> NSRect {
+    NSRect(
+      x: inset.width + CGFloat(max(0, col)) * cellSize.width,
+      y: inset.height + CGFloat(max(0, row)) * cellSize.height + translationY,
+      width: cellSize.width,
+      height: cellSize.height
+    )
+  }
+
+  func rowRect(_ row: Int) -> NSRect {
+    NSRect(
+      x: inset.width,
+      y: inset.height + CGFloat(max(0, row)) * cellSize.height + translationY,
+      width: CGFloat(frame.cols) * cellSize.width,
+      height: cellSize.height
+    )
   }
 }
 

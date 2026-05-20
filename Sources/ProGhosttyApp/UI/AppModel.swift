@@ -62,6 +62,7 @@ final class AppModel: ObservableObject {
   private var settingsWindowController: NSWindowController?
   private var pluginManagerWindowController: NSWindowController?
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
+  private var rememberedWorkspaceContentSizes: [UUID: NSSize] = [:]
   private var titlebarToastTask: Task<Void, Never>?
 
   struct TitlebarToast: Equatable, Sendable {
@@ -99,11 +100,15 @@ final class AppModel: ObservableObject {
     surfaceRegistry.setActivationHandler { [weak self] session in
       self?.selectSession(session)
     }
+    surfaceRegistry.setLinkHoverHandler { [weak self] _, isHovering in
+      guard let self, isHovering else { return }
+      self.showTitlebarToast(self.appText.openLinkHintToast, style: .info, lifetime: .transient(1.4))
+    }
     applyTerminalAppearance()
 
     Task { await consumeEvents() }
     refreshWorkspaces()
-    createAndActivateWorkspace()
+    restorePersistedWorkspacesOrCreateDefault()
     Task { await checkForUpdates(manual: false) }
   }
 
@@ -114,18 +119,31 @@ final class AppModel: ObservableObject {
     )
 
     do {
-      let opened = try paneWorkspaceController.openTerminal(
-        title: workspace?.name ?? cwd,
-        config: sessionConfig(workspace: workspace, workingDirectory: cwd),
-        paneTitle: URL(fileURLWithPath: cwd).lastPathComponent,
-        cwd: cwd
-      )
+      let layout: WorkspaceLayout
+      if let workspace {
+        layout = try paneWorkspaceController.restoreWorkspace(
+          workspace: workspace,
+          layoutSnapshot: workspace.layoutSnapshot,
+          fallbackShell: settings.defaultShell,
+          defaultWorkingDirectory: cwd
+        )
+      } else {
+        let opened = try paneWorkspaceController.openTerminal(
+          title: cwd,
+          config: sessionConfig(workspace: nil, workingDirectory: cwd),
+          paneTitle: URL(fileURLWithPath: cwd).lastPathComponent,
+          cwd: cwd
+        )
+        layout = opened.workspace
+      }
       let runtime = WorkspaceRuntime(
-        layout: opened.workspace,
+        layout: layout,
         workspace: workspace,
-        cwdBySession: [opened.pane.sessionId: cwd]
+        cwdBySession: cwdMap(for: layout, fallback: cwd)
       )
       workspaceRuntimes.append(runtime)
+      persistWorkspaceRuntime(at: workspaceRuntimes.count - 1)
+      expandTerminalWindowIfNeeded(for: workspaceRuntimes[workspaceRuntimes.count - 1])
       activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
       syncWorkspaceSwitcherState()
     } catch {
@@ -135,6 +153,59 @@ final class AppModel: ObservableObject {
 
   func openTerminal(workspace: Workspace? = nil) {
     createAndActivateWorkspace(workspace: workspace)
+  }
+
+  private func restorePersistedWorkspacesOrCreateDefault() {
+    guard let workspace = workspaces.max(by: { $0.updatedAt < $1.updatedAt }) else {
+      createAndOpenWorkspace(name: "")
+      return
+    }
+
+    createAndActivateWorkspace(workspace: workspace)
+    if workspaceRuntimes.isEmpty {
+      createAndOpenWorkspace(name: "")
+    }
+  }
+
+  private func cwdMap(for layout: WorkspaceLayout, fallback: String?) -> [TerminalSessionID: String] {
+    var map: [TerminalSessionID: String] = [:]
+    for pane in PaneTreeReducer.listLeaves(in: layout.root) {
+      if let cwd = nonEmpty(pane.cwd) ?? nonEmpty(fallback) {
+        map[pane.sessionId] = cwd
+      }
+    }
+    return map
+  }
+
+  private func persistWorkspaceRuntime(at index: Int) {
+    guard workspaceRuntimes.indices.contains(index), var workspace = workspaceRuntimes[index].workspace else {
+      return
+    }
+    var layout = workspaceRuntimes[index].layout
+    layout.title = workspace.name
+    layout.workspaceId = workspace.id
+    workspace.layoutSnapshot = layout
+    workspace.updatedAt = Date()
+    do {
+      try workspaceStore?.save(workspace)
+      workspaceRuntimes[index].workspace = workspace
+      updateWorkspaceCache(workspace)
+    } catch {
+      shellIntegrationState = "workspace save unavailable: \(error.localizedDescription)"
+    }
+  }
+
+  private func updateWorkspaceCache(_ workspace: Workspace) {
+    if let index = workspaces.firstIndex(where: { $0.id == workspace.id }) {
+      workspaces[index] = workspace
+    } else {
+      workspaces.append(workspace)
+    }
+  }
+
+  private func nonEmpty(_ value: String?) -> String? {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
   }
 
   func closeSelectedTerminal() {
@@ -273,7 +344,9 @@ final class AppModel: ObservableObject {
   }
 
   func activateWorkspace(_ workspaceID: UUID) {
-    guard workspaceRuntimes.contains(where: { $0.id == workspaceID }) else { return }
+    guard let targetRuntime = workspaceRuntimes.first(where: { $0.id == workspaceID }) else { return }
+    rememberActiveWorkspaceContentSize()
+    expandTerminalWindowIfNeeded(for: targetRuntime)
     paneWorkspaceController.activeWorkspaceID = workspaceID
     activeWorkspaceID = workspaceID
     syncWorkspaceSwitcherState()
@@ -315,6 +388,10 @@ final class AppModel: ObservableObject {
   func selectSession(_ sessionID: TerminalSessionID) {
     guard let workspace = paneWorkspaceController.selectSession(sessionID) else { return }
     if activeWorkspaceID != workspace.id {
+      rememberActiveWorkspaceContentSize()
+      if let targetRuntime = workspaceRuntimes.first(where: { $0.id == workspace.id }) {
+        expandTerminalWindowIfNeeded(for: targetRuntime)
+      }
       activeWorkspaceID = workspace.id
       syncWorkspaceSwitcherState()
     } else {
@@ -337,10 +414,16 @@ final class AppModel: ObservableObject {
     var runtime = workspaceRuntimes[index]
     DebugLog.write("splitPane before leaves=\(PaneTreeReducer.listLeaves(in: runtime.layout.root).count)")
     let workspace = runtime.workspace
-    let cwd = runtime.selectedCwd(focusStore: focusStore) ?? AppSettings.terminalWorkingDirectory(
+    let fallbackCwd = AppSettings.terminalWorkingDirectory(
       workspaceRootPath: workspace?.rootPath,
       defaultWorkingDirectory: settings.defaultWorkingDirectory
     )
+    let cwd = PaneTreeReducer.cwd(
+      forPane: paneID,
+      in: runtime.layout.root,
+      cwdBySession: runtime.cwdBySession,
+      fallback: fallbackCwd
+    ) ?? fallbackCwd
 
     do {
       let split = try paneWorkspaceController.splitPane(
@@ -354,6 +437,8 @@ final class AppModel: ObservableObject {
       runtime.layout = split.workspace
       runtime.cwdBySession[split.pane.sessionId] = cwd
       workspaceRuntimes[index] = runtime
+      persistWorkspaceRuntime(at: index)
+      expandTerminalWindowIfNeeded(for: workspaceRuntimes[index])
       self.activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
       syncWorkspaceSwitcherState()
       DebugLog.write("splitPane success newPane=\(split.pane.paneId) session=\(split.pane.sessionId) leaves=\(PaneTreeReducer.listLeaves(in: runtime.layout.root).count)")
@@ -389,6 +474,8 @@ final class AppModel: ObservableObject {
       runtime.layout = updatedLayout
       runtime.cwdBySession[closed.sessionId] = nil
       workspaceRuntimes[index] = runtime
+      persistWorkspaceRuntime(at: index)
+      applyTerminalWindowMinimumContentSize(for: runtime)
       applyFocusedTerminalSurface()
       let leavesAfter = PaneTreeReducer.listLeaves(in: runtime.layout.root)
       DebugLog.write("closePane success closed=\(closed.paneId) leavesAfter=\(leavesAfter.count) next=\(focusStore.focusedPaneId(in: activeWorkspaceID)?.uuidString ?? "-")")
@@ -466,7 +553,6 @@ final class AppModel: ObservableObject {
       if var workspace = runtime.workspace {
         workspace.name = nextName
         workspace.updatedAt = Date()
-        try? workspaceStore?.save(workspace)
         runtime.workspace = workspace
       } else {
         let workspace = Workspace(
@@ -474,11 +560,11 @@ final class AppModel: ObservableObject {
           name: nextName,
           rootPath: runtime.displayPath
         )
-        try? workspaceStore?.save(workspace)
         runtime.workspace = workspace
       }
       workspaceRuntimes[runtimeIndex] = runtime
       paneWorkspaceController.replaceWorkspaceLayout(runtime.layout)
+      persistWorkspaceRuntime(at: runtimeIndex)
       refreshWorkspaces()
       return
     }
@@ -486,6 +572,11 @@ final class AppModel: ObservableObject {
     guard var workspace = workspaces.first(where: { $0.id == workspaceListID }) else { return }
     workspace.name = nextName
     workspace.updatedAt = Date()
+    if var layout = workspace.layoutSnapshot {
+      layout.title = nextName
+      layout.workspaceId = workspace.id
+      workspace.layoutSnapshot = layout
+    }
     try? workspaceStore?.save(workspace)
     refreshWorkspaces()
   }
@@ -493,6 +584,84 @@ final class AppModel: ObservableObject {
   func saveSettings() {
     try? settingsStore.save(settings)
     showTitlebarToast(appText.settingsSavedToast, style: .success, lifetime: .settingsSaved)
+  }
+
+  private func rememberActiveWorkspaceContentSize() {
+    guard
+      let activeWorkspaceID,
+      let window = terminalWindow(),
+      let contentSize = terminalWindowContentSize(window)
+    else {
+      return
+    }
+    rememberedWorkspaceContentSizes[activeWorkspaceID] = contentSize
+  }
+
+  private func expandTerminalWindowIfNeeded(for runtime: WorkspaceRuntime) {
+    guard let window = terminalWindow(), let currentSize = terminalWindowContentSize(window) else {
+      return
+    }
+
+    let minimum = minimumContentSize(for: runtime.layout.root)
+    window.contentMinSize = nsSize(from: minimum)
+    let target = SplitRatioLayout.workspaceSwitchTargetContentSize(
+      current: contentSize(from: currentSize),
+      remembered: rememberedWorkspaceContentSizes[runtime.id].map(contentSize(from:)),
+      layoutMinimum: minimum
+    )
+
+    if target.width > Double(currentSize.width) + 0.5 || target.height > Double(currentSize.height) + 0.5 {
+      window.setContentSize(nsSize(from: target))
+    }
+  }
+
+  private func applyTerminalWindowMinimumContentSize(for runtime: WorkspaceRuntime) {
+    guard let window = terminalWindow() else { return }
+    window.contentMinSize = nsSize(from: minimumContentSize(for: runtime.layout.root))
+  }
+
+  private func minimumContentSize(for root: PaneNode) -> SplitRatioLayout.ContentSize {
+    let treeMinimum = SplitRatioLayout.minimumContentSize(for: root)
+    return SplitRatioLayout.ContentSize(
+      width: max(ProGhosttyWindowSizing.minimumContentWidth, treeMinimum.width),
+      height: max(ProGhosttyWindowSizing.minimumContentHeight, treeMinimum.height)
+    )
+  }
+
+  private func terminalWindow() -> NSWindow? {
+    func isTerminalCandidate(_ window: NSWindow) -> Bool {
+      guard window.isVisible else { return false }
+      if window === settingsWindowController?.window { return false }
+      if window === pluginManagerWindowController?.window { return false }
+      return true
+    }
+
+    if let keyWindow = NSApp.keyWindow, isTerminalCandidate(keyWindow) {
+      return keyWindow
+    }
+    if let mainWindow = NSApp.mainWindow, isTerminalCandidate(mainWindow) {
+      return mainWindow
+    }
+    return NSApp.windows.first(where: isTerminalCandidate)
+  }
+
+  private func terminalWindowContentSize(_ window: NSWindow) -> NSSize? {
+    if let contentView = window.contentView {
+      let contentSize = contentView.bounds.size
+      if contentSize.width > 0, contentSize.height > 0 {
+        return contentSize
+      }
+    }
+    let size = window.contentLayoutRect.size
+    return size.width > 0 && size.height > 0 ? size : nil
+  }
+
+  private func contentSize(from size: NSSize) -> SplitRatioLayout.ContentSize {
+    SplitRatioLayout.ContentSize(width: Double(size.width), height: Double(size.height))
+  }
+
+  private func nsSize(from size: SplitRatioLayout.ContentSize) -> NSSize {
+    NSSize(width: size.width, height: size.height)
   }
 
   func checkForUpdates(manual: Bool) async {
@@ -800,6 +969,8 @@ final class AppModel: ObservableObject {
 
     workspaceRuntimes[index].layout = saved
     paneWorkspaceController.replaceWorkspaceLayout(saved)
+    persistWorkspaceRuntime(at: index)
+    expandTerminalWindowIfNeeded(for: workspaceRuntimes[index])
     if let firstPane = PaneTreeReducer.listLeaves(in: saved.root).first {
       focusStore.focusPane(firstPane.paneId, in: saved.id)
     }
@@ -844,13 +1015,21 @@ final class AppModel: ObservableObject {
       }
       workspaceRuntimes.removeAll { $0.id == runtimeID }
       savedLayoutSnapshots[runtimeID] = nil
+      rememberedWorkspaceContentSizes[runtimeID] = nil
       activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
+      if let activeWorkspace {
+        applyTerminalWindowMinimumContentSize(for: activeWorkspace)
+      }
       syncWorkspaceSwitcherState()
       return runtimePanes
     }
     workspaceRuntimes.removeAll { $0.id == closed.workspaceID }
     savedLayoutSnapshots[closed.workspaceID] = nil
+    rememberedWorkspaceContentSizes[closed.workspaceID] = nil
     activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
+    if let activeWorkspace {
+      applyTerminalWindowMinimumContentSize(for: activeWorkspace)
+    }
     syncWorkspaceSwitcherState()
     return closed.panes
   }
@@ -863,6 +1042,8 @@ final class AppModel: ObservableObject {
       let layout = paneWorkspaceController.workspaceLayout(id: activeWorkspaceID)
     {
       workspaceRuntimes[index].layout = layout
+      persistWorkspaceRuntime(at: index)
+      applyTerminalWindowMinimumContentSize(for: workspaceRuntimes[index])
     }
   }
 
@@ -1006,7 +1187,10 @@ final class AppModel: ObservableObject {
       break
     case .cwdChanged(let session, let cwd):
       shellIntegrationState = "available"
-      updateWorkspaceForSession(session) { workspace in workspace.cwdBySession[session] = cwd }
+      updateWorkspaceForSession(session, persist: true) { workspace in
+        workspace.cwdBySession[session] = cwd
+        workspace.layout.root = layoutUpdatingPaneCwd(workspace.layout.root, session: session, cwd: cwd)
+      }
     case .osc(let session, let sequence):
       shellIntegrationState = "available"
       handleProGhosttyControlOsc(session: session, sequence: sequence)
@@ -1017,7 +1201,7 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func updateWorkspaceForSession(_ id: TerminalSessionID, _ update: (inout WorkspaceRuntime) -> Void) {
+  private func updateWorkspaceForSession(_ id: TerminalSessionID, persist: Bool = false, _ update: (inout WorkspaceRuntime) -> Void) {
     guard
       let index = workspaceRuntimes.firstIndex(where: { workspace in
         PaneTreeReducer.listLeaves(in: workspace.layout.root).contains { $0.sessionId == id }
@@ -1026,6 +1210,18 @@ final class AppModel: ObservableObject {
       return
     }
     update(&workspaceRuntimes[index])
+    if persist {
+      persistWorkspaceRuntime(at: index)
+    }
+  }
+
+  private func layoutUpdatingPaneCwd(_ root: PaneNode, session: TerminalSessionID, cwd: String) -> PaneNode {
+    PaneTreeReducer.mapLeaves(in: root) { pane in
+      guard pane.sessionId == session else { return pane }
+      var updated = pane
+      updated.cwd = cwd
+      return updated
+    }
   }
 
   private func handleProGhosttyControlOsc(session: TerminalSessionID, sequence: OscSequence) {

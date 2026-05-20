@@ -104,6 +104,42 @@ struct PaneWorkspaceControllerTests {
     #expect(controller.activeWorkspaceID == first.workspace.id)
   }
 
+  @Test func restoreWorkspaceCreatesFreshSessionsFromSnapshot() throws {
+    let manager = RecordingSessionManager()
+    let focusStore = TerminalFocusStore()
+    let controller = PaneWorkspaceController(sessionManager: manager, focusStore: focusStore)
+    let first = TerminalPane(sessionId: TerminalSessionID(), title: "first", cwd: "/a")
+    let second = TerminalPane(sessionId: TerminalSessionID(), title: "second", cwd: "/b")
+    let snapshot = WorkspaceLayout(
+      title: "Persisted",
+      root: .split(SplitPane(
+        axis: .horizontal,
+        first: .leaf(first),
+        second: .leaf(second)
+      ))
+    )
+    let workspace = Workspace(
+      name: "Restored",
+      rootPath: "/work",
+      defaultShell: "/bin/zsh",
+      layoutSnapshot: snapshot
+    )
+
+    let restored = try controller.restoreWorkspace(
+      workspace: workspace,
+      layoutSnapshot: snapshot,
+      fallbackShell: "/bin/sh",
+      defaultWorkingDirectory: "/tmp"
+    )
+
+    #expect(manager.createdConfigs.count == 2)
+    #expect(manager.createdConfigs.map(\.workingDirectory) == ["/a", "/b"])
+    #expect(PaneTreeReducer.listLeaves(in: restored.root).map(\.cwd) == ["/a", "/b"])
+    #expect(restored.title == "Restored")
+    #expect(controller.workspaceLayouts.map(\.id) == [restored.id])
+    #expect(focusStore.focusedPaneId(in: restored.id) == PaneTreeReducer.listLeaves(in: restored.root).first?.paneId)
+  }
+
   private func makeConfig(cwd: String) -> TerminalSessionConfig {
     TerminalSessionConfig(shellPath: "/bin/sh", workingDirectory: cwd, environment: [:], rows: 24, cols: 80)
   }

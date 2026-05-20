@@ -62,6 +62,16 @@ struct GhosttyVTBridgeTests {
     #expect(cell.usesDefaultBackground == true)
   }
 
+  @Test func renderFramePreservesOSC8HyperlinkURI() throws {
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2)
+    bridge.write(Data("\u{1B}]8;;https://example.com/path\u{1B}\\link\u{1B}]8;;\u{1B}\\".utf8))
+
+    let frame = try bridge.frame()
+    let linkedCell = try #require(frame.cells.first { $0.scalar == "l" })
+
+    #expect(linkedCell.hyperlink == "https://example.com/path")
+  }
+
   @Test func renderFramePreservesCursorVisualStyle() throws {
     let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
 

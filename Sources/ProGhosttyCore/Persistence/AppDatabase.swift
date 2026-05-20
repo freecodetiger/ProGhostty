@@ -94,10 +94,28 @@ public final class AppDatabase {
           name TEXT NOT NULL,
           root_path TEXT,
           default_shell TEXT,
+          layout_snapshot TEXT,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
       );
       """)
+    try addColumnIfNeeded(table: "workspaces", column: "layout_snapshot", definition: "TEXT")
+  }
+
+  private func addColumnIfNeeded(table tableName: String, column: String, definition: String) throws {
+    guard try !tableHasColumn(tableName, column: column) else { return }
+    try execute("ALTER TABLE \(tableName) ADD COLUMN \(column) \(definition);")
+  }
+
+  private func tableHasColumn(_ tableName: String, column: String) throws -> Bool {
+    let statement = try prepare("PRAGMA table_info(\(tableName));")
+    defer { sqlite3_finalize(statement) }
+    while sqlite3_step(statement) == SQLITE_ROW {
+      if textColumn(statement, 1) == column {
+        return true
+      }
+    }
+    return false
   }
 }
 

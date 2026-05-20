@@ -26,6 +26,31 @@ struct WorkspaceStoreTests {
     #expect(saved.rootPath == "/tmp/renamed")
   }
 
+  @Test func workspaceLayoutSnapshotRoundTrips() throws {
+    let store = try makeStore()
+    let first = TerminalPane(sessionId: TerminalSessionID(), title: "first", cwd: "/a")
+    let second = TerminalPane(sessionId: TerminalSessionID(), title: "second", cwd: "/b")
+    let layout = WorkspaceLayout(
+      title: "Core",
+      root: .split(SplitPane(
+        axis: .horizontal,
+        first: .leaf(first),
+        second: .leaf(second)
+      ))
+    )
+    let workspace = Workspace(
+      name: "Core",
+      rootPath: "/tmp/core",
+      layoutSnapshot: layout
+    )
+
+    try store.save(workspace)
+
+    let saved = try #require(try store.workspace(id: workspace.id))
+    #expect(saved.layoutSnapshot == layout)
+    #expect(PaneTreeReducer.listLeaves(in: try #require(saved.layoutSnapshot?.root)).map(\.cwd) == ["/a", "/b"])
+  }
+
   @Test func deleteWorkspace() throws {
     let store = try makeStore()
     let workspace = Workspace(name: "Core", rootPath: "/tmp/core")

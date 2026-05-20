@@ -1,6 +1,16 @@
 import Foundation
 
 public enum SplitRatioLayout {
+  public struct ContentSize: Equatable, Sendable {
+    public var width: Double
+    public var height: Double
+
+    public init(width: Double, height: Double) {
+      self.width = max(0, width)
+      self.height = max(0, height)
+    }
+  }
+
   public static let minimumPaneLength: Double = 120
 
   public static func firstLength(
@@ -57,5 +67,54 @@ public enum SplitRatioLayout {
     isApplyingProgrammaticRatio: Bool
   ) -> Bool {
     isUserInitiated && hasAppliedInitialRatio && !isApplyingProgrammaticRatio
+  }
+
+  public static func minimumContentSize(
+    for node: PaneNode,
+    leafWidth: Double = minimumPaneLength,
+    leafHeight: Double = minimumPaneLength,
+    dividerThickness: Double = 1
+  ) -> ContentSize {
+    switch node {
+    case .leaf:
+      return ContentSize(width: leafWidth, height: leafHeight)
+    case .split(let split):
+      let first = minimumContentSize(
+        for: split.first,
+        leafWidth: leafWidth,
+        leafHeight: leafHeight,
+        dividerThickness: dividerThickness
+      )
+      let second = minimumContentSize(
+        for: split.second,
+        leafWidth: leafWidth,
+        leafHeight: leafHeight,
+        dividerThickness: dividerThickness
+      )
+      let divider = max(0, dividerThickness)
+      switch split.axis {
+      case .horizontal:
+        return ContentSize(
+          width: first.width + divider + second.width,
+          height: max(first.height, second.height)
+        )
+      case .vertical:
+        return ContentSize(
+          width: max(first.width, second.width),
+          height: first.height + divider + second.height
+        )
+      }
+    }
+  }
+
+  public static func workspaceSwitchTargetContentSize(
+    current: ContentSize,
+    remembered: ContentSize?,
+    layoutMinimum: ContentSize
+  ) -> ContentSize {
+    ContentSize(
+      width: max(current.width, remembered?.width ?? 0, layoutMinimum.width),
+      height: max(current.height, remembered?.height ?? 0, layoutMinimum.height)
+    )
   }
 }

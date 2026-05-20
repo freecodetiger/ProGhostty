@@ -123,6 +123,46 @@ struct SplitRatioLayoutTests {
     #expect(firstLength == 180)
   }
 
+  @Test func paneTreeMinimumContentSizeAccumulatesNestedSplits() {
+    let first = TerminalPane(sessionId: TerminalSessionID(), title: "one")
+    let second = TerminalPane(sessionId: TerminalSessionID(), title: "two")
+    let third = TerminalPane(sessionId: TerminalSessionID(), title: "three")
+    let root = PaneNode.split(SplitPane(
+      axis: .horizontal,
+      first: .leaf(first),
+      second: .split(SplitPane(
+        axis: .vertical,
+        first: .leaf(second),
+        second: .leaf(third)
+      ))
+    ))
+
+    let size = SplitRatioLayout.minimumContentSize(
+      for: root,
+      leafWidth: 120,
+      leafHeight: 80,
+      dividerThickness: 1
+    )
+
+    #expect(size.width == 241)
+    #expect(size.height == 161)
+  }
+
+  @Test func workspaceSwitchTargetSizeOnlyExpandsToRememberedOrLayoutMinimum() {
+    let current = SplitRatioLayout.ContentSize(width: 600, height: 380)
+    let remembered = SplitRatioLayout.ContentSize(width: 520, height: 700)
+    let layoutMinimum = SplitRatioLayout.ContentSize(width: 900, height: 360)
+
+    let target = SplitRatioLayout.workspaceSwitchTargetContentSize(
+      current: current,
+      remembered: remembered,
+      layoutMinimum: layoutMinimum
+    )
+
+    #expect(target.width == 900)
+    #expect(target.height == 700)
+  }
+
   @Test func layoutDrivenResizeShouldNotPersistRatio() {
     #expect(SplitRatioLayout.shouldPersistRatioChange(
       isUserInitiated: false,

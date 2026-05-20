@@ -24,6 +24,7 @@ public struct GhosttyTerminalFrame: Sendable, Equatable {
     public var inverse: Bool
     public var usesDefaultForeground: Bool
     public var usesDefaultBackground: Bool
+    public var hyperlink: String?
 
     public init(
       scalar: UnicodeScalar,
@@ -35,7 +36,8 @@ public struct GhosttyTerminalFrame: Sendable, Equatable {
       underline: Bool,
       inverse: Bool,
       usesDefaultForeground: Bool = false,
-      usesDefaultBackground: Bool = false
+      usesDefaultBackground: Bool = false,
+      hyperlink: String? = nil
     ) {
       self.scalar = scalar
       self.foreground = foreground
@@ -47,6 +49,7 @@ public struct GhosttyTerminalFrame: Sendable, Equatable {
       self.inverse = inverse
       self.usesDefaultForeground = usesDefaultForeground
       self.usesDefaultBackground = usesDefaultBackground
+      self.hyperlink = hyperlink
     }
   }
 
@@ -276,6 +279,13 @@ public final class GhosttyVTBridge {
 
   private static func cell(from rawCell: ProGhosttyVTCell) -> GhosttyTerminalFrame.Cell {
     let scalar = UnicodeScalar(rawCell.codepoint) ?? " "
+    let hyperlink: String?
+    if let pointer = rawCell.hyperlink_uri, rawCell.hyperlink_uri_len > 0 {
+      let bytes = UnsafeBufferPointer(start: pointer, count: Int(rawCell.hyperlink_uri_len))
+      hyperlink = String(decoding: bytes, as: UTF8.self)
+    } else {
+      hyperlink = nil
+    }
     return GhosttyTerminalFrame.Cell(
       scalar: scalar,
       foreground: GhosttyTerminalFrame.RGB(r: rawCell.fg_r, g: rawCell.fg_g, b: rawCell.fg_b),
@@ -286,7 +296,8 @@ public final class GhosttyVTBridge {
       underline: rawCell.underline,
       inverse: rawCell.inverse,
       usesDefaultForeground: rawCell.fg_default,
-      usesDefaultBackground: rawCell.bg_default
+      usesDefaultBackground: rawCell.bg_default,
+      hyperlink: hyperlink
     )
   }
 

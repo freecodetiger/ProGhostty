@@ -51,6 +51,62 @@ public final class PaneWorkspaceController {
     return OpenResult(workspace: workspace, pane: pane)
   }
 
+  public func restoreWorkspace(
+    workspace: Workspace,
+    layoutSnapshot: WorkspaceLayout?,
+    fallbackShell: String,
+    defaultWorkingDirectory: String,
+    rows: Int = 24,
+    cols: Int = 80
+  ) throws -> WorkspaceLayout {
+    let fallbackCwd = nonEmpty(workspace.rootPath) ?? nonEmpty(defaultWorkingDirectory) ?? FileManager.default.homeDirectoryForCurrentUser.path
+    var template = layoutSnapshot ?? WorkspaceLayout(
+      title: workspace.name,
+      root: .leaf(TerminalPane(
+        sessionId: TerminalSessionID(),
+        title: paneTitle(for: fallbackCwd, fallback: workspace.name),
+        cwd: fallbackCwd
+      )),
+      workspaceId: workspace.id
+    )
+    template.title = workspace.name
+    template.workspaceId = workspace.id
+
+    let restoredRoot = try PaneTreeReducer.mapLeaves(in: template.root) { pane in
+      let cwd = nonEmpty(pane.cwd) ?? fallbackCwd
+      let config = TerminalSessionConfig(
+        shellPath: workspace.defaultShell ?? fallbackShell,
+        workingDirectory: cwd,
+        environment: [:],
+        rows: rows,
+        cols: cols,
+        workspaceId: workspace.id
+      )
+      let session = try sessionManager.createSession(config: config)
+      return TerminalPane(
+        paneId: pane.paneId,
+        sessionId: session,
+        title: pane.title.isEmpty ? paneTitle(for: cwd, fallback: workspace.name) : pane.title,
+        cwd: cwd
+      )
+    }
+
+    let restored = WorkspaceLayout(
+      id: template.id,
+      title: template.title,
+      root: restoredRoot,
+      workspaceId: template.workspaceId
+    )
+    if let index = workspaceLayouts.firstIndex(where: { $0.id == restored.id }) {
+      workspaceLayouts[index] = restored
+    } else {
+      workspaceLayouts.append(restored)
+    }
+    activeWorkspaceID = restored.id
+    focusStore.focusPane(PaneTreeReducer.listLeaves(in: restored.root).first?.paneId, in: restored.id)
+    return restored
+  }
+
   public func closeSelectedTerminal() -> (workspaceID: UUID, panes: [TerminalPane])? {
     guard let activeWorkspaceID else {
       return nil
@@ -183,6 +239,16 @@ public final class PaneWorkspaceController {
     let closedIndex = previousLeaves.firstIndex(where: { $0.paneId == paneID }) ?? 0
     let nextIndex = min(closedIndex, max(0, currentLeaves.count - 1))
     return currentLeaves.isEmpty ? nil : currentLeaves[nextIndex]
+  }
+
+  private func nonEmpty(_ value: String?) -> String? {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  private func paneTitle(for cwd: String, fallback: String) -> String {
+    let title = URL(fileURLWithPath: cwd).lastPathComponent
+    return title.isEmpty ? fallback : title
   }
 }
 

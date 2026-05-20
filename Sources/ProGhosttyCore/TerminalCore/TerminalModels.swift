@@ -71,4 +71,5 @@ public enum TerminalEvent: Sendable {
   func focusSessionView(_ id: TerminalSessionID?)
   func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?)
   func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?)
+  func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?)
 }

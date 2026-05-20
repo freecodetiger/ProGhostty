@@ -111,7 +111,51 @@ static ProGhosttyVTCell blank_cell(GhosttyRenderStateColors *colors) {
   cell.faint = false;
   cell.underline = false;
   cell.inverse = false;
+  cell.hyperlink_uri = NULL;
+  cell.hyperlink_uri_len = 0;
   return cell;
+}
+
+static void free_cells(ProGhosttyVTCell *cells, size_t cell_count) {
+  if (cells == NULL) {
+    return;
+  }
+  for (size_t i = 0; i < cell_count; i++) {
+    free(cells[i].hyperlink_uri);
+    cells[i].hyperlink_uri = NULL;
+    cells[i].hyperlink_uri_len = 0;
+  }
+  free(cells);
+}
+
+static void apply_hyperlink(ProGhosttyVTCell *cell, const GhosttyGridRef *ref) {
+  if (cell == NULL || ref == NULL) {
+    return;
+  }
+
+  size_t len = 0;
+  GhosttyResult result = ghostty_grid_ref_hyperlink_uri(ref, NULL, 0, &len);
+  if (result == GHOSTTY_SUCCESS && len == 0) {
+    return;
+  }
+  if (result != GHOSTTY_OUT_OF_SPACE || len == 0) {
+    return;
+  }
+
+  uint8_t *uri = malloc(len + 1);
+  if (uri == NULL) {
+    return;
+  }
+
+  size_t written = 0;
+  result = ghostty_grid_ref_hyperlink_uri(ref, uri, len, &written);
+  if (result != GHOSTTY_SUCCESS || written == 0) {
+    free(uri);
+    return;
+  }
+  uri[written] = 0;
+  cell->hyperlink_uri = uri;
+  cell->hyperlink_uri_len = written;
 }
 
 static void apply_style(ProGhosttyVTCell *cell, GhosttyRenderStateRowCells cells, GhosttyRenderStateColors *colors) {
@@ -235,6 +279,7 @@ static ProGhosttyVTCell cell_from_grid_ref(GhosttyGridRef *ref, GhosttyRenderSta
     }
   }
 
+  apply_hyperlink(&out, ref);
   return out;
 }
 
@@ -357,6 +402,7 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
       }
 
       ProGhosttyVTCell *cell = &cells_out[(size_t)y * cols + x];
+      GhosttyCell raw = 0;
       uint32_t grapheme_len = 0;
       ghostty_render_state_row_cells_get(
         row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN, &grapheme_len);
@@ -367,6 +413,20 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
         cell->codepoint = codepoints[0] == 0 ? ' ' : codepoints[0];
       }
       apply_style(cell, row_cells, &colors);
+
+      if (ghostty_render_state_row_cells_get(row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw) == GHOSTTY_SUCCESS) {
+        bool has_hyperlink = false;
+        if (ghostty_cell_get(raw, GHOSTTY_CELL_DATA_HAS_HYPERLINK, &has_hyperlink) == GHOSTTY_SUCCESS && has_hyperlink) {
+          GhosttyPoint point = {
+            .tag = GHOSTTY_POINT_TAG_VIEWPORT,
+            .value = {.coordinate = {.x = x, .y = y}},
+          };
+          GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+          if (ghostty_terminal_grid_ref(vt->terminal, point, &ref) == GHOSTTY_SUCCESS) {
+            apply_hyperlink(cell, &ref);
+          }
+        }
+      }
     }
     y++;
   }
@@ -408,7 +468,7 @@ void proghostty_vt_snapshot_free(ProGhosttyVTSnapshot *snapshot) {
   if (snapshot == NULL) {
     return;
   }
-  free(snapshot->cells);
+  free_cells(snapshot->cells, snapshot->cell_count);
   snapshot->cells = NULL;
   snapshot->cell_count = 0;
 }
@@ -487,8 +547,8 @@ void proghostty_vt_scroll_snapshot_free(ProGhosttyVTScrollSnapshot *snapshot) {
     return;
   }
   proghostty_vt_snapshot_free(&snapshot->viewport);
-  free(snapshot->overscan_top_cells);
-  free(snapshot->overscan_bottom_cells);
+  free_cells(snapshot->overscan_top_cells, snapshot->overscan_top_rows * (size_t)snapshot->viewport.cols);
+  free_cells(snapshot->overscan_bottom_cells, snapshot->overscan_bottom_rows * (size_t)snapshot->viewport.cols);
   snapshot->overscan_top_cells = NULL;
   snapshot->overscan_bottom_cells = NULL;
   snapshot->overscan_top_rows = 0;

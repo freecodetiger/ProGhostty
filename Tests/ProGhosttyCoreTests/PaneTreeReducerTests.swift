@@ -123,6 +123,72 @@ struct PaneTreeReducerTests {
     #expect(PaneTreeReducer.listLeaves(in: root) == [first, second, third])
   }
 
+  @Test func cwdForPanePrefersLiveSessionCwdThenPaneSnapshotThenFallback() {
+    let firstSession = TerminalSessionID()
+    let secondSession = TerminalSessionID()
+    let first = TerminalPane(sessionId: firstSession, title: "first", cwd: "/snapshot/a")
+    let second = TerminalPane(sessionId: secondSession, title: "second", cwd: "/snapshot/b")
+    let root = PaneNode.split(SplitPane(
+      axis: .horizontal,
+      first: .leaf(first),
+      second: .leaf(second)
+    ))
+
+    #expect(PaneTreeReducer.cwd(
+      forPane: first.paneId,
+      in: root,
+      cwdBySession: [firstSession: "/live/a", secondSession: "/live/b"],
+      fallback: "/fallback"
+    ) == "/live/a")
+    #expect(PaneTreeReducer.cwd(
+      forPane: second.paneId,
+      in: root,
+      cwdBySession: [:],
+      fallback: "/fallback"
+    ) == "/snapshot/b")
+    #expect(PaneTreeReducer.cwd(
+      forPane: UUID(),
+      in: root,
+      cwdBySession: [:],
+      fallback: "/fallback"
+    ) == "/fallback")
+  }
+
+  @Test func mapLeavesPreservesStructureWhileReplacingLeafPayloads() {
+    let first = TerminalPane(sessionId: TerminalSessionID(), title: "first", cwd: "/a")
+    let second = TerminalPane(sessionId: TerminalSessionID(), title: "second", cwd: "/b")
+    let third = TerminalPane(sessionId: TerminalSessionID(), title: "third", cwd: "/c")
+    let root = PaneNode.split(SplitPane(
+      axis: .horizontal,
+      ratio: 0.6,
+      first: .leaf(first),
+      second: .split(SplitPane(axis: .vertical, ratio: 0.4, first: .leaf(second), second: .leaf(third)))
+    ))
+
+    let remapped = try? PaneTreeReducer.mapLeaves(in: root) { pane in
+      TerminalPane(
+        paneId: pane.paneId,
+        sessionId: TerminalSessionID(),
+        title: pane.title.uppercased(),
+        cwd: pane.cwd.map { "\($0)/restored" }
+      )
+    }
+
+    guard let remapped else {
+      Issue.record("expected remapped tree")
+      return
+    }
+
+    #expect(PaneTreeReducer.listLeaves(in: remapped).map(\.title) == ["FIRST", "SECOND", "THIRD"])
+    #expect(PaneTreeReducer.listLeaves(in: remapped).map(\.cwd) == ["/a/restored", "/b/restored", "/c/restored"])
+    guard case .split(let outer) = remapped, case .split(let inner) = outer.second else {
+      Issue.record("expected nested split structure")
+      return
+    }
+    #expect(outer.axis == .horizontal)
+    #expect(inner.axis == .vertical)
+  }
+
   @Test func workspaceLayoutOwnsRootPaneNodeAndIsCodable() throws {
     let pane = TerminalPane(sessionId: TerminalSessionID(), title: "zsh", cwd: "/tmp")
     let workspace = WorkspaceLayout(title: "work", root: .leaf(pane), workspaceId: UUID())

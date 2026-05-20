@@ -22,6 +22,8 @@ typedef struct {
   bool faint;
   bool underline;
   bool inverse;
+  uint8_t *hyperlink_uri;
+  size_t hyperlink_uri_len;
 } ProGhosttyVTCell;
 
 typedef struct {

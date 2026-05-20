@@ -53,11 +53,16 @@ jobs:
           prerelease: false
           generate_release_notes: true
           body: |
-            ProGhostty ${{ github.ref_name }} formal DMG build.
+            ProGhostty ${{ github.ref_name }} 正式版 DMG 构建。
 
-            Highlights:
-            - Native macOS terminal window with real PTY-backed sessions.
-            - Ghostty VT cell-grid rendering path for terminal output.
-            - Split panes, workspaces, settings, plugin manager, and update checks.
-            - Context menu shortcut hints for copy, paste, and close pane.
-            - Ad-hoc signed DMG. macOS may warn that the developer cannot be verified.
+            更新重点：
+            - 接入真实 PTY 会话，并继续稳定 Ghostty VT cell-grid 渲染链路。
+            - 修复像素级滚动下文本选择区域和可见文本行列不一致的问题。
+            - 增加 URL 识别与 `⌘ + 点击` 打开链接，普通点击仍优先服务于文本选择。
+            - 鼠标悬停链接时提供克制的 titlebar 提示，降低“可点击但需要修饰键”的认知断层。
+            - 改进工作区、分屏、布局尺寸和持久化相关逻辑。
+            - 继续保留分屏、工作区、设置、插件管理和自动检查更新能力。
+
+            安装说明：
+            - 下载 DMG 后拖拽安装即可。
+            - 当前版本使用 ad-hoc 签名，macOS 可能提示开发者无法验证；如遇提示，请在系统设置中允许打开。

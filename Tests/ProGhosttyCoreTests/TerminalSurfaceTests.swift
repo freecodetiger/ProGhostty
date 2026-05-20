@@ -1082,6 +1082,284 @@ struct TerminalSurfaceTests {
     #expect(composingCursorFillPixels < cursorFillPixels)
   }
 
+  @MainActor @Test func ptyGridCommandClickOpensVisibleURL() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["open http://localhost:5173 now"], cols: 36, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    var openedURL: URL?
+    gridView.openURLHandler = { openedURL = $0 }
+    let rect = PTYGridView.textGlyphRect(row: 0, col: 9, cellSize: cellSize, inset: inset)
+    let point = NSPoint(x: rect.midX, y: rect.midY)
+    let event = try #require(NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: point,
+      modifierFlags: [.command],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    ))
+
+    gridView.mouseDown(with: event)
+
+    #expect(openedURL?.absoluteString == "http://localhost:5173")
+  }
+
+  @MainActor @Test func ptyGridPlainClickOnURLDoesNotOpenURL() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["open http://localhost:5173 now"], cols: 36, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    var openedURL: URL?
+    gridView.openURLHandler = { openedURL = $0 }
+    let rect = PTYGridView.textGlyphRect(row: 0, col: 9, cellSize: cellSize, inset: inset)
+    let point = NSPoint(x: rect.midX, y: rect.midY)
+    let event = try #require(NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: point,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    ))
+
+    gridView.mouseDown(with: event)
+
+    #expect(openedURL == nil)
+  }
+
+  @MainActor @Test func ptyGridCommandClickOpensOSC8HyperlinkMetadata() throws {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: ["project docs"], cols: 24, cursorX: 0, cursorY: 0)
+    for col in 0..<7 {
+      frame.cells[col].hyperlink = "https://docs.example/project"
+    }
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    var openedURL: URL?
+    gridView.openURLHandler = { openedURL = $0 }
+    let rect = PTYGridView.textGlyphRect(row: 0, col: 2, cellSize: cellSize, inset: inset)
+    let point = NSPoint(x: rect.midX, y: rect.midY)
+    let event = try #require(NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: point,
+      modifierFlags: [.command],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    ))
+
+    gridView.mouseDown(with: event)
+
+    #expect(openedURL?.absoluteString == "https://docs.example/project")
+  }
+
+  @MainActor @Test func ptyGridExposesURLCursorRectsForVisibleLinks() {
+    let frame = frameWithText(rows: ["open http://localhost:5173 now"], cols: 36, cursorX: 0, cursorY: 0)
+    let cellSize = CGSize(width: 8, height: 16)
+    let inset = CGSize(width: 14, height: 12)
+
+    let rects = PTYGridView.urlCursorRects(frame: frame, cellSize: cellSize, inset: inset, linkInteractionActive: true)
+
+    #expect(rects == [
+      NSRect(x: 14 + 5 * 8, y: 12, width: 21 * 8, height: 16),
+    ])
+  }
+
+  @MainActor @Test func ptyGridDoesNotExposeURLCursorRectsWithoutCommandLinkMode() {
+    let frame = frameWithText(rows: ["open http://localhost:5173 now"], cols: 36, cursorX: 0, cursorY: 0)
+    let cellSize = CGSize(width: 8, height: 16)
+    let inset = CGSize(width: 14, height: 12)
+
+    let rects = PTYGridView.urlCursorRects(frame: frame, cellSize: cellSize, inset: inset, linkInteractionActive: false)
+
+    #expect(rects.isEmpty)
+  }
+
+  @MainActor @Test func ptyGridCommandClickOpensURLAtPixelScrolledPosition() throws {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: ["open http://localhost:5173 now"], cols: 36, cursorX: 0, cursorY: 0)
+    frame.isAlternateScreen = false
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    let scrollFrame = GhosttyTerminalScrollFrame(
+      viewport: frame,
+      overscanTop: [cellRow(text: "previous row", cols: frame.cols)],
+      overscanBottom: [cellRow(text: "next row", cols: frame.cols)],
+      requestedOverscanTop: 1,
+      requestedOverscanBottom: 1,
+      viewportStartRow: 1
+    )
+    gridView.render(scrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: [0]))
+    gridView.viewportCanScrollHandler = { _ in true }
+    let pixelOffset = cellSize.height * 0.75
+    gridView.testScrollWheelDeltaY(pixelOffset)
+    #expect(gridView.viewport.visualOffsetY == pixelOffset)
+    var openedURL: URL?
+    gridView.openURLHandler = { openedURL = $0 }
+    let rect = PTYGridView.textGlyphRect(row: 0, col: 9, cellSize: cellSize, inset: inset)
+    let viewPoint = NSPoint(x: rect.midX, y: rect.midY + pixelOffset)
+    let windowPoint = NSPoint(x: viewPoint.x, y: gridView.bounds.height - viewPoint.y)
+    let event = try #require(NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: windowPoint,
+      modifierFlags: [.command],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    ))
+
+    gridView.mouseDown(with: event)
+
+    #expect(openedURL?.absoluteString == "http://localhost:5173")
+  }
+
+  @MainActor @Test func ptyGridSelectionUsesDrawnRowsDuringPixelScroll() throws {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: ["visible text"], cols: 24, cursorX: 0, cursorY: 0)
+    frame.isAlternateScreen = false
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    let scrollFrame = GhosttyTerminalScrollFrame(
+      viewport: frame,
+      overscanTop: [cellRow(text: "previous row", cols: frame.cols)],
+      overscanBottom: [cellRow(text: "next row", cols: frame.cols)],
+      requestedOverscanTop: 1,
+      requestedOverscanBottom: 1,
+      viewportStartRow: 1
+    )
+    gridView.render(scrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: [0]))
+    gridView.viewportCanScrollHandler = { _ in true }
+    let pixelOffset = cellSize.height * 0.75
+    gridView.testScrollWheelDeltaY(pixelOffset)
+    let start = PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset)
+    let end = PTYGridView.textGlyphRect(row: 0, col: 6, cellSize: cellSize, inset: inset)
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY + pixelOffset), in: gridView))
+    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: end.midX, y: end.midY + pixelOffset), in: gridView))
+
+    #expect(gridView.currentSelectionRowSet == [1])
+    #expect(gridView.selectedText == "visible")
+  }
+
+  @MainActor @Test func ptyGridSelectionCopiesVisibleOverscanTextDuringPixelScroll() throws {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: ["visible text"], cols: 24, cursorX: 0, cursorY: 0)
+    frame.isAlternateScreen = false
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    let scrollFrame = GhosttyTerminalScrollFrame(
+      viewport: frame,
+      overscanTop: [cellRow(text: "previous row", cols: frame.cols)],
+      overscanBottom: [cellRow(text: "next row", cols: frame.cols)],
+      requestedOverscanTop: 1,
+      requestedOverscanBottom: 1,
+      viewportStartRow: 1
+    )
+    gridView.render(scrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: [0]))
+    gridView.viewportCanScrollHandler = { _ in true }
+    let pixelOffset = cellSize.height * 0.75
+    gridView.testScrollWheelDeltaY(pixelOffset)
+    let start = NSPoint(x: inset.width + cellSize.width * 0.5, y: inset.height + 2)
+    let end = NSPoint(x: inset.width + cellSize.width * 7.5, y: inset.height + 2)
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: start, in: gridView))
+    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: end, in: gridView))
+
+    #expect(gridView.currentSelectionRowSet == [0])
+    #expect(gridView.selectedText == "previous")
+  }
+
+  @MainActor @Test func ptyGridURLCursorRectsCanFollowPixelScrollOffset() {
+    let frame = frameWithText(rows: ["open http://localhost:5173 now"], cols: 36, cursorX: 0, cursorY: 0)
+    let cellSize = CGSize(width: 8, height: 16)
+    let inset = CGSize(width: 14, height: 12)
+
+    let rects = PTYGridView.urlCursorRects(
+      frame: frame,
+      cellSize: cellSize,
+      inset: inset,
+      verticalOffsetY: 6,
+      linkInteractionActive: true
+    )
+
+    #expect(rects == [
+      NSRect(x: 14 + 5 * 8, y: 18, width: 21 * 8, height: 16),
+    ])
+  }
+
+  @MainActor @Test func ptyGridReportsLinkHoverHintWithoutOpeningURL() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["open http://localhost:5173 now"], cols: 36, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    var hoverStates: [Bool] = []
+    gridView.linkHoverHandler = { hoverStates.append($0) }
+    let urlRect = PTYGridView.textGlyphRect(row: 0, col: 9, cellSize: cellSize, inset: inset)
+    let plainRect = PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset)
+
+    gridView.mouseMoved(with: try mouseEvent(.mouseMoved, viewPoint: NSPoint(x: urlRect.midX, y: urlRect.midY), in: gridView))
+    gridView.mouseMoved(with: try mouseEvent(.mouseMoved, viewPoint: NSPoint(x: plainRect.midX, y: plainRect.midY), in: gridView))
+
+    #expect(hoverStates == [true, false])
+  }
+
   @MainActor @Test func ptyTextCommandCAndVUseCopyPasteActions() throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("proghostty.shortcuts.test.\(UUID().uuidString)"))
     pasteboard.clearContents()
@@ -1259,6 +1537,26 @@ struct TerminalSurfaceTests {
       isAlternateScreen: true,
       cells: cells
     )
+  }
+
+  private func cellRow(text: String, cols: Int) -> GhosttyTerminalCellRow {
+    let frame = frameWithText(rows: [text], cols: cols, cursorX: 0, cursorY: 0)
+    return GhosttyTerminalCellRow(cells: frame.cells)
+  }
+
+  @MainActor private func mouseEvent(_ type: NSEvent.EventType, viewPoint: NSPoint, in view: NSView) throws -> NSEvent {
+    let windowPoint = NSPoint(x: viewPoint.x, y: view.bounds.height - viewPoint.y)
+    return try #require(NSEvent.mouseEvent(
+      with: type,
+      location: windowPoint,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    ))
   }
 
   @MainActor private func scrollView(in view: NSView) throws -> NSScrollView {
