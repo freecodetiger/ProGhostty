@@ -249,7 +249,7 @@ struct TerminalSurfaceTests {
 
     let wasPinned = try #require(registry.viewportIsPinnedToBottom(session) as Bool?)
     bridge.write(Data("\r\ncwd % ".utf8))
-    registry.prepareForPinnedOutput(session: session, wasPinnedToBottom: wasPinned, bridge: bridge)
+    registry.prepareForPinnedOutput(session: session, wasPinnedToBottom: wasPinned)
     registry.render(bridge, session: session)
     registry.flushPendingRenderers()
 
@@ -272,7 +272,8 @@ struct TerminalSurfaceTests {
     registry.flushPendingRenderers()
     #expect(surfaceView.liveGridView.renderedText.contains("first") || surfaceView.liveGridView.renderedText.contains("second"))
 
-    registry.prepareForUserInput(session: session, bridge: bridge)
+    scrollBridgeToBottom(bridge)
+    registry.prepareForUserInput(session: session)
     registry.render(bridge, session: session)
     registry.flushPendingRenderers()
 
@@ -294,10 +295,11 @@ struct TerminalSurfaceTests {
     surfaceView.liveGridView.testScrollWheelDeltaY(37)
     registry.flushPendingRenderers()
 
-    registry.prepareForUserInput(session: session, bridge: bridge)
+    scrollBridgeToBottom(bridge)
+    registry.prepareForUserInput(session: session)
     let output = (1...200).map(String.init).joined(separator: "\r\n") + "\r\nzpc@host ~ % "
     bridge.write(Data(output.utf8))
-    registry.prepareForPinnedOutput(session: session, wasPinnedToBottom: true, bridge: bridge)
+    registry.prepareForPinnedOutput(session: session, wasPinnedToBottom: true)
     registry.render(bridge, session: session)
     registry.flushPendingRenderers()
 
@@ -320,7 +322,7 @@ struct TerminalSurfaceTests {
 
     let wasPinned = try #require(registry.viewportIsPinnedToBottom(session) as Bool?)
     bridge.resize(cols: 28, rows: 7)
-    registry.prepareForPinnedOutput(session: session, wasPinnedToBottom: wasPinned, bridge: bridge)
+    registry.prepareForPinnedOutput(session: session, wasPinnedToBottom: wasPinned)
     registry.render(bridge, session: session)
     registry.flushPendingRenderers()
 
@@ -1595,6 +1597,14 @@ struct TerminalSurfaceTests {
       }
     }
     throw SurfaceLookupError.notFound("PTYGridView")
+  }
+
+  private func scrollBridgeToBottom(_ bridge: GhosttyVTBridge) {
+    guard let scrollbar = try? bridge.scrollbar(), scrollbar.offset + scrollbar.length < scrollbar.total else {
+      return
+    }
+    let rowsToBottom = scrollbar.total - (scrollbar.offset + scrollbar.length)
+    bridge.scrollViewport(deltaRows: Int(min(UInt64(Int.max), rowsToBottom)))
   }
 
   private enum SurfaceLookupError: Error {

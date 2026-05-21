@@ -87,6 +87,43 @@ enum PTYRenderDebugLog {
 
 private let ptyReadQueue = DispatchQueue(label: "dev.proghostty.pty.read", qos: .userInteractive)
 
+public struct ResizeRenderSnapshot: Sendable {
+  public var frame: GhosttyTerminalFrame?
+  public var scrollFrame: GhosttyTerminalScrollFrame?
+  public var html: String?
+  public var plainText: String?
+  public var scrollbar: GhosttyTerminalScrollbar?
+
+  public static func capture(from bridge: GhosttyVTBridge) -> ResizeRenderSnapshot {
+    let frame = try? bridge.frame()
+    let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2)
+    let html = frame == nil ? try? bridge.htmlText() : nil
+    let plainText = frame == nil && html == nil ? try? bridge.plainText() : nil
+    return ResizeRenderSnapshot(
+      frame: frame,
+      scrollFrame: scrollFrame,
+      html: html,
+      plainText: plainText,
+      scrollbar: try? bridge.scrollbar()
+    )
+  }
+}
+
+private enum GhosttyVTQueueWork {
+  static func viewportIsPinnedToBottom(_ bridge: GhosttyVTBridge) -> Bool {
+    guard let scrollbar = try? bridge.scrollbar() else { return true }
+    return scrollbar.offset + scrollbar.length >= scrollbar.total
+  }
+
+  static func scrollToBottom(_ bridge: GhosttyVTBridge) {
+    guard let scrollbar = try? bridge.scrollbar(), scrollbar.offset + scrollbar.length < scrollbar.total else {
+      return
+    }
+    let rowsToBottom = scrollbar.total - (scrollbar.offset + scrollbar.length)
+    bridge.scrollViewport(deltaRows: Int(min(UInt64(Int.max), rowsToBottom)))
+  }
+}
+
 @MainActor
 public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceRegistry {
   private let sessionManager: PTYTerminalSessionManager
@@ -116,6 +153,10 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
 
   public func writeInput(_ data: Data, to id: TerminalSessionID) {
     sessionManager.writeInput(data, to: id)
+  }
+
+  public func workingDirectory(for id: TerminalSessionID) -> String? {
+    sessionManager.workingDirectory(for: id)
   }
 
   public func controlToken(for id: TerminalSessionID) -> String? {
@@ -178,6 +219,8 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     var oscParser: OscParser
     var vtBridge: GhosttyVTBridge
     var controlToken: String
+    var vtQueue: DispatchQueue
+    var resizeGeneration: UInt64 = 0
   }
 
   private let surfaceRegistry: PTYTerminalSurfaceRegistry
@@ -215,7 +258,8 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       waitTimer: waitTimer,
       oscParser: OscParser(),
       vtBridge: vtBridge,
-      controlToken: token
+      controlToken: token,
+      vtQueue: DispatchQueue(label: "dev.proghostty.vt.\(id.rawValue.uuidString)", qos: .userInteractive)
     )
     readSource.resume()
     waitTimer.resume()
@@ -239,30 +283,77 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   public func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int) {
     guard var state = sessions[id] else { return }
     guard state.config.rows != rows || state.config.cols != cols else { return }
-    let wasPinnedToBottom = surfaceRegistry.viewportIsPinnedToBottom(id) ?? true
     state.config.rows = rows
     state.config.cols = cols
-    state.vtBridge.resize(cols: cols, rows: rows)
+    state.resizeGeneration &+= 1
+    let generation = state.resizeGeneration
+    let bridge = state.vtBridge
+    let vtQueue = state.vtQueue
+    let fd = state.fileDescriptor
+    let pid = state.pid
     sessions[id] = state
-    PTYLaunch.resize(fileDescriptor: state.fileDescriptor, rows: rows, cols: cols)
-    _ = Darwin.kill(state.pid, SIGWINCH)
-    surfaceRegistry.prepareForPinnedOutput(
-      session: id,
-      wasPinnedToBottom: wasPinnedToBottom,
-      bridge: state.vtBridge
-    )
-    surfaceRegistry.render(state.vtBridge, session: id)
+    surfaceRegistry.markResizePending(session: id)
+    vtQueue.async { [weak self] in
+      let totalStart = Date()
+      let wasPinnedToBottom = GhosttyVTQueueWork.viewportIsPinnedToBottom(bridge)
+      let vtStart = Date()
+      bridge.resize(cols: cols, rows: rows)
+      PTYLaunch.resize(fileDescriptor: fd, rows: rows, cols: cols)
+      _ = Darwin.kill(pid, SIGWINCH)
+      let vtDuration = Date().timeIntervalSince(vtStart)
+
+      let snapshotStart = Date()
+      if wasPinnedToBottom {
+        GhosttyVTQueueWork.scrollToBottom(bridge)
+      }
+      let snapshot = ResizeRenderSnapshot.capture(from: bridge)
+      let snapshotDuration = Date().timeIntervalSince(snapshotStart)
+      let diagnostics = TerminalResizeDiagnostics(
+        totalDuration: Date().timeIntervalSince(totalStart),
+        vtDuration: vtDuration,
+        snapshotDuration: snapshotDuration
+      )
+
+      Task { @MainActor [weak self] in
+        self?.finishResize(
+          session: id,
+          generation: generation,
+          wasPinnedToBottom: wasPinnedToBottom,
+          bridge: bridge,
+          snapshot: snapshot,
+          diagnostics: diagnostics
+        )
+      }
+    }
   }
 
   public func writeInput(_ data: Data, to id: TerminalSessionID) {
     guard let state = sessions[id] else { return }
-    surfaceRegistry.prepareForUserInput(session: id, bridge: state.vtBridge)
-    surfaceRegistry.render(state.vtBridge, session: id)
+    let bridge = state.vtBridge
+    let vtQueue = state.vtQueue
+    let generation = state.resizeGeneration
     let fd = state.fileDescriptor
+    vtQueue.async { [weak self] in
+      GhosttyVTQueueWork.scrollToBottom(bridge)
+      let snapshot = ResizeRenderSnapshot.capture(from: bridge)
+      Task { @MainActor [weak self] in
+        guard let self, let current = self.sessions[id], current.resizeGeneration == generation else {
+          return
+        }
+        self.surfaceRegistry.prepareForUserInput(session: id)
+        self.surfaceRegistry.render(snapshot, bridge: bridge, session: id)
+      }
+    }
     data.withUnsafeBytes { bytes in
       guard let base = bytes.baseAddress else { return }
       _ = Darwin.write(fd, base, bytes.count)
     }
+  }
+
+  public func workingDirectory(for id: TerminalSessionID) -> String? {
+    guard let state = sessions[id] else { return nil }
+    return Self.processWorkingDirectory(pid: state.pid)
+      ?? state.config.workingDirectory
   }
 
   public func controlToken(for id: TerminalSessionID) -> String? {
@@ -379,20 +470,17 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   private func handleOutput(_ data: Data, session id: TerminalSessionID) {
     guard var state = sessions[id] else { return }
-    let wasPinnedToBottom = surfaceRegistry.viewportIsPinnedToBottom(id) ?? true
-    state.vtBridge.write(data)
-    surfaceRegistry.prepareForPinnedOutput(
-      session: id,
-      wasPinnedToBottom: wasPinnedToBottom,
-      bridge: state.vtBridge
-    )
-    surfaceRegistry.render(state.vtBridge, session: id)
     let sequences = state.oscParser.parse(data)
+    let bridge = state.vtBridge
+    let vtQueue = state.vtQueue
+    let generation = state.resizeGeneration
     sessions[id] = state
     continuation.yield(.output(session: id, data: data))
     for sequence in sequences {
       continuation.yield(.osc(session: id, sequence: sequence))
       if let cwd = CwdTracker.cwd(from: sequence) {
+        state.config.workingDirectory = cwd
+        sessions[id] = state
         continuation.yield(.cwdChanged(session: id, cwd: cwd))
       }
       if sequence.command == "0" || sequence.command == "1" || sequence.command == "2",
@@ -400,6 +488,61 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       {
         continuation.yield(.titleChanged(session: id, title: title))
       }
+    }
+
+    vtQueue.async { [weak self] in
+      let wasPinnedToBottom = GhosttyVTQueueWork.viewportIsPinnedToBottom(bridge)
+      bridge.write(data)
+      if wasPinnedToBottom {
+        GhosttyVTQueueWork.scrollToBottom(bridge)
+      }
+      let snapshot = ResizeRenderSnapshot.capture(from: bridge)
+      Task { @MainActor [weak self] in
+        guard let self, let current = self.sessions[id], current.resizeGeneration == generation else {
+          return
+        }
+        self.surfaceRegistry.prepareForPinnedOutput(
+          session: id,
+          wasPinnedToBottom: wasPinnedToBottom
+        )
+        self.surfaceRegistry.render(snapshot, bridge: bridge, session: id)
+      }
+    }
+  }
+
+  private func finishResize(
+    session id: TerminalSessionID,
+    generation: UInt64,
+    wasPinnedToBottom: Bool,
+    bridge: GhosttyVTBridge,
+    snapshot: ResizeRenderSnapshot,
+    diagnostics: TerminalResizeDiagnostics
+  ) {
+    guard let state = sessions[id], state.resizeGeneration == generation else { return }
+    surfaceRegistry.prepareForPinnedOutput(
+      session: id,
+      wasPinnedToBottom: wasPinnedToBottom
+    )
+    surfaceRegistry.render(snapshot, bridge: bridge, session: id)
+    surfaceRegistry.applyResizeDiagnostics(diagnostics, session: id)
+  }
+
+  nonisolated static func processWorkingDirectory(pid: pid_t) -> String? {
+    var info = proc_vnodepathinfo()
+    let size = proc_pidinfo(
+      pid,
+      PROC_PIDVNODEPATHINFO,
+      0,
+      &info,
+      Int32(MemoryLayout<proc_vnodepathinfo>.size)
+    )
+    guard size == MemoryLayout<proc_vnodepathinfo>.size else {
+      return nil
+    }
+    return withUnsafeBytes(of: info.pvi_cdir.vip_path) { rawBuffer in
+      guard let base = rawBuffer.bindMemory(to: CChar.self).baseAddress else { return nil }
+      let path = String(cString: base)
+      return path.isEmpty ? nil : path
     }
   }
 }
@@ -641,6 +784,25 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     surfaces[id] = surface
   }
 
+  public func render(_ snapshot: ResizeRenderSnapshot, bridge: GhosttyVTBridge, session id: TerminalSessionID) {
+    guard var surface = surfaces[id] else { return }
+    surface.bridge = bridge
+    render(snapshot, surface: &surface, session: id)
+    surfaces[id] = surface
+  }
+
+  public func markResizePending(session id: TerminalSessionID) {
+    guard let surface = surfaces[id] else { return }
+    surface.cellGridBackend.markResizePending()
+    surface.textBackend.markResizePending()
+  }
+
+  public func applyResizeDiagnostics(_ diagnostics: TerminalResizeDiagnostics, session id: TerminalSessionID) {
+    guard let surface = surfaces[id] else { return }
+    surface.cellGridBackend.applyResizeDiagnostics(diagnostics)
+    surface.textBackend.applyResizeDiagnostics(diagnostics)
+  }
+
   private func scrollViewport(
     session id: TerminalSessionID,
     rowDelta: Int,
@@ -671,17 +833,14 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   func prepareForPinnedOutput(
     session id: TerminalSessionID,
-    wasPinnedToBottom: Bool,
-    bridge: GhosttyVTBridge
+    wasPinnedToBottom: Bool
   ) {
     guard wasPinnedToBottom, let surface = surfaces[id] else { return }
-    scrollToBottom(bridge)
     surface.cellGridBackend.resetPixelScroll()
   }
 
-  func prepareForUserInput(session id: TerminalSessionID, bridge: GhosttyVTBridge) {
+  func prepareForUserInput(session id: TerminalSessionID) {
     guard let surface = surfaces[id] else { return }
-    scrollToBottom(bridge)
     surface.cellGridBackend.resetPixelScroll(suppressMomentum: true)
   }
 
@@ -704,11 +863,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   }
 
   private func scrollToBottom(_ bridge: GhosttyVTBridge) {
-    guard let scrollbar = try? bridge.scrollbar(), scrollbar.offset + scrollbar.length < scrollbar.total else {
-      return
-    }
-    let rowsToBottom = scrollbar.total - (scrollbar.offset + scrollbar.length)
-    bridge.scrollViewport(deltaRows: Int(min(UInt64(Int.max), rowsToBottom)))
+    GhosttyVTQueueWork.scrollToBottom(bridge)
   }
 
   private func render(_ bridge: GhosttyVTBridge, surface: inout SurfaceState, session id: TerminalSessionID) {
@@ -756,6 +911,52 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       surface.lastCursorFrame = nil
       surface.textBackend.render(plainText: text)
       PTYRenderDebugLog.write("diagnostics session=\(id) \(surface.textBackend.diagnostics.debugSummary)")
+    }
+  }
+
+  private func render(_ snapshot: ResizeRenderSnapshot, surface: inout SurfaceState, session id: TerminalSessionID) {
+    let shouldFollowOutput = surface.textBackend.isScrolledToBottom
+    let rendererMode = rendererMode(for: snapshot.frame)
+    if let frame = snapshot.frame, rendererMode == .ghosttyVTCellGrid {
+      surface.lastHTMLSnapshot = nil
+      surface.lastFrame = frame
+      surface.lastCursorFrame = nil
+      let shouldTransferFocus = surface.textView.window?.firstResponder === surface.textView
+      surface.containerView.showLiveGrid()
+      if shouldTransferFocus {
+        surface.gridView.window?.makeFirstResponder(surface.gridView)
+      }
+      surface.cellGridBackend.setFocused(isFocused(id))
+      if let scrollFrame = snapshot.scrollFrame {
+        surface.cellGridBackend.render(scrollFrame: scrollFrame)
+      } else {
+        surface.cellGridBackend.render(frame: frame)
+      }
+      surface.cellGridBackend.flushPendingFrame()
+      PTYRenderDebugLog.write(
+        "resize-render session=\(id) mode=live-grid rows=\(frame.rows) cols=\(frame.cols) scrollbar=(offset:\(snapshot.scrollbar?.offset ?? 0), length:\(snapshot.scrollbar?.length ?? 0), total:\(snapshot.scrollbar?.total ?? 0)) diagnostics=\(surface.cellGridBackend.diagnostics.debugSummary)"
+      )
+    } else if let html = snapshot.html,
+      let attributed = try? attributedTerminalSnapshot(
+        fromHTML: html,
+        cursorFrame: snapshot.frame,
+        isFocused: isFocused(id)
+      )
+    {
+      surface.containerView.showScrollback()
+      surface.lastHTMLSnapshot = html
+      surface.lastFrame = nil
+      surface.lastCursorFrame = snapshot.frame
+      surface.textBackend.setFocused(isFocused(id))
+      surface.textBackend.render(attributed: attributed, scrollToEnd: shouldFollowOutput)
+      PTYRenderDebugLog.write("resize-render session=\(id) mode=scrollback-html diagnostics=\(surface.textBackend.diagnostics.debugSummary)")
+    } else if let text = snapshot.plainText {
+      surface.containerView.showScrollback()
+      surface.lastHTMLSnapshot = nil
+      surface.lastFrame = nil
+      surface.lastCursorFrame = nil
+      surface.textBackend.render(plainText: text)
+      PTYRenderDebugLog.write("resize-render session=\(id) mode=plain-text diagnostics=\(surface.textBackend.diagnostics.debugSummary)")
     }
   }
 

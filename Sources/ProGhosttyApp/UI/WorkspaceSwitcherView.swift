@@ -221,7 +221,7 @@ private struct WorkspaceSwitcherRow: View {
         .frame(width: 14)
         .foregroundStyle(iconColor)
 
-      VStack(alignment: .leading, spacing: 2) {
+      VStack(alignment: .leading, spacing: 0) {
         if isRenaming {
           TextField(text.renameWorkspace, text: $renameDraft)
             .textFieldStyle(.plain)
@@ -236,10 +236,6 @@ private struct WorkspaceSwitcherRow: View {
             .font(.system(size: 13, weight: .medium))
             .lineLimit(1)
         }
-        Text(subtitle)
-          .font(.system(size: 11))
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
       }
 
       Spacer()
@@ -271,7 +267,7 @@ private struct WorkspaceSwitcherRow: View {
       }
     }
     .padding(.horizontal, 12)
-    .padding(.vertical, 8)
+    .padding(.vertical, 6)
     .frame(minHeight: CGFloat(ProGhosttyOverlaySizing.workspaceSwitcherCardMinimumHeight))
     .background(background)
     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -310,10 +306,6 @@ private struct WorkspaceSwitcherRow: View {
         }
       }
     }
-  }
-
-  private var subtitle: String {
-    item.workspace.rootPath ?? "No root path"
   }
 
   private var iconName: String {
@@ -380,7 +372,7 @@ private struct WorkspaceCreateRow: View {
       Image(systemName: "plus")
         .font(.system(size: 12, weight: .semibold))
         .frame(width: 14)
-      VStack(alignment: .leading, spacing: 2) {
+      VStack(alignment: .leading, spacing: 0) {
         if isCreating {
           TextField(placeholder, text: $draft)
             .textFieldStyle(.plain)
@@ -403,7 +395,7 @@ private struct WorkspaceCreateRow: View {
       Spacer()
     }
     .padding(.horizontal, 12)
-    .padding(.vertical, 8)
+    .padding(.vertical, 6)
     .frame(minHeight: CGFloat(ProGhosttyOverlaySizing.workspaceSwitcherCardMinimumHeight))
     .contentShape(Rectangle())
     .foregroundStyle(.secondary)

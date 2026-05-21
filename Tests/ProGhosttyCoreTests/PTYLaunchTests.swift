@@ -59,6 +59,10 @@ struct PTYLaunchTests {
     #expect(environment["PATH"] == "/Applications/ProGhostty.app/Contents/MacOS:/usr/bin")
   }
 
+  @MainActor @Test func processWorkingDirectoryTracksCurrentShellDirectory() {
+    #expect(PTYTerminalSessionManager.processWorkingDirectory(pid: getpid()) == FileManager.default.currentDirectoryPath)
+  }
+
   @Test func ptyCanRunShellCommand() throws {
     let config = TerminalSessionConfig(
       shellPath: "/bin/sh",
@@ -88,5 +92,53 @@ struct PTYLaunchTests {
     }
 
     #expect(output.contains("PROGHOSTTY_PTY_OK"))
+  }
+
+  @MainActor @Test func resizeSessionReturnsBeforeDeferredRenderCompletes() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let manager = PTYTerminalSessionManager(surfaceRegistry: registry)
+    let session = try manager.createSession(config: TerminalSessionConfig(
+      shellPath: "/bin/sh",
+      workingDirectory: FileManager.default.currentDirectoryPath,
+      environment: [:],
+      rows: 6,
+      cols: 20
+    ))
+    defer { manager.closeSession(session) }
+
+    manager.resizeSession(session, rows: 8, cols: 24)
+
+    #expect(registry.rendererDiagnostics(for: session)?.pendingResize == true)
+    #expect(registry.rendererDiagnostics(for: session)?.lastResizeTotalDuration == 0)
+  }
+
+  @MainActor @Test func deferredResizeRecordsDiagnosticsAfterRenderCompletes() async throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let manager = PTYTerminalSessionManager(surfaceRegistry: registry)
+    let session = try manager.createSession(config: TerminalSessionConfig(
+      shellPath: "/bin/sh",
+      workingDirectory: FileManager.default.currentDirectoryPath,
+      environment: [:],
+      rows: 6,
+      cols: 20
+    ))
+    defer { manager.closeSession(session) }
+
+    manager.resizeSession(session, rows: 8, cols: 24)
+
+    let deadline = Date().addingTimeInterval(2)
+    while Date() < deadline {
+      if let diagnostics = registry.rendererDiagnostics(for: session),
+        !diagnostics.pendingResize,
+        diagnostics.lastResizeTotalDuration > 0
+      {
+        #expect(diagnostics.lastResizeVTDuration >= 0)
+        #expect(diagnostics.lastResizeSnapshotDuration >= 0)
+        return
+      }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+
+    Issue.record("Deferred resize did not finish within deadline")
   }
 }

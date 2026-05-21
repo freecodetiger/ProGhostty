@@ -164,5 +164,6 @@ private final class RecordingSessionManager: TerminalSessionManager {
 
   func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int) {}
   func writeInput(_ data: Data, to id: TerminalSessionID) {}
+  func workingDirectory(for id: TerminalSessionID) -> String? { nil }
   func controlToken(for id: TerminalSessionID) -> String? { nil }
 }

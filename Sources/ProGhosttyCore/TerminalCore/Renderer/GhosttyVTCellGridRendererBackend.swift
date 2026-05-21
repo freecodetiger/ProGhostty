@@ -142,6 +142,17 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
       : TerminalRendererDiagnostics.missingOverscanRowsReason
   }
 
+  public func markResizePending() {
+    diagnosticsState.pendingResize = true
+  }
+
+  public func applyResizeDiagnostics(_ diagnostics: TerminalResizeDiagnostics) {
+    diagnosticsState.pendingResize = false
+    diagnosticsState.lastResizeTotalDuration = diagnostics.totalDuration
+    diagnosticsState.lastResizeVTDuration = diagnostics.vtDuration
+    diagnosticsState.lastResizeSnapshotDuration = diagnostics.snapshotDuration
+  }
+
   public func focus() {
     gridView.window?.makeFirstResponder(gridView)
   }

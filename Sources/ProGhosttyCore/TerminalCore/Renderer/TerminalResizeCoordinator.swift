@@ -55,3 +55,19 @@ public struct TerminalResizeCommitCoordinator: Sendable {
     }
   }
 }
+
+public struct TerminalResizeDiagnostics: Equatable, Sendable {
+  public var totalDuration: TimeInterval
+  public var vtDuration: TimeInterval
+  public var snapshotDuration: TimeInterval
+
+  public init(
+    totalDuration: TimeInterval = 0,
+    vtDuration: TimeInterval = 0,
+    snapshotDuration: TimeInterval = 0
+  ) {
+    self.totalDuration = totalDuration
+    self.vtDuration = vtDuration
+    self.snapshotDuration = snapshotDuration
+  }
+}

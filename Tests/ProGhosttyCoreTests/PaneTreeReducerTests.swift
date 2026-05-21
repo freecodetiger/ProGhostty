@@ -154,6 +154,23 @@ struct PaneTreeReducerTests {
     ) == "/fallback")
   }
 
+  @Test func splitCwdResolverPrefersTargetPaneLiveCwd() {
+    let session = TerminalSessionID()
+    let pane = TerminalPane(sessionId: session, title: "zsh", cwd: "/snapshot")
+    let root = PaneNode.leaf(pane)
+
+    let cwd = PaneSplitCwdResolver.cwd(
+      forPane: pane.paneId,
+      in: root,
+      cwdBySession: [session: "/live/project"],
+      liveWorkingDirectory: "/live/process",
+      workspaceRootPath: "/workspace",
+      defaultWorkingDirectory: "/default"
+    )
+
+    #expect(cwd == "/live/process")
+  }
+
   @Test func mapLeavesPreservesStructureWhileReplacingLeafPayloads() {
     let first = TerminalPane(sessionId: TerminalSessionID(), title: "first", cwd: "/a")
     let second = TerminalPane(sessionId: TerminalSessionID(), title: "second", cwd: "/b")

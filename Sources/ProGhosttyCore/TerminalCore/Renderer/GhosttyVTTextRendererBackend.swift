@@ -124,6 +124,17 @@ public final class GhosttyVTTextRendererBackend: TerminalRendererBackend {
     diagnosticsState.redrawMode = .full
   }
 
+  public func markResizePending() {
+    diagnosticsState.pendingResize = true
+  }
+
+  public func applyResizeDiagnostics(_ diagnostics: TerminalResizeDiagnostics) {
+    diagnosticsState.pendingResize = false
+    diagnosticsState.lastResizeTotalDuration = diagnostics.totalDuration
+    diagnosticsState.lastResizeVTDuration = diagnostics.vtDuration
+    diagnosticsState.lastResizeSnapshotDuration = diagnostics.snapshotDuration
+  }
+
   private func replaceText(with attributed: NSAttributedString, scrollToEnd: Bool) {
     let previousOrigin = scrollView.contentView.bounds.origin
     let previousCursorMinY = scrollToEnd ? cursorDocumentMinY() : nil

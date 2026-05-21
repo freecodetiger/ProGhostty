@@ -47,6 +47,10 @@ struct SplitRatioLayoutTests {
     #expect(panelHeight >= ProGhosttyOverlaySizing.workspaceSwitcherMinimumHeight)
   }
 
+  @Test func workspaceSwitcherRowsStayCompactWithoutPathSubtitle() {
+    #expect(ProGhosttyOverlaySizing.workspaceSwitcherCardMinimumHeight <= 44)
+  }
+
   @Test func workspaceSwitcherHeightCapsForManyWorkspaces() {
     let panelHeight = ProGhosttyOverlaySizing.workspaceSwitcherPanelHeight(
       workspaceCount: 24,

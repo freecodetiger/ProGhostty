@@ -328,3 +328,5 @@ public final class GhosttyVTBridge {
     return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
   }
 }
+
+extension GhosttyVTBridge: @unchecked Sendable {}

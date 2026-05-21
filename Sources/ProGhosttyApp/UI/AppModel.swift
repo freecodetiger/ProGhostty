@@ -414,16 +414,16 @@ final class AppModel: ObservableObject {
     var runtime = workspaceRuntimes[index]
     DebugLog.write("splitPane before leaves=\(PaneTreeReducer.listLeaves(in: runtime.layout.root).count)")
     let workspace = runtime.workspace
-    let fallbackCwd = AppSettings.terminalWorkingDirectory(
-      workspaceRootPath: workspace?.rootPath,
-      defaultWorkingDirectory: settings.defaultWorkingDirectory
-    )
-    let cwd = PaneTreeReducer.cwd(
+    let liveWorkingDirectory = PaneTreeReducer.findPane(in: runtime.layout.root, paneId: paneID)
+      .flatMap { sessionManager.workingDirectory(for: $0.sessionId) }
+    let cwd = PaneSplitCwdResolver.cwd(
       forPane: paneID,
       in: runtime.layout.root,
       cwdBySession: runtime.cwdBySession,
-      fallback: fallbackCwd
-    ) ?? fallbackCwd
+      liveWorkingDirectory: liveWorkingDirectory,
+      workspaceRootPath: workspace?.rootPath,
+      defaultWorkingDirectory: settings.defaultWorkingDirectory
+    )
 
     do {
       let split = try paneWorkspaceController.splitPane(
@@ -1190,6 +1190,7 @@ final class AppModel: ObservableObject {
       updateWorkspaceForSession(session, persist: true) { workspace in
         workspace.cwdBySession[session] = cwd
         workspace.layout.root = layoutUpdatingPaneCwd(workspace.layout.root, session: session, cwd: cwd)
+        paneWorkspaceController.replaceWorkspaceLayout(workspace.layout)
       }
     case .osc(let session, let sequence):
       shellIntegrationState = "available"

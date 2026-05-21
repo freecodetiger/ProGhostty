@@ -19,7 +19,7 @@ public enum ProGhosttyOverlaySizing {
   public static let workspaceSwitcherIdealWidth: Double = 580
   public static let workspaceSwitcherMinimumWidth: Double = 320
   public static let workspaceSwitcherMinimumHeight: Double = 132
-  public static let workspaceSwitcherCardMinimumHeight: Double = 52
+  public static let workspaceSwitcherCardMinimumHeight: Double = 40
   public static let workspaceSwitcherRowHeight: Double = workspaceSwitcherCardMinimumHeight
   public static let workspaceSwitcherRowSpacing: Double = 2
   public static let workspaceSwitcherListVerticalPadding: Double = 16

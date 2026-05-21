@@ -73,6 +73,10 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
     }
   }
 
+  public func workingDirectory(for id: TerminalSessionID) -> String? {
+    sessions[id]?.config.workingDirectory ?? FileManager.default.currentDirectoryPath
+  }
+
   public func controlToken(for id: TerminalSessionID) -> String? {
     nil
   }
