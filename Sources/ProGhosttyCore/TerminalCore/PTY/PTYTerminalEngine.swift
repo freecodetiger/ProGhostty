@@ -888,7 +888,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     guard var surface = surfaces[id] else { return }
     surface.bridge = bridge
     surface.scrollbar = snapshot.scrollbar
-    if surface.containerView.isShowingLiveGrid, surface.gridView.isViewingHistory {
+    if surface.containerView.isShowingLiveGrid,
+      (surface.gridView.isViewingHistory || surface.gridView.isDraggingSelection)
+    {
       surfaces[id] = surface
       return
     }
@@ -1470,6 +1472,8 @@ struct GridCoordinate: Comparable {
 
 public final class PTYGridView: NSView {
   private static let scrollCommitInterval: TimeInterval = 1.0 / 120.0
+  private static let selectionAutoScrollEdgeInset: CGFloat = 24
+  private static let selectionAutoScrollInterval: TimeInterval = 1.0 / 15.0
 
   public var inputHandler: ((Data) -> Void)?
   public var pasteHandler: ((String) -> Void)?
@@ -1504,6 +1508,10 @@ public final class PTYGridView: NSView {
   private var selectionAnchor: GridCoordinate?
   private var selectionHead: GridCoordinate?
   private var selectionFrameSnapshot: GhosttyTerminalFrame?
+  private var isDraggingSelectionStorage = false
+  private var selectionAutoScrollTimer: Timer?
+  private var selectionAutoScrollDirection = 0
+  private var selectionDragPoint: NSPoint?
   private var commandLinkMode = false
   private var isHoveringLink = false
   private var mouseTrackingArea: NSTrackingArea?
@@ -1517,6 +1525,8 @@ public final class PTYGridView: NSView {
   public var isViewingHistory: Bool {
     viewport != TerminalViewport() || scrollCommitCoordinator.hasPendingCommit
   }
+
+  public var isDraggingSelection: Bool { isDraggingSelectionStorage }
 
   public var renderedText: String {
     guard let frameSnapshot else { return "" }
@@ -2087,6 +2097,7 @@ public final class PTYGridView: NSView {
   public override func mouseDown(with event: NSEvent) {
     activationHandler?()
     window?.makeFirstResponder(self)
+    stopSelectionAutoScroll()
     if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
       let hit = urlHit(at: convert(event.locationInWindow, from: nil))
     {
@@ -2099,19 +2110,33 @@ public final class PTYGridView: NSView {
     selectionAnchor = coordinate
     selectionHead = coordinate
     selectionFrameSnapshot = geometry?.frame
+    isDraggingSelectionStorage = coordinate != nil
     invalidateSelectionRects(oldDirtyRects)
   }
 
   public override func mouseDragged(with event: NSEvent) {
     let oldDirtyRects = selectionDirtyRects()
-    if let geometry = renderedGeometry() {
-      selectionHead = geometry.coordinate(at: convert(event.locationInWindow, from: nil))
-      selectionFrameSnapshot = geometry.frame
-    } else {
-      selectionHead = nil
-      selectionFrameSnapshot = nil
-    }
+    let point = convert(event.locationInWindow, from: nil)
+    selectionDragPoint = point
+    updateSelectionHead(at: point)
+    updateSelectionAutoScroll(at: point)
     invalidateSelectionRects(oldDirtyRects)
+  }
+
+  public override func mouseUp(with event: NSEvent) {
+    isDraggingSelectionStorage = false
+    selectionDragPoint = nil
+    stopSelectionAutoScroll()
+    super.mouseUp(with: event)
+  }
+
+  public override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    if window == nil {
+      isDraggingSelectionStorage = false
+      selectionDragPoint = nil
+      stopSelectionAutoScroll()
+    }
   }
 
   public override func mouseMoved(with event: NSEvent) {
@@ -2517,6 +2542,89 @@ public final class PTYGridView: NSView {
     guard isHoveringLink != isHovering else { return }
     isHoveringLink = isHovering
     linkHoverHandler?(isHovering)
+  }
+
+  private func updateSelectionHead(at point: NSPoint) {
+    guard let geometry = renderedGeometry() else {
+      selectionHead = nil
+      selectionFrameSnapshot = nil
+      return
+    }
+    selectionHead = geometry.coordinate(at: clampedSelectionPoint(point, geometry: geometry))
+    selectionFrameSnapshot = geometry.frame
+  }
+
+  private func clampedSelectionPoint(_ point: NSPoint, geometry: RenderedGridGeometry) -> NSPoint {
+    let minX = geometry.inset.width
+    let maxX = geometry.inset.width + CGFloat(max(0, geometry.frame.cols)) * geometry.cellSize.width - 1
+    let minY = geometry.clipRect.minY
+    let maxY = geometry.clipRect.maxY - 1
+    return NSPoint(
+      x: min(max(point.x, minX), max(minX, maxX)),
+      y: min(max(point.y, minY), max(minY, maxY))
+    )
+  }
+
+  private func updateSelectionAutoScroll(at point: NSPoint) {
+    guard isDraggingSelectionStorage,
+      frameSnapshot?.isAlternateScreen == false,
+      let geometry = renderedGeometry()
+    else {
+      stopSelectionAutoScroll()
+      return
+    }
+
+    let direction: Int
+    if point.y < geometry.clipRect.minY + Self.selectionAutoScrollEdgeInset {
+      direction = 1
+    } else if point.y > geometry.clipRect.maxY - Self.selectionAutoScrollEdgeInset {
+      direction = -1
+    } else {
+      direction = 0
+    }
+
+    guard direction != 0, viewportCanScrollHandler?(direction) != false else {
+      stopSelectionAutoScroll()
+      return
+    }
+
+    selectionAutoScrollDirection = direction
+    performSelectionAutoScrollTick()
+    startSelectionAutoScrollTimer()
+  }
+
+  private func startSelectionAutoScrollTimer() {
+    guard selectionAutoScrollTimer == nil else { return }
+    let timer = Timer(timeInterval: Self.selectionAutoScrollInterval, repeats: true) { [weak self] _ in
+      Task { @MainActor in
+        self?.performSelectionAutoScrollTick()
+      }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    selectionAutoScrollTimer = timer
+  }
+
+  private func stopSelectionAutoScroll() {
+    selectionAutoScrollTimer?.invalidate()
+    selectionAutoScrollTimer = nil
+    selectionAutoScrollDirection = 0
+  }
+
+  private func performSelectionAutoScrollTick() {
+    guard isDraggingSelectionStorage, selectionAutoScrollDirection != 0 else {
+      stopSelectionAutoScroll()
+      return
+    }
+    guard viewportCanScrollHandler?(selectionAutoScrollDirection) != false,
+      viewportScrollHandler?(selectionAutoScrollDirection) == true
+    else {
+      stopSelectionAutoScroll()
+      return
+    }
+    if let selectionDragPoint {
+      updateSelectionHead(at: selectionDragPoint)
+    }
+    needsDisplay = true
   }
 
   private func renderedGeometry() -> RenderedGridGeometry? {

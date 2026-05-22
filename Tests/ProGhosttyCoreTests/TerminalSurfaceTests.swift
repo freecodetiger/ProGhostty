@@ -329,6 +329,34 @@ struct TerminalSurfaceTests {
     #expect(surfaceView.liveGridView.renderedText == bottomText)
   }
 
+  @MainActor @Test func liveCellGridOutputWhileDraggingSelectionDoesNotReplaceVisibleRows() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 24, rows: 3, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let originalText = surfaceView.liveGridView.renderedText
+    let start = PTYGridView.textGlyphRect(
+      row: 1,
+      col: 1,
+      cellSize: surfaceView.liveGridView.terminalCellSize,
+      inset: surfaceView.liveGridView.terminalContentInset
+    )
+
+    surfaceView.liveGridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: surfaceView.liveGridView))
+
+    bridge.write(Data("\r\ncodex streaming update".utf8))
+    let snapshot = ResizeRenderSnapshot.capture(from: bridge)
+    registry.renderOutput(snapshot, bridge: bridge, session: session, wasPinnedToBottom: true)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.renderedText == originalText)
+  }
+
   @MainActor @Test func liveCellGridCommandOutputAfterScrolledInputShowsFinalLineAndPrompt() throws {
     let registry = PTYTerminalSurfaceRegistry()
     let session = TerminalSessionID()
@@ -1478,6 +1506,34 @@ struct TerminalSurfaceTests {
 
     #expect(gridView.currentSelectionRowSet == [0])
     #expect(gridView.selectedText == "previous")
+  }
+
+  @MainActor @Test func ptyGridSelectionDragAboveTopRequestsViewportScroll() throws {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: ["first visible", "second visible"], cols: 24, cursorX: 0, cursorY: 0)
+    frame.isAlternateScreen = false
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    var rowDeltas: [Int] = []
+    gridView.viewportCanScrollHandler = { _ in true }
+    gridView.viewportScrollHandler = {
+      rowDeltas.append($0)
+      return true
+    }
+    let start = PTYGridView.textGlyphRect(row: 1, col: 2, cellSize: cellSize, inset: inset)
+
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: gridView))
+    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: start.midX, y: inset.height - 8), in: gridView))
+
+    #expect(rowDeltas == [1])
+    #expect(gridView.currentSelectionRowSet == [0, 1])
   }
 
   @MainActor @Test func ptyGridURLCursorRectsCanFollowPixelScrollOffset() {
