@@ -97,6 +97,9 @@ final class AppModel: ObservableObject {
     surfaceRegistry.setInputHandler { [weak self] sourceSession, data in
       self?.routeTerminalInput(data, from: sourceSession)
     }
+    surfaceRegistry.setPasteHandler { [weak self] sourceSession, text in
+      self?.routeTerminalPaste(text, from: sourceSession)
+    }
     surfaceRegistry.setActivationHandler { [weak self] session in
       self?.selectSession(session)
     }
@@ -485,8 +488,17 @@ final class AppModel: ObservableObject {
   }
 
   private func routeTerminalInput(_ data: Data, from sourceSession: TerminalSessionID) {
-    guard let focusedSessionID = selectedSessionID, focusedSessionID == sourceSession else { return }
-    sessionManager.writeInput(data, to: focusedSessionID)
+    if selectedSessionID != sourceSession {
+      selectSession(sourceSession)
+    }
+    sessionManager.writeInput(data, to: sourceSession)
+  }
+
+  private func routeTerminalPaste(_ text: String, from sourceSession: TerminalSessionID) {
+    if selectedSessionID != sourceSession {
+      selectSession(sourceSession)
+    }
+    sessionManager.writePaste(text, to: sourceSession)
   }
 
   func createWorkspace(name: String, rootPath: String?) {

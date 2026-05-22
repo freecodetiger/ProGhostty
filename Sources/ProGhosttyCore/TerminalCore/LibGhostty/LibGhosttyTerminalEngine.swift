@@ -22,6 +22,7 @@ public final class LibGhosttyTerminalEngine: TerminalSessionManager, TerminalSur
   public func closeSession(_ id: TerminalSessionID) {}
   public func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int) {}
   public func writeInput(_ data: Data, to id: TerminalSessionID) {}
+  public func writePaste(_ text: String, to id: TerminalSessionID) {}
   public func workingDirectory(for id: TerminalSessionID) -> String? { nil }
   public func controlToken(for id: TerminalSessionID) -> String? { nil }
   public func viewForSession(_ id: TerminalSessionID) -> NSView? { nil }
@@ -33,6 +34,7 @@ public final class LibGhosttyTerminalEngine: TerminalSessionManager, TerminalSur
   public func setFocusedSession(_ id: TerminalSessionID?) {}
   public func focusSessionView(_ id: TerminalSessionID?) {}
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {}
+  public func setPasteHandler(_ handler: (@MainActor (TerminalSessionID, String) -> Void)?) {}
   public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {}
   public func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?) {}
 }

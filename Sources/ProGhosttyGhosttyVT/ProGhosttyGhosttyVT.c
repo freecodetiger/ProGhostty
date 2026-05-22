@@ -95,6 +95,72 @@ int proghostty_vt_scrollbar(ProGhosttyVT *vt, ProGhosttyVTScrollbar *out) {
   return GHOSTTY_SUCCESS;
 }
 
+int proghostty_vt_encode_paste(ProGhosttyVT *vt, const uint8_t *data, size_t len, uint8_t **out, size_t *out_len) {
+  if (out == NULL || out_len == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+  *out = NULL;
+  *out_len = 0;
+
+  if (vt == NULL || vt->terminal == NULL || (data == NULL && len > 0)) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+
+  bool bracketed = false;
+  GhosttyResult result = ghostty_terminal_mode_get(
+    vt->terminal,
+    GHOSTTY_MODE_BRACKETED_PASTE,
+    &bracketed);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+
+  char *input = NULL;
+  if (len > 0) {
+    input = malloc(len);
+    if (input == NULL) {
+      return GHOSTTY_OUT_OF_MEMORY;
+    }
+    memcpy(input, data, len);
+  }
+
+  size_t required = 0;
+  result = ghostty_paste_encode(input, len, bracketed, NULL, 0, &required);
+  if (result != GHOSTTY_OUT_OF_SPACE && result != GHOSTTY_SUCCESS) {
+    free(input);
+    return result;
+  }
+
+  if (len > 0) {
+    memcpy(input, data, len);
+  }
+
+  if (required == 0) {
+    free(input);
+    *out = NULL;
+    *out_len = 0;
+    return GHOSTTY_SUCCESS;
+  }
+
+  uint8_t *buffer = ghostty_alloc(NULL, required);
+  if (buffer == NULL) {
+    free(input);
+    return GHOSTTY_OUT_OF_MEMORY;
+  }
+
+  size_t written = 0;
+  result = ghostty_paste_encode(input, len, bracketed, (char *)buffer, required, &written);
+  free(input);
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_free(NULL, buffer, required);
+    return result;
+  }
+
+  *out = buffer;
+  *out_len = written;
+  return GHOSTTY_SUCCESS;
+}
+
 static ProGhosttyVTCell blank_cell(GhosttyRenderStateColors *colors) {
   ProGhosttyVTCell cell;
   cell.codepoint = ' ';

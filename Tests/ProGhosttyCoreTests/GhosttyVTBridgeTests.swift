@@ -15,6 +15,27 @@ struct GhosttyVTBridgeTests {
     #expect(!text.contains("\u{1B}[1m"))
   }
 
+  @Test func encodedPasteUsesBracketedPasteModeWhenTerminalRequestsIt() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    bridge.write(Data("\u{1B}[?2004h".utf8))
+
+    let encoded = try bridge.encodedPaste("one\ntwo\u{1B}[201~three")
+    let text = String(decoding: encoded, as: UTF8.self)
+
+    #expect(text.hasPrefix("\u{1B}[200~"))
+    #expect(text.hasSuffix("\u{1B}[201~"))
+    #expect(text.contains("one\ntwo"))
+    #expect(!String(text.dropFirst("\u{1B}[200~".count).dropLast("\u{1B}[201~".count)).contains("\u{1B}[201~"))
+  }
+
+  @Test func encodedPasteConvertsNewlinesToCarriageReturnsWithoutBracketedPasteMode() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+
+    let encoded = try bridge.encodedPaste("one\ntwo")
+
+    #expect(encoded == Data("one\rtwo".utf8))
+  }
+
   @Test func formatsStyledTerminalStateAsHtml() throws {
     let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
     bridge.write(Data("typed \u{1B}[2;90msuggestion\u{1B}[0m\r\n".utf8))
@@ -182,6 +203,43 @@ struct GhosttyVTBridgeTests {
     let text = try bridge.frame().cells.map { String($0.scalar) }.joined()
     #expect(text.contains("200"))
     #expect(text.contains("zpc@host"))
+  }
+
+  @Test func concurrentOutputAndViewportReadsDoNotCorruptTerminalState() throws {
+    let bridge = try GhosttyVTBridge(cols: 80, rows: 12, maxScrollback: 2_000)
+    let iterations = 500
+    let writers = 4
+    let readers = 4
+    let group = DispatchGroup()
+    let queue = DispatchQueue(label: "dev.proghostty.tests.vt-race", attributes: .concurrent)
+
+    for writer in 0..<writers {
+      group.enter()
+      queue.async {
+        for index in 0..<iterations {
+          bridge.write(Data("writer-\(writer)-line-\(index)\r\n".utf8))
+        }
+        group.leave()
+      }
+    }
+
+    for _ in 0..<readers {
+      group.enter()
+      queue.async {
+        for _ in 0..<iterations {
+          _ = try? bridge.scrollbar()
+          _ = try? bridge.frame()
+          _ = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2)
+          bridge.scrollViewport(deltaRows: -1)
+          bridge.scrollViewport(deltaRows: 1)
+        }
+        group.leave()
+      }
+    }
+
+    #expect(group.wait(timeout: .now() + 10) == .success)
+    let text = try bridge.frame().cells.map { String($0.scalar) }.joined()
+    #expect(text.contains("writer-"))
   }
 }
 

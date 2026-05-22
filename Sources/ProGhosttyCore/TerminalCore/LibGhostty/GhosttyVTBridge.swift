@@ -117,6 +117,7 @@ public final class GhosttyVTBridge {
   public enum BridgeError: Error, CustomStringConvertible {
     case createFailed(Int32)
     case formatFailed(Int32)
+    case pasteEncodeFailed(Int32)
 
     public var description: String {
       switch self {
@@ -124,11 +125,14 @@ public final class GhosttyVTBridge {
         return "libghostty-vt create failed with code \(code)"
       case .formatFailed(let code):
         return "libghostty-vt format failed with code \(code)"
+      case .pasteEncodeFailed(let code):
+        return "libghostty-vt paste encode failed with code \(code)"
       }
     }
   }
 
   private var handle: OpaquePointer?
+  private let lock = NSLock()
 
   public init(cols: Int = 80, rows: Int = 24, maxScrollback: Int = 10_000) throws {
     var handle: OpaquePointer?
@@ -140,103 +144,142 @@ public final class GhosttyVTBridge {
   }
 
   deinit {
+    lock.lock()
     if let handle {
+      self.handle = nil
       proghostty_vt_free(handle)
     }
+    lock.unlock()
   }
 
   public func write(_ data: Data) {
-    guard let handle else { return }
-    data.withUnsafeBytes { bytes in
-      guard let base = bytes.bindMemory(to: UInt8.self).baseAddress else { return }
-      proghostty_vt_write(handle, base, data.count)
+    locked {
+      guard let handle else { return }
+      data.withUnsafeBytes { bytes in
+        guard let base = bytes.bindMemory(to: UInt8.self).baseAddress else { return }
+        proghostty_vt_write(handle, base, data.count)
+      }
     }
   }
 
   public func resize(cols: Int, rows: Int) {
-    guard let handle else { return }
-    _ = proghostty_vt_resize(handle, UInt16(cols), UInt16(rows))
+    locked {
+      guard let handle else { return }
+      _ = proghostty_vt_resize(handle, UInt16(cols), UInt16(rows))
+    }
   }
 
   public func scrollViewport(deltaRows: Int) {
-    guard let handle else { return }
-    proghostty_vt_scroll_viewport(handle, deltaRows)
+    locked {
+      guard let handle else { return }
+      proghostty_vt_scroll_viewport(handle, deltaRows)
+    }
+  }
+
+  public func encodedPaste(_ text: String) throws -> Data {
+    try locked {
+      guard let handle else { return Data() }
+      let input = Data(text.utf8)
+      var pointer: UnsafeMutablePointer<UInt8>?
+      var length = 0
+      let result = input.withUnsafeBytes { bytes in
+        proghostty_vt_encode_paste(
+          handle,
+          bytes.bindMemory(to: UInt8.self).baseAddress,
+          input.count,
+          &pointer,
+          &length
+        )
+      }
+      guard result == 0 else {
+        throw BridgeError.pasteEncodeFailed(result)
+      }
+      guard let pointer else { return Data() }
+      defer { proghostty_vt_free_bytes(pointer, length) }
+      return Data(bytes: pointer, count: length)
+    }
   }
 
   public func scrollbar() throws -> GhosttyTerminalScrollbar {
-    guard let handle else {
-      return GhosttyTerminalScrollbar(total: 0, offset: 0, length: 0)
+    try locked {
+      guard let handle else {
+        return GhosttyTerminalScrollbar(total: 0, offset: 0, length: 0)
+      }
+      var scrollbar = ProGhosttyVTScrollbar()
+      let result = proghostty_vt_scrollbar(handle, &scrollbar)
+      guard result == 0 else {
+        throw BridgeError.formatFailed(result)
+      }
+      return GhosttyTerminalScrollbar(
+        total: scrollbar.total,
+        offset: scrollbar.offset,
+        length: scrollbar.length
+      )
     }
-    var scrollbar = ProGhosttyVTScrollbar()
-    let result = proghostty_vt_scrollbar(handle, &scrollbar)
-    guard result == 0 else {
-      throw BridgeError.formatFailed(result)
-    }
-    return GhosttyTerminalScrollbar(
-      total: scrollbar.total,
-      offset: scrollbar.offset,
-      length: scrollbar.length
-    )
   }
 
   public func scrollFrame(overscanTop: Int, overscanBottom: Int) throws -> GhosttyTerminalScrollFrame {
-    guard let handle else {
+    try locked {
+      guard let handle else {
+        return GhosttyTerminalScrollFrame(
+          viewport: GhosttyTerminalFrame(
+            cols: 0, rows: 0, cursorVisible: false, cursorX: 0, cursorY: 0, cells: []),
+          overscanTop: [],
+          overscanBottom: [],
+          requestedOverscanTop: max(0, overscanTop),
+          requestedOverscanBottom: max(0, overscanBottom),
+          viewportStartRow: nil
+        )
+      }
+
+      var snapshot = ProGhosttyVTScrollSnapshot()
+      let result = proghostty_vt_scroll_snapshot(
+        handle,
+        UInt16(max(0, min(overscanTop, Int(UInt16.max)))),
+        UInt16(max(0, min(overscanBottom, Int(UInt16.max)))),
+        &snapshot
+      )
+      guard result == 0 else {
+        throw BridgeError.formatFailed(result)
+      }
+      defer { proghostty_vt_scroll_snapshot_free(&snapshot) }
+
+      let viewport = Self.frame(from: snapshot.viewport)
       return GhosttyTerminalScrollFrame(
-        viewport: GhosttyTerminalFrame(
-          cols: 0, rows: 0, cursorVisible: false, cursorX: 0, cursorY: 0, cells: []),
-        overscanTop: [],
-        overscanBottom: [],
-        requestedOverscanTop: max(0, overscanTop),
-        requestedOverscanBottom: max(0, overscanBottom),
-        viewportStartRow: nil
+        viewport: viewport,
+        overscanTop: Self.rows(
+          from: snapshot.overscan_top_cells,
+          rowCount: Int(snapshot.overscan_top_rows),
+          cols: viewport.cols
+        ),
+        overscanBottom: Self.rows(
+          from: snapshot.overscan_bottom_cells,
+          rowCount: Int(snapshot.overscan_bottom_rows),
+          cols: viewport.cols
+        ),
+        requestedOverscanTop: Int(snapshot.requested_overscan_top),
+        requestedOverscanBottom: Int(snapshot.requested_overscan_bottom),
+        viewportStartRow: snapshot.viewport_start_row
       )
     }
-
-    var snapshot = ProGhosttyVTScrollSnapshot()
-    let result = proghostty_vt_scroll_snapshot(
-      handle,
-      UInt16(max(0, min(overscanTop, Int(UInt16.max)))),
-      UInt16(max(0, min(overscanBottom, Int(UInt16.max)))),
-      &snapshot
-    )
-    guard result == 0 else {
-      throw BridgeError.formatFailed(result)
-    }
-    defer { proghostty_vt_scroll_snapshot_free(&snapshot) }
-
-    let viewport = Self.frame(from: snapshot.viewport)
-    return GhosttyTerminalScrollFrame(
-      viewport: viewport,
-      overscanTop: Self.rows(
-        from: snapshot.overscan_top_cells,
-        rowCount: Int(snapshot.overscan_top_rows),
-        cols: viewport.cols
-      ),
-      overscanBottom: Self.rows(
-        from: snapshot.overscan_bottom_cells,
-        rowCount: Int(snapshot.overscan_bottom_rows),
-        cols: viewport.cols
-      ),
-      requestedOverscanTop: Int(snapshot.requested_overscan_top),
-      requestedOverscanBottom: Int(snapshot.requested_overscan_bottom),
-      viewportStartRow: snapshot.viewport_start_row
-    )
   }
 
   public func frame() throws -> GhosttyTerminalFrame {
-    guard let handle else {
-      return GhosttyTerminalFrame(
-        cols: 0, rows: 0, cursorVisible: false, cursorX: 0, cursorY: 0, cells: [])
-    }
+    try locked {
+      guard let handle else {
+        return GhosttyTerminalFrame(
+          cols: 0, rows: 0, cursorVisible: false, cursorX: 0, cursorY: 0, cells: [])
+      }
 
-    var snapshot = ProGhosttyVTSnapshot()
-    let result = proghostty_vt_snapshot(handle, &snapshot)
-    guard result == 0, snapshot.cells != nil else {
-      throw BridgeError.formatFailed(result)
-    }
-    defer { proghostty_vt_snapshot_free(&snapshot) }
+      var snapshot = ProGhosttyVTSnapshot()
+      let result = proghostty_vt_snapshot(handle, &snapshot)
+      guard result == 0, snapshot.cells != nil else {
+        throw BridgeError.formatFailed(result)
+      }
+      defer { proghostty_vt_snapshot_free(&snapshot) }
 
-    return Self.frame(from: snapshot)
+      return Self.frame(from: snapshot)
+    }
   }
 
   private static func frame(from snapshot: ProGhosttyVTSnapshot) -> GhosttyTerminalFrame {
@@ -317,15 +360,23 @@ public final class GhosttyVTBridge {
   private func formattedString(
     _ format: (OpaquePointer, inout UnsafeMutablePointer<UInt8>?, inout Int) -> Int32
   ) throws -> String {
-    guard let handle else { return "" }
-    var pointer: UnsafeMutablePointer<UInt8>?
-    var length = 0
-    let result = format(handle, &pointer, &length)
-    guard result == 0, let pointer else {
-      throw BridgeError.formatFailed(result)
+    try locked {
+      guard let handle else { return "" }
+      var pointer: UnsafeMutablePointer<UInt8>?
+      var length = 0
+      let result = format(handle, &pointer, &length)
+      guard result == 0, let pointer else {
+        throw BridgeError.formatFailed(result)
+      }
+      defer { proghostty_vt_free_bytes(pointer, length) }
+      return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
     }
-    defer { proghostty_vt_free_bytes(pointer, length) }
-    return String(decoding: UnsafeBufferPointer(start: pointer, count: length), as: UTF8.self)
+  }
+
+  private func locked<T>(_ work: () throws -> T) rethrows -> T {
+    lock.lock()
+    defer { lock.unlock() }
+    return try work()
   }
 }
 

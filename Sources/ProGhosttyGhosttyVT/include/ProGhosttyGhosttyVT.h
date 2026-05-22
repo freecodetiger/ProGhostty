@@ -72,6 +72,7 @@ int proghostty_vt_scroll_snapshot(
 void proghostty_vt_scroll_snapshot_free(ProGhosttyVTScrollSnapshot *snapshot);
 int proghostty_vt_format_plain(ProGhosttyVT *vt, uint8_t **out, size_t *out_len);
 int proghostty_vt_format_html(ProGhosttyVT *vt, uint8_t **out, size_t *out_len);
+int proghostty_vt_encode_paste(ProGhosttyVT *vt, const uint8_t *data, size_t len, uint8_t **out, size_t *out_len);
 void proghostty_vt_free_bytes(uint8_t *ptr, size_t len);
 
 #endif

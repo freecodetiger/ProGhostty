@@ -115,6 +115,19 @@ private enum GhosttyVTQueueWork {
     return scrollbar.offset + scrollbar.length >= scrollbar.total
   }
 
+  static func isAtViewportEdge(deltaRows: Int, bridge: GhosttyVTBridge) -> Bool {
+    guard let scrollbar = try? bridge.scrollbar(), scrollbar.total > scrollbar.length else {
+      return true
+    }
+    if deltaRows < 0 {
+      return scrollbar.offset == 0
+    }
+    if deltaRows > 0 {
+      return scrollbar.offset + scrollbar.length >= scrollbar.total
+    }
+    return true
+  }
+
   static func scrollToBottom(_ bridge: GhosttyVTBridge) {
     guard let scrollbar = try? bridge.scrollbar(), scrollbar.offset + scrollbar.length < scrollbar.total else {
       return
@@ -137,6 +150,9 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
     let surfaceRegistry = PTYTerminalSurfaceRegistry()
     self.surfaceRegistry = surfaceRegistry
     sessionManager = PTYTerminalSessionManager(surfaceRegistry: surfaceRegistry)
+    surfaceRegistry.setViewportScrollHandler { [weak sessionManager] session, rowDelta in
+      sessionManager?.scrollViewport(session, rowDelta: rowDelta) ?? false
+    }
   }
 
   public func createSession(config: TerminalSessionConfig) throws -> TerminalSessionID {
@@ -153,6 +169,10 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
 
   public func writeInput(_ data: Data, to id: TerminalSessionID) {
     sessionManager.writeInput(data, to: id)
+  }
+
+  public func writePaste(_ text: String, to id: TerminalSessionID) {
+    sessionManager.writePaste(text, to: id)
   }
 
   public func workingDirectory(for id: TerminalSessionID) -> String? {
@@ -197,6 +217,10 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
 
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {
     surfaceRegistry.setInputHandler(handler)
+  }
+
+  public func setPasteHandler(_ handler: (@MainActor (TerminalSessionID, String) -> Void)?) {
+    surfaceRegistry.setPasteHandler(handler)
   }
 
   public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {
@@ -350,6 +374,48 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     }
   }
 
+  public func writePaste(_ text: String, to id: TerminalSessionID) {
+    guard let state = sessions[id], !text.isEmpty else { return }
+    let bridge = state.vtBridge
+    let encoded = state.vtQueue.sync {
+      Result { try bridge.encodedPaste(text) }
+    }
+
+    switch encoded {
+    case .success(let data):
+      writeInput(data, to: id)
+    case .failure(let error):
+      continuation.yield(.error(session: id, message: "Paste encode failed: \(error)"))
+    }
+  }
+
+  public func scrollViewport(_ id: TerminalSessionID, rowDelta: Int) -> Bool {
+    guard rowDelta != 0, let state = sessions[id] else { return false }
+    let bridge = state.vtBridge
+    let vtQueue = state.vtQueue
+    let generation = state.resizeGeneration
+    // The grid controller uses positive deltas for visual downward movement
+    // through history; libghostty's viewport API defines upward history
+    // movement as negative.
+    let terminalDelta = -rowDelta
+    vtQueue.async { [weak self] in
+      guard !GhosttyVTQueueWork.isAtViewportEdge(deltaRows: terminalDelta, bridge: bridge) else {
+        Task { @MainActor [weak self] in
+          guard let self, self.sessions[id]?.resizeGeneration == generation else { return }
+          self.surfaceRegistry.cancelQueuedViewportScroll(session: id)
+        }
+        return
+      }
+      bridge.scrollViewport(deltaRows: terminalDelta)
+      let snapshot = ResizeRenderSnapshot.capture(from: bridge)
+      Task { @MainActor [weak self] in
+        guard let self, self.sessions[id]?.resizeGeneration == generation else { return }
+        self.surfaceRegistry.finishQueuedViewportScroll(snapshot, bridge: bridge, session: id)
+      }
+    }
+    return true
+  }
+
   public func workingDirectory(for id: TerminalSessionID) -> String? {
     guard let state = sessions[id] else { return nil }
     return Self.processWorkingDirectory(pid: state.pid)
@@ -501,11 +567,12 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
         guard let self, let current = self.sessions[id], current.resizeGeneration == generation else {
           return
         }
-        self.surfaceRegistry.prepareForPinnedOutput(
+        self.surfaceRegistry.renderOutput(
+          snapshot,
+          bridge: bridge,
           session: id,
           wasPinnedToBottom: wasPinnedToBottom
         )
-        self.surfaceRegistry.render(snapshot, bridge: bridge, session: id)
       }
     }
   }
@@ -557,6 +624,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     var cellGridBackend: GhosttyVTCellGridRendererBackend
     var textBackend: GhosttyVTTextRendererBackend
     var bridge: GhosttyVTBridge? = nil
+    var scrollbar: GhosttyTerminalScrollbar? = nil
     var lastFrame: GhosttyTerminalFrame? = nil
     var lastHTMLSnapshot: String? = nil
     var lastCursorFrame: GhosttyTerminalFrame? = nil
@@ -574,8 +642,10 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   private var focusedSessionID: TerminalSessionID?
   private var pendingFocusSessionID: TerminalSessionID?
   private var inputHandler: (@MainActor (TerminalSessionID, Data) -> Void)?
+  private var pasteHandler: (@MainActor (TerminalSessionID, String) -> Void)?
   private var activationHandler: (@MainActor (TerminalSessionID) -> Void)?
   private var linkHoverHandler: (@MainActor (TerminalSessionID, Bool) -> Void)?
+  private var viewportScrollHandler: (@MainActor (TerminalSessionID, Int) -> Bool)?
   private var rendererOptions = TerminalRendererOptions()
 
   public init() {}
@@ -590,6 +660,10 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       guard let self else { return }
       inputHandler?(id, data)
     }
+    textBackend.setPasteHandler { [weak self] text in
+      guard let self else { return }
+      pasteHandler?(id, text)
+    }
     textBackend.setActivationHandler { [weak self] in
       self?.activationHandler?(id)
     }
@@ -601,6 +675,10 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     gridView.inputHandler = { [weak self] data in
       guard let self else { return }
       inputHandler?(id, data)
+    }
+    gridView.pasteHandler = { [weak self] text in
+      guard let self else { return }
+      pasteHandler?(id, text)
     }
     gridView.viewportScrollHandler = { [weak self, weak cellGridBackend] rowDelta in
       guard let self, rowDelta != 0 else { return false }
@@ -765,6 +843,10 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     inputHandler = handler
   }
 
+  public func setPasteHandler(_ handler: (@MainActor (TerminalSessionID, String) -> Void)?) {
+    pasteHandler = handler
+  }
+
   public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {
     activationHandler = handler
   }
@@ -778,8 +860,13 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     }
   }
 
+  public func setViewportScrollHandler(_ handler: (@MainActor (TerminalSessionID, Int) -> Bool)?) {
+    viewportScrollHandler = handler
+  }
+
   public func render(_ bridge: GhosttyVTBridge, session id: TerminalSessionID) {
     guard var surface = surfaces[id] else { return }
+    surface.scrollbar = try? bridge.scrollbar()
     render(bridge, surface: &surface, session: id)
     surfaces[id] = surface
   }
@@ -787,8 +874,52 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   public func render(_ snapshot: ResizeRenderSnapshot, bridge: GhosttyVTBridge, session id: TerminalSessionID) {
     guard var surface = surfaces[id] else { return }
     surface.bridge = bridge
+    surface.scrollbar = snapshot.scrollbar
     render(snapshot, surface: &surface, session: id)
     surfaces[id] = surface
+  }
+
+  public func renderOutput(
+    _ snapshot: ResizeRenderSnapshot,
+    bridge: GhosttyVTBridge,
+    session id: TerminalSessionID,
+    wasPinnedToBottom: Bool
+  ) {
+    guard var surface = surfaces[id] else { return }
+    surface.bridge = bridge
+    surface.scrollbar = snapshot.scrollbar
+    if surface.containerView.isShowingLiveGrid, surface.gridView.isViewingHistory {
+      surfaces[id] = surface
+      return
+    }
+    if !wasPinnedToBottom, surface.containerView.isShowingLiveGrid {
+      surfaces[id] = surface
+      return
+    }
+    if wasPinnedToBottom {
+      surface.cellGridBackend.resetPixelScroll()
+    }
+    render(snapshot, surface: &surface, session: id)
+    surfaces[id] = surface
+  }
+
+  public func finishQueuedViewportScroll(
+    _ snapshot: ResizeRenderSnapshot,
+    bridge: GhosttyVTBridge,
+    session id: TerminalSessionID
+  ) {
+    guard var surface = surfaces[id] else { return }
+    surface.bridge = bridge
+    surface.scrollbar = snapshot.scrollbar
+    render(snapshot, surface: &surface, session: id)
+    surface.cellGridBackend.flushPendingFrame()
+    surface.cellGridBackend.resetViewportStartRowKeepingVisualOffset()
+    surfaces[id] = surface
+  }
+
+  public func cancelQueuedViewportScroll(session id: TerminalSessionID) {
+    guard let surface = surfaces[id] else { return }
+    surface.cellGridBackend.resetPixelScroll()
   }
 
   public func markResizePending(session id: TerminalSessionID) {
@@ -813,10 +944,15 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     // through history; libghostty's viewport API defines upward history
     // movement as negative.
     let terminalDelta = -rowDelta
-    if isAtViewportEdge(deltaRows: terminalDelta, bridge: bridge) {
+    guard let scrollbar = surface.scrollbar else { return false }
+    if isAtViewportEdge(deltaRows: terminalDelta, scrollbar: scrollbar) {
       return false
     }
+    if let viewportScrollHandler {
+      return viewportScrollHandler(id, rowDelta)
+    }
     bridge.scrollViewport(deltaRows: terminalDelta)
+    surface.scrollbar = try? bridge.scrollbar()
     render(bridge, surface: &surface, session: id)
     backend.flushPendingFrame()
     backend.resetViewportStartRowKeepingVisualOffset()
@@ -825,9 +961,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   }
 
   func viewportIsPinnedToBottom(_ id: TerminalSessionID) -> Bool? {
-    guard let bridge = surfaces[id]?.bridge, let scrollbar = try? bridge.scrollbar() else {
-      return nil
-    }
+    guard let scrollbar = surfaces[id]?.scrollbar else { return nil }
     return scrollbar.offset + scrollbar.length >= scrollbar.total
   }
 
@@ -845,12 +979,19 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   }
 
   private func canScrollViewport(session id: TerminalSessionID, rowDelta: Int) -> Bool {
-    guard let bridge = surfaces[id]?.bridge else { return false }
-    return !isAtViewportEdge(deltaRows: -rowDelta, bridge: bridge)
+    guard let scrollbar = surfaces[id]?.scrollbar else { return false }
+    return !isAtViewportEdge(deltaRows: -rowDelta, scrollbar: scrollbar)
   }
 
   private func isAtViewportEdge(deltaRows: Int, bridge: GhosttyVTBridge) -> Bool {
     guard let scrollbar = try? bridge.scrollbar(), scrollbar.total > scrollbar.length else {
+      return true
+    }
+    return isAtViewportEdge(deltaRows: deltaRows, scrollbar: scrollbar)
+  }
+
+  private func isAtViewportEdge(deltaRows: Int, scrollbar: GhosttyTerminalScrollbar) -> Bool {
+    guard scrollbar.total > scrollbar.length else {
       return true
     }
     if deltaRows < 0 {
@@ -1331,6 +1472,7 @@ public final class PTYGridView: NSView {
   private static let scrollCommitInterval: TimeInterval = 1.0 / 120.0
 
   public var inputHandler: ((Data) -> Void)?
+  public var pasteHandler: ((String) -> Void)?
   public var viewportScrollHandler: ((Int) -> Bool)?
   public var viewportCanScrollHandler: ((Int) -> Bool)?
   public var activationHandler: (() -> Void)?
@@ -1371,6 +1513,10 @@ public final class PTYGridView: NSView {
   public override var acceptsFirstResponder: Bool { true }
   public override var isFlipped: Bool { true }
   public var isFocusedTerminal: Bool { isFocusedTerminalStorage }
+
+  public var isViewingHistory: Bool {
+    viewport != TerminalViewport() || scrollCommitCoordinator.hasPendingCommit
+  }
 
   public var renderedText: String {
     guard let frameSnapshot else { return "" }
@@ -1880,6 +2026,9 @@ public final class PTYGridView: NSView {
   }
 
   public override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    guard canHandleCommandKeyEquivalent else {
+      return super.performKeyEquivalent(with: event)
+    }
     guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
       let key = event.charactersIgnoringModifiers?.lowercased()
     else {
@@ -1897,6 +2046,11 @@ public final class PTYGridView: NSView {
     }
   }
 
+  private var canHandleCommandKeyEquivalent: Bool {
+    guard let window else { return true }
+    return window.firstResponder === self
+  }
+
   public func copy(_ sender: Any?) {
     guard let selectedText else { return }
     pasteboard.clearContents()
@@ -1906,7 +2060,11 @@ public final class PTYGridView: NSView {
   public func paste(_ sender: Any?) {
     activationHandler?()
     guard let text = pasteboard.string(forType: .string), !text.isEmpty else { return }
-    inputHandler?(Data(text.utf8))
+    if let pasteHandler {
+      pasteHandler(text)
+    } else {
+      inputHandler?(Data(text.utf8))
+    }
   }
 
   func testScrollViewportRows(_ rowDelta: Int) {
@@ -2414,6 +2572,15 @@ public final class PTYGridView: NSView {
       return nil
     }
 
+    if event.modifierFlags.contains(.control),
+      let characters = event.characters,
+      characters.count == 1,
+      let scalar = characters.unicodeScalars.first,
+      scalar.value <= 0x1F || scalar.value == 0x7F
+    {
+      return Data([UInt8(scalar.value)])
+    }
+
     guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else {
       return nil
     }
@@ -2642,6 +2809,7 @@ struct RenderedGridGeometry: Equatable, Sendable {
 
 final class PTYTextView: NSTextView {
   var inputHandler: ((Data) -> Void)?
+  var pasteHandler: ((String) -> Void)?
   var activationHandler: (() -> Void)?
   var scrollToBottomHandler: (() -> Void)?
   var pasteboard = NSPasteboard.general
@@ -2717,6 +2885,9 @@ final class PTYTextView: NSTextView {
   }
 
   override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    guard canHandleCommandKeyEquivalent else {
+      return super.performKeyEquivalent(with: event)
+    }
     guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
       let key = event.charactersIgnoringModifiers?.lowercased()
     else {
@@ -2733,6 +2904,11 @@ final class PTYTextView: NSTextView {
     default:
       return super.performKeyEquivalent(with: event)
     }
+  }
+
+  private var canHandleCommandKeyEquivalent: Bool {
+    guard let window else { return true }
+    return window.firstResponder === self
   }
 
   override func copy(_ sender: Any?) {
@@ -2754,7 +2930,11 @@ final class PTYTextView: NSTextView {
       return
     }
     scrollToBottomHandler?()
-    inputHandler?(Data(text.utf8))
+    if let pasteHandler {
+      pasteHandler(text)
+    } else {
+      inputHandler?(Data(text.utf8))
+    }
   }
 
   private var selectedText: String? {
@@ -2918,6 +3098,15 @@ final class PTYTextView: NSTextView {
   private func controlInput(for event: NSEvent) -> Data? {
     if event.modifierFlags.contains(.command) {
       return nil
+    }
+
+    if event.modifierFlags.contains(.control),
+      let characters = event.characters,
+      characters.count == 1,
+      let scalar = characters.unicodeScalars.first,
+      scalar.value <= 0x1F || scalar.value == 0x7F
+    {
+      return Data([UInt8(scalar.value)])
     }
 
     guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else {

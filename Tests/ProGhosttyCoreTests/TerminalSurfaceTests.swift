@@ -281,6 +281,54 @@ struct TerminalSurfaceTests {
     #expect(surfaceView.liveGridView.renderedText.contains("fourth"))
   }
 
+  @MainActor @Test func liveCellGridOutputWhileViewingHistoryDoesNotReplaceVisibleRows() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 24, rows: 3, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    registry.flushPendingRenderers()
+    let historyText = surfaceView.liveGridView.renderedText
+    #expect(historyText.contains("first") || historyText.contains("second"))
+
+    bridge.write(Data("\r\ncodex streaming update\r\nlatest prompt".utf8))
+    let snapshot = ResizeRenderSnapshot.capture(from: bridge)
+    registry.renderOutput(snapshot, bridge: bridge, session: session, wasPinnedToBottom: false)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.renderedText == historyText)
+  }
+
+  @MainActor @Test func liveCellGridFirstHistoryScrollSuppressesAlreadyPinnedOutputRender() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 24, rows: 3, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let bottomText = surfaceView.liveGridView.renderedText
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(5)
+    #expect(surfaceView.liveGridView.viewport.visualOffsetY == 5)
+
+    bridge.write(Data("\r\ncodex streaming update".utf8))
+    let snapshot = ResizeRenderSnapshot.capture(from: bridge)
+    registry.renderOutput(snapshot, bridge: bridge, session: session, wasPinnedToBottom: true)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.viewport.visualOffsetY == 5)
+    #expect(surfaceView.liveGridView.renderedText == bottomText)
+  }
+
   @MainActor @Test func liveCellGridCommandOutputAfterScrolledInputShowsFinalLineAndPrompt() throws {
     let registry = PTYTerminalSurfaceRegistry()
     let session = TerminalSessionID()
@@ -355,6 +403,31 @@ struct TerminalSurfaceTests {
     #expect(abs(surfaceView.liveGridView.viewport.visualOffsetY) < surfaceView.liveGridView.terminalCellSize.height)
     #expect(registry.rendererDiagnostics(for: session)?.scrollCommitMode == .coalesced)
     #expect(registry.rendererDiagnostics(for: session)?.lastScrollCommitDuration ?? 0 >= 0)
+  }
+
+  @MainActor @Test func liveCellGridCanDelegateViewportCommitsOffMainThread() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+    var delegatedRowDelta: Int?
+    registry.setViewportScrollHandler { requestSession, rowDelta in
+      guard requestSession == session else { return false }
+      delegatedRowDelta = rowDelta
+      return true
+    }
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let bottomText = surfaceView.liveGridView.renderedText
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    registry.flushPendingRenderers()
+
+    #expect((delegatedRowDelta ?? 0) > 0)
+    #expect(surfaceView.liveGridView.renderedText == bottomText)
   }
 
   @MainActor @Test func liveCellGridWheelScrollFallsBackToRowScrollWhenPixelScrollIsDisabled() throws {
@@ -938,18 +1011,38 @@ struct TerminalSurfaceTests {
     #expect(pasteboard.string(forType: .string) == "first line  \n中文 é 😀")
   }
 
-  @MainActor @Test func ptyTextPasteWritesPasteboardTextToInputHandler() throws {
+  @MainActor @Test func ptyTextPasteWritesPasteboardTextToPasteHandler() throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("proghostty.paste.test.\(UUID().uuidString)"))
     pasteboard.clearContents()
-    pasteboard.setString("echo hello", forType: .string)
+    pasteboard.setString("echo hello\npwd", forType: .string)
     var written: Data?
+    var pasted: String?
     let textView = PTYTextView()
     textView.pasteboard = pasteboard
     textView.inputHandler = { written = $0 }
+    textView.pasteHandler = { pasted = $0 }
 
     textView.paste(nil)
 
-    #expect(written == Data("echo hello".utf8))
+    #expect(pasted == "echo hello\npwd")
+    #expect(written == nil)
+  }
+
+  @MainActor @Test func ptyGridPasteWritesPasteboardTextToPasteHandler() throws {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("proghostty.grid.paste.test.\(UUID().uuidString)"))
+    pasteboard.clearContents()
+    pasteboard.setString("{\n  \"key\": \"value\"\n}", forType: .string)
+    var written: Data?
+    var pasted: String?
+    let gridView = PTYGridView()
+    gridView.pasteboard = pasteboard
+    gridView.inputHandler = { written = $0 }
+    gridView.pasteHandler = { pasted = $0 }
+
+    gridView.paste(nil)
+
+    #expect(pasted == "{\n  \"key\": \"value\"\n}")
+    #expect(written == nil)
   }
 
   @MainActor @Test func ptyTextInputClientWritesCommittedChineseTextToInputHandler() {
@@ -992,6 +1085,72 @@ struct TerminalSurfaceTests {
     gridView.keyDown(with: event)
 
     #expect(written == Data("a".utf8))
+  }
+
+  @MainActor @Test func ptyGridControlCWritesInterruptByte() throws {
+    var written: Data?
+    let gridView = PTYGridView()
+    gridView.inputHandler = { written = $0 }
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [.control],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      characters: "\u{3}",
+      charactersIgnoringModifiers: "c",
+      isARepeat: false,
+      keyCode: 8
+    ))
+
+    gridView.keyDown(with: event)
+
+    #expect(written == Data([0x03]))
+  }
+
+  @MainActor @Test func ptyGridEscapeWritesEscapeByte() throws {
+    var written: Data?
+    let gridView = PTYGridView()
+    gridView.inputHandler = { written = $0 }
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      characters: "\u{1B}",
+      charactersIgnoringModifiers: "\u{1B}",
+      isARepeat: false,
+      keyCode: 53
+    ))
+
+    gridView.keyDown(with: event)
+
+    #expect(written == Data([0x1B]))
+  }
+
+  @MainActor @Test func ptyTextControlCWritesInterruptByte() throws {
+    var written: Data?
+    let textView = PTYTextView()
+    textView.inputHandler = { written = $0 }
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [.control],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      characters: "\u{3}",
+      charactersIgnoringModifiers: "c",
+      isARepeat: false,
+      keyCode: 8
+    ))
+
+    textView.keyDown(with: event)
+
+    #expect(written == Data([0x03]))
   }
 
   @MainActor @Test func ptyGridMarkedTextBackspaceDoesNotWriteDeleteToPTY() {
@@ -1401,8 +1560,52 @@ struct TerminalSurfaceTests {
       isARepeat: false,
       keyCode: 9
     ))
+    var pasted: String?
+    textView.pasteHandler = { pasted = $0 }
+
     #expect(textView.performKeyEquivalent(with: pasteEvent))
-    #expect(written == Data("pwd".utf8))
+    #expect(pasted == "pwd")
+    #expect(written == nil)
+  }
+
+  @MainActor @Test func nonFocusedGridViewDoesNotConsumeCommandV() throws {
+    let pasteboard = NSPasteboard(name: NSPasteboard.Name("proghostty.grid.shortcuts.focus.test.\(UUID().uuidString)"))
+    pasteboard.clearContents()
+    pasteboard.setString("target text", forType: .string)
+    let first = PTYGridView()
+    let second = PTYGridView()
+    first.pasteboard = pasteboard
+    second.pasteboard = pasteboard
+    var firstPaste: String?
+    var secondPaste: String?
+    first.pasteHandler = { firstPaste = $0 }
+    second.pasteHandler = { secondPaste = $0 }
+
+    let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 240))
+    first.frame = NSRect(x: 0, y: 0, width: 320, height: 240)
+    second.frame = NSRect(x: 320, y: 0, width: 320, height: 240)
+    container.addSubview(first)
+    container.addSubview(second)
+    let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView = container
+    #expect(window.makeFirstResponder(second))
+    let pasteEvent = try #require(NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [.command],
+      timestamp: 0,
+      windowNumber: window.windowNumber,
+      context: nil,
+      characters: "v",
+      charactersIgnoringModifiers: "v",
+      isARepeat: false,
+      keyCode: 9
+    ))
+
+    #expect(first.performKeyEquivalent(with: pasteEvent) == false)
+    #expect(firstPaste == nil)
+    #expect(second.performKeyEquivalent(with: pasteEvent))
+    #expect(secondPaste == "target text")
   }
 
   private func codexLikeBridge(suggestions: [String]) throws -> GhosttyVTBridge {

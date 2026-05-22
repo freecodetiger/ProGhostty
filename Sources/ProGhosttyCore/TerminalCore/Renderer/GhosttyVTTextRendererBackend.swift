@@ -61,6 +61,10 @@ public final class GhosttyVTTextRendererBackend: TerminalRendererBackend {
     textView.inputHandler = handler
   }
 
+  public func setPasteHandler(_ handler: ((String) -> Void)?) {
+    textView.pasteHandler = handler
+  }
+
   public func setActivationHandler(_ handler: (() -> Void)?) {
     textView.activationHandler = handler
   }

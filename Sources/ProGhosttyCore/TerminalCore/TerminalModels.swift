@@ -56,6 +56,7 @@ public enum TerminalEvent: Sendable {
   func closeSession(_ id: TerminalSessionID)
   func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int)
   func writeInput(_ data: Data, to id: TerminalSessionID)
+  func writePaste(_ text: String, to id: TerminalSessionID)
   func workingDirectory(for id: TerminalSessionID) -> String?
   func controlToken(for id: TerminalSessionID) -> String?
   var events: AsyncStream<TerminalEvent> { get }
@@ -71,6 +72,7 @@ public enum TerminalEvent: Sendable {
   func setFocusedSession(_ id: TerminalSessionID?)
   func focusSessionView(_ id: TerminalSessionID?)
   func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?)
+  func setPasteHandler(_ handler: (@MainActor (TerminalSessionID, String) -> Void)?)
   func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?)
   func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?)
 }

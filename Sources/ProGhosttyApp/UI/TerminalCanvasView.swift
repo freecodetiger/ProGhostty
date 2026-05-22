@@ -756,8 +756,6 @@ final class TerminalPaneViewController: NSViewController {
       handler: { [weak self] in
         self?.copyFromTerminalSurface()
       },
-      keyEquivalent: "c",
-      modifierMask: [.command],
       isEnabled: { [weak self] in
         self?.hasTerminalSelection() == true
       }
@@ -767,8 +765,6 @@ final class TerminalPaneViewController: NSViewController {
       handler: { [weak self] in
         self?.pasteIntoTerminalSurface()
       },
-      keyEquivalent: "v",
-      modifierMask: [.command],
       isEnabled: {
         NSPasteboard.general.string(forType: .string)?.isEmpty == false
       }
@@ -794,14 +790,11 @@ final class TerminalPaneViewController: NSViewController {
       }
     ))
     menu.addItem(.separator())
-    let closePaneShortcut = keyboardShortcuts.shortcut(for: .closePane)
     menu.addItem(ClosureMenuItem(
       title: text.closePane,
       handler: {
         onClose(paneId)
-      },
-      keyEquivalent: closePaneShortcut.nsMenuKeyEquivalent,
-      modifierMask: closePaneShortcut.nsMenuModifierMask
+      }
     ))
     menu.addItem(.separator())
     menu.addItem(ClosureMenuItem(title: text.workspaces) {

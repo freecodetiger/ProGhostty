@@ -15,6 +15,7 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
   private var fontSize: CGFloat = 14
   private let continuation: AsyncStream<TerminalEvent>.Continuation
   private var inputHandler: (@MainActor (TerminalSessionID, Data) -> Void)?
+  private var pasteHandler: (@MainActor (TerminalSessionID, String) -> Void)?
   private var activationHandler: (@MainActor (TerminalSessionID) -> Void)?
   public let events: AsyncStream<TerminalEvent>
 
@@ -73,6 +74,10 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
     }
   }
 
+  public func writePaste(_ text: String, to id: TerminalSessionID) {
+    writeInput(Data(text.utf8), to: id)
+  }
+
   public func workingDirectory(for id: TerminalSessionID) -> String? {
     sessions[id]?.config.workingDirectory ?? FileManager.default.currentDirectoryPath
   }
@@ -128,6 +133,10 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
 
   public func setInputHandler(_ handler: (@MainActor (TerminalSessionID, Data) -> Void)?) {
     inputHandler = handler
+  }
+
+  public func setPasteHandler(_ handler: (@MainActor (TerminalSessionID, String) -> Void)?) {
+    pasteHandler = handler
   }
 
   public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {
