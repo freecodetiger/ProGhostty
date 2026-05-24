@@ -546,8 +546,11 @@ final class TerminalPaneViewController: NSViewController {
   let pane: TerminalPane
   private weak var contentView: NSView?
   private var onSelect: ((UUID) -> Void)?
+  private var onPasteDroppedPaths: ((UUID, String) -> Void)?
   private var onResize: ((UUID, Int, Int) -> Void)?
   private var isResizeSensitiveScreen: ((UUID) -> Bool)?
+  private var currentPalette = TerminalSurfacePalette.dark
+  private var isDropTargeted = false
   private var lastAppliedGridSize: TerminalGridSize?
   private var pendingResizeGridSize: TerminalGridSize?
   private var pendingResizeWorkItem: DispatchWorkItem?
@@ -594,7 +597,9 @@ final class TerminalPaneViewController: NSViewController {
     self.onSelect = onSelect
     self.onResize = onResize
     self.isResizeSensitiveScreen = isResizeSensitiveScreen
-    _ = onPasteDroppedPaths
+    self.onPasteDroppedPaths = onPasteDroppedPaths
+    currentPalette = palette
+    configureDropHandling()
     applyAppearance(isSelected: isSelected, palette: palette, dimsWhenInactive: dimsWhenInactive)
     install(menu: menu(
       onSelect: onSelect,
@@ -619,6 +624,13 @@ final class TerminalPaneViewController: NSViewController {
     view.layer?.backgroundColor = palette.background.cgColor
     view.layer?.borderWidth = 0
     view.layer?.borderColor = nil
+    currentPalette = palette
+    updateDropTargetAppearance()
+  }
+
+  override func viewWillDisappear() {
+    super.viewWillDisappear()
+    setDropTargeted(false)
   }
 
   override func viewDidLayout() {
@@ -747,6 +759,45 @@ final class TerminalPaneViewController: NSViewController {
     ])
   }
 
+  private func configureDropHandling() {
+    guard let hostView = view as? TerminalPaneHostView else { return }
+    hostView.onDraggingFilesChanged = { [weak self] isTargeted in
+      self?.setDropTargeted(isTargeted)
+    }
+    hostView.onFileURLsDropped = { [weak self] urls in
+      self?.handleDroppedFileURLs(urls) ?? false
+    }
+  }
+
+  private func handleDroppedFileURLs(_ urls: [URL]) -> Bool {
+    guard let text = TerminalDraggedPathFormatter.formattedText(for: urls) else {
+      DebugLog.write("dropped paths ignored pane=\(pane.paneId): no local file URLs")
+      setDropTargeted(false)
+      return false
+    }
+
+    onSelect?(pane.paneId)
+    onPasteDroppedPaths?(pane.paneId, text)
+    setDropTargeted(false)
+    return true
+  }
+
+  private func setDropTargeted(_ isTargeted: Bool) {
+    isDropTargeted = isTargeted
+    updateDropTargetAppearance()
+  }
+
+  private func updateDropTargetAppearance() {
+    guard isDropTargeted else {
+      view.layer?.borderWidth = 0
+      view.layer?.borderColor = nil
+      return
+    }
+
+    view.layer?.borderWidth = 1
+    view.layer?.borderColor = currentPalette.cursorBackground.withAlphaComponent(0.55).cgColor
+  }
+
   @MainActor private func menu(
     onSelect: @escaping (UUID) -> Void,
     onSplit: @escaping (UUID, SplitAxis) -> Void,
@@ -864,9 +915,21 @@ final class TerminalPaneViewController: NSViewController {
 
 private final class TerminalPaneHostView: NSView {
   var onLiveResizeEnded: (() -> Void)?
+  var onDraggingFilesChanged: ((Bool) -> Void)?
+  var onFileURLsDropped: (([URL]) -> Bool)?
   private(set) var isLiveResizeActive = false
 
   override var acceptsFirstResponder: Bool { true }
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    registerForDraggedTypes([.fileURL])
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+    registerForDraggedTypes([.fileURL])
+  }
 
   override func mouseDown(with event: NSEvent) {
     nextResponder?.mouseDown(with: event)
@@ -881,6 +944,55 @@ private final class TerminalPaneHostView: NSView {
     super.viewDidEndLiveResize()
     isLiveResizeActive = false
     onLiveResizeEnded?()
+  }
+
+  override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+    guard hasFileURLs(sender.draggingPasteboard) else {
+      onDraggingFilesChanged?(false)
+      return []
+    }
+    onDraggingFilesChanged?(true)
+    return .copy
+  }
+
+  override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+    guard hasFileURLs(sender.draggingPasteboard) else {
+      onDraggingFilesChanged?(false)
+      return []
+    }
+    onDraggingFilesChanged?(true)
+    return .copy
+  }
+
+  override func draggingExited(_ sender: NSDraggingInfo?) {
+    onDraggingFilesChanged?(false)
+  }
+
+  override func draggingEnded(_ sender: NSDraggingInfo) {
+    onDraggingFilesChanged?(false)
+  }
+
+  override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+    let urls = fileURLs(from: sender.draggingPasteboard)
+    let handled = onFileURLsDropped?(urls) ?? false
+    onDraggingFilesChanged?(false)
+    return handled
+  }
+
+  private func hasFileURLs(_ pasteboard: NSPasteboard) -> Bool {
+    !fileURLs(from: pasteboard).isEmpty
+  }
+
+  private func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+    guard
+      let items = pasteboard.readObjects(
+        forClasses: [NSURL.self],
+        options: [.urlReadingFileURLsOnly: true]
+      ) as? [URL]
+    else {
+      return []
+    }
+    return items
   }
 }
 
