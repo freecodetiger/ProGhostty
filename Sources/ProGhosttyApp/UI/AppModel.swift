@@ -107,6 +107,9 @@ final class AppModel: ObservableObject {
       guard let self, isHovering else { return }
       self.showTitlebarToast(self.appText.openLinkHintToast, style: .info, lifetime: .transient(1.4))
     }
+    surfaceRegistry.setLinkTargetHandler { [weak self] sourceSession, target in
+      self?.openTerminalLinkTarget(target, from: sourceSession)
+    }
     applyTerminalAppearance()
 
     Task { await consumeEvents() }
@@ -513,6 +516,36 @@ final class AppModel: ObservableObject {
       selectSession(sourceSession)
     }
     sessionManager.writePaste(text, to: sourceSession)
+  }
+
+  private func openTerminalLinkTarget(_ target: TerminalLinkTarget, from sourceSession: TerminalSessionID) {
+    switch target {
+    case .url(let url):
+      _ = NSWorkspace.shared.open(url)
+    case .filePath(let filePath):
+      revealTerminalFilePath(filePath, from: sourceSession)
+    }
+  }
+
+  private func revealTerminalFilePath(_ target: TerminalFilePathTarget, from sourceSession: TerminalSessionID) {
+    let cwd = sessionManager.workingDirectory(for: sourceSession)
+      ?? workspaceRuntimes.first { runtime in
+        PaneTreeReducer.listLeaves(in: runtime.layout.root).contains { $0.sessionId == sourceSession }
+      }?.cwdBySession[sourceSession]
+
+    do {
+      let url = try TerminalFilePathResolver.resolve(target, cwd: cwd)
+      NSWorkspace.shared.activateFileViewerSelecting([url])
+    } catch TerminalFilePathResolver.Error.missingWorkingDirectory {
+      showTitlebarToast(appText.relativePathMissingCwdToast, style: .info, lifetime: .transient(1.8))
+      DebugLog.write("revealTerminalFilePath missing cwd path=\(target.rawPath)")
+    } catch TerminalFilePathResolver.Error.pathNotFound {
+      showTitlebarToast(appText.pathNotFoundToast, style: .info, lifetime: .transient(1.8))
+      DebugLog.write("revealTerminalFilePath not found path=\(target.rawPath) cwd=\(cwd ?? "-")")
+    } catch {
+      showTitlebarToast(appText.revealPathFailedToast, style: .error, lifetime: .transient(2.2))
+      DebugLog.write("revealTerminalFilePath failed path=\(target.rawPath) error=\(error)")
+    }
   }
 
   func createWorkspace(name: String, rootPath: String?) {

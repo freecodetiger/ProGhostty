@@ -116,6 +116,9 @@ struct AppText {
   var updateCheckFailedToast: String { text("Update check failed", "检查更新失败") }
   var settingsSavedToast: String { text("Settings saved", "设置已保存") }
   var openLinkHintToast: String { text("⌘ Click to open link", "按住 ⌘ 点击打开链接") }
+  var pathNotFoundToast: String { text("Path not found", "路径不存在") }
+  var relativePathMissingCwdToast: String { text("No working directory for relative path", "没有用于解析相对路径的工作目录") }
+  var revealPathFailedToast: String { text("Could not reveal path", "无法在访达中定位路径") }
   var pluginReloadCommandHint: String {
     text(
       "To apply plugin changes in an existing pane, copy and paste this command when you need it.",
