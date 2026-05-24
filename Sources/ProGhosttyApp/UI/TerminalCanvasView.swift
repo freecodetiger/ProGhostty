@@ -44,6 +44,7 @@ private struct TerminalTreeLayoutView: NSViewControllerRepresentable {
       onSelect: { model.selectPane($0) },
       onSplit: { paneID, axis in model.splitPane(paneID, axis: axis) },
       onClose: { paneID in model.closePane(paneID) },
+      onPasteDroppedPaths: { paneID, text in model.pasteDroppedPaths(text, intoPane: paneID) },
       menuText: model.appText,
       keyboardShortcuts: model.settings.keyboardShortcuts,
       palette: model.terminalPalette,
@@ -67,6 +68,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
   private var onSelect: ((UUID) -> Void)?
   private var onSplit: ((UUID, SplitAxis) -> Void)?
   private var onClose: ((UUID) -> Void)?
+  private var onPasteDroppedPaths: ((UUID, String) -> Void)?
   private var menuText = AppText(language: "system")
   private var keyboardShortcuts = KeyboardShortcutSettings.defaults
   private var palette = TerminalSurfacePalette.dark
@@ -90,6 +92,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     onSelect: @escaping (UUID) -> Void,
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
+    onPasteDroppedPaths: @escaping (UUID, String) -> Void,
     menuText: AppText,
     keyboardShortcuts: KeyboardShortcutSettings,
     palette: TerminalSurfacePalette,
@@ -107,6 +110,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     self.onSelect = onSelect
     self.onSplit = onSplit
     self.onClose = onClose
+    self.onPasteDroppedPaths = onPasteDroppedPaths
     self.menuText = menuText
     self.keyboardShortcuts = keyboardShortcuts
     self.palette = palette
@@ -201,6 +205,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
         onSelect: { [weak self] paneID in self?.onSelect?(paneID) },
         onSplit: { [weak self] paneID, axis in self?.onSplit?(paneID, axis) },
         onClose: { [weak self] paneID in self?.onClose?(paneID) },
+        onPasteDroppedPaths: { [weak self] paneID, text in self?.onPasteDroppedPaths?(paneID, text) },
         menuText: menuText,
         palette: palette,
         onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
@@ -218,6 +223,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       controller.onSelect = onSelect
       controller.onSplit = onSplit
       controller.onClose = onClose
+      controller.onPasteDroppedPaths = onPasteDroppedPaths
       controller.menuText = menuText
       controller.palette = palette
       controller.hasMultiplePanes = hasMultiplePanes
@@ -400,6 +406,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       onSelect: { [weak self] paneID in self?.onSelect?(paneID) },
       onSplit: { [weak self] paneID, axis in self?.onSplit?(paneID, axis) },
       onClose: { [weak self] paneID in self?.onClose?(paneID) },
+      onPasteDroppedPaths: { [weak self] paneID, text in self?.onPasteDroppedPaths?(paneID, text) },
       menuText: menuText,
       palette: palette,
       dimsWhenInactive: hasMultiplePanes,
@@ -574,6 +581,7 @@ final class TerminalPaneViewController: NSViewController {
     onSelect: @escaping (UUID) -> Void,
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
+    onPasteDroppedPaths: @escaping (UUID, String) -> Void,
     menuText: AppText,
     palette: TerminalSurfacePalette,
     dimsWhenInactive: Bool = true,
@@ -586,6 +594,7 @@ final class TerminalPaneViewController: NSViewController {
     self.onSelect = onSelect
     self.onResize = onResize
     self.isResizeSensitiveScreen = isResizeSensitiveScreen
+    _ = onPasteDroppedPaths
     applyAppearance(isSelected: isSelected, palette: palette, dimsWhenInactive: dimsWhenInactive)
     install(menu: menu(
       onSelect: onSelect,
