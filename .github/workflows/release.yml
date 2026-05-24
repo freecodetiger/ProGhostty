@@ -53,15 +53,10 @@ jobs:
           prerelease: false
           generate_release_notes: true
           body: |
-            ProGhostty ${{ github.ref_name }} 正式版 DMG 构建。
+            ProGhostty ${{ github.ref_name }} 正式版。
 
-            更新重点：
-            - 修复 Codex 等 TUI 中多行粘贴被逐行发送的问题，按 bracketed paste 模式编码粘贴内容。
-            - 修复分屏场景下 Cmd+V 可能被第一个 pane 抢占的问题，粘贴会进入当前聚焦 pane。
-            - 修复 Esc、Ctrl+C 等控制键在 cell-grid 渲染路径下的输入处理。
-            - 改进 Codex 流式输出期间的历史滚动稳定性，降低滚动抖动和内容跳动。
-            - 支持拖选文本到边缘时自动按行滚动，并在拖选期间避免流式输出替换当前选择区域。
-
-            安装说明：
-            - 下载 DMG 后拖拽安装即可。
-            - 当前版本使用 ad-hoc 签名，macOS 可能提示开发者无法验证；如遇提示，请在系统设置中允许打开。
+            更新内容：
+            - 新增每个 pane 独立的旁路输入框，支持快捷键呼出与草稿保留。
+            - 优化 titlebar：工作区入口回到工作区管理，中间 cwd 悬停可展开显示。
+            - 真实终端支持 Shift+Enter 换行，适合 Codex 等 TUI 的多行输入。
+            - 改进分屏、粘贴和路径拖拽的交互稳定性。

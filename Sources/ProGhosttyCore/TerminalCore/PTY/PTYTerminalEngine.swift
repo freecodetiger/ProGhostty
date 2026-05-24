@@ -15,6 +15,52 @@ enum TerminalScrollAnchor {
   }
 }
 
+func terminalControlInputData(for event: NSEvent) -> Data? {
+  if event.modifierFlags.contains(.command) {
+    return nil
+  }
+
+  if event.modifierFlags.contains(.control),
+    let characters = event.characters,
+    characters.count == 1,
+    let scalar = characters.unicodeScalars.first,
+    scalar.value <= 0x1F || scalar.value == 0x7F
+  {
+    return Data([UInt8(scalar.value)])
+  }
+
+  guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else {
+    return nil
+  }
+
+  if characters.count == 1, let scalar = characters.unicodeScalars.first {
+    switch scalar.value {
+    case UInt32(NSUpArrowFunctionKey):
+      return Data("\u{1B}[A".utf8)
+    case UInt32(NSDownArrowFunctionKey):
+      return Data("\u{1B}[B".utf8)
+    case UInt32(NSRightArrowFunctionKey):
+      return Data("\u{1B}[C".utf8)
+    case UInt32(NSLeftArrowFunctionKey):
+      return Data("\u{1B}[D".utf8)
+    case UInt32(NSDeleteCharacter):
+      return Data([0x7F])
+    case UInt32(NSEnterCharacter), UInt32(NSCarriageReturnCharacter):
+      return event.modifierFlags.contains(.shift) ? Data([0x0A]) : Data([0x0D])
+    case UInt32(NSTabCharacter):
+      return Data([0x09])
+    case UInt32(NSBackspaceCharacter):
+      return Data([0x7F])
+    case 0x1B:
+      return Data([0x1B])
+    default:
+      break
+    }
+  }
+
+  return nil
+}
+
 enum TerminalAttributedDiff {
   static func changedRanges(from old: NSAttributedString, to new: NSAttributedString) -> [NSRange] {
     guard old.length == new.length else {
@@ -2030,7 +2076,7 @@ public final class PTYGridView: NSView {
       interpretKeyEvents([event])
       return
     }
-    if let data = controlInput(for: event) {
+    if let data = terminalControlInputData(for: event) {
       inputHandler?(data)
     } else {
       interpretKeyEvents([event])
@@ -2697,52 +2743,6 @@ public final class PTYGridView: NSView {
     return coordinate >= range.lower && coordinate <= range.upper
   }
 
-  private func controlInput(for event: NSEvent) -> Data? {
-    if event.modifierFlags.contains(.command) {
-      return nil
-    }
-
-    if event.modifierFlags.contains(.control),
-      let characters = event.characters,
-      characters.count == 1,
-      let scalar = characters.unicodeScalars.first,
-      scalar.value <= 0x1F || scalar.value == 0x7F
-    {
-      return Data([UInt8(scalar.value)])
-    }
-
-    guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else {
-      return nil
-    }
-
-    if characters.count == 1, let scalar = characters.unicodeScalars.first {
-      switch scalar.value {
-      case UInt32(NSUpArrowFunctionKey):
-        return Data("\u{1B}[A".utf8)
-      case UInt32(NSDownArrowFunctionKey):
-        return Data("\u{1B}[B".utf8)
-      case UInt32(NSRightArrowFunctionKey):
-        return Data("\u{1B}[C".utf8)
-      case UInt32(NSLeftArrowFunctionKey):
-        return Data("\u{1B}[D".utf8)
-      case UInt32(NSDeleteCharacter):
-        return Data([0x7F])
-      case UInt32(NSEnterCharacter), UInt32(NSCarriageReturnCharacter):
-        return Data([0x0D])
-      case UInt32(NSTabCharacter):
-        return Data([0x09])
-      case UInt32(NSBackspaceCharacter):
-        return Data([0x7F])
-      case 0x1B:
-        return Data([0x1B])
-      default:
-        break
-      }
-    }
-
-    return nil
-  }
-
   private static func cellSize(for font: NSFont) -> CGSize {
     let width = max(1, ceil(("W" as NSString).size(withAttributes: [.font: font]).width))
     let height = max(1, ceil(font.ascender - font.descender + font.leading))
@@ -2996,7 +2996,7 @@ final class PTYTextView: NSTextView {
 
   override func keyDown(with event: NSEvent) {
     activationHandler?()
-    if let data = controlInput(for: event) {
+    if let data = terminalControlInputData(for: event) {
       scrollToBottomHandler?()
       inputHandler?(data)
     } else {
@@ -3223,52 +3223,6 @@ final class PTYTextView: NSTextView {
         path.stroke()
       }
     }
-  }
-
-  private func controlInput(for event: NSEvent) -> Data? {
-    if event.modifierFlags.contains(.command) {
-      return nil
-    }
-
-    if event.modifierFlags.contains(.control),
-      let characters = event.characters,
-      characters.count == 1,
-      let scalar = characters.unicodeScalars.first,
-      scalar.value <= 0x1F || scalar.value == 0x7F
-    {
-      return Data([UInt8(scalar.value)])
-    }
-
-    guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else {
-      return nil
-    }
-
-    if characters.count == 1, let scalar = characters.unicodeScalars.first {
-      switch scalar.value {
-      case UInt32(NSUpArrowFunctionKey):
-        return Data("\u{1B}[A".utf8)
-      case UInt32(NSDownArrowFunctionKey):
-        return Data("\u{1B}[B".utf8)
-      case UInt32(NSRightArrowFunctionKey):
-        return Data("\u{1B}[C".utf8)
-      case UInt32(NSLeftArrowFunctionKey):
-        return Data("\u{1B}[D".utf8)
-      case UInt32(NSDeleteCharacter):
-        return Data([0x7F])
-      case UInt32(NSEnterCharacter), UInt32(NSCarriageReturnCharacter):
-        return Data([0x0D])
-      case UInt32(NSTabCharacter):
-        return Data([0x09])
-      case UInt32(NSBackspaceCharacter):
-        return Data([0x7F])
-      case 0x1B:
-        return Data([0x1B])
-      default:
-        break
-      }
-    }
-
-    return nil
   }
 
   private func committedText(from string: Any) -> String? {

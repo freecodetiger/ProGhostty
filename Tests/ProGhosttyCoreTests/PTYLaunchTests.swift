@@ -1,11 +1,34 @@
 import Foundation
 import Testing
 import Darwin
+import AppKit
 
 @testable import ProGhosttyCore
 
 @Suite("PTY launch")
 struct PTYLaunchTests {
+  @Test func shiftEnterProducesLineFeed() throws {
+    let event = try #require(makeKeyEvent(
+      keyCode: 36,
+      characters: "\r",
+      charactersIgnoringModifiers: "\r",
+      modifierFlags: [.shift]
+    ))
+
+    #expect(terminalControlInputData(for: event) == Data([0x0A]))
+  }
+
+  @Test func plainEnterProducesCarriageReturn() throws {
+    let event = try #require(makeKeyEvent(
+      keyCode: 36,
+      characters: "\r",
+      charactersIgnoringModifiers: "\r",
+      modifierFlags: []
+    ))
+
+    #expect(terminalControlInputData(for: event) == Data([0x0D]))
+  }
+
   @Test func shellArgumentsUseShellBasename() {
     #expect(PTYLaunch.shellArguments(shellPath: "/bin/zsh") == ["zsh"])
   }
@@ -165,4 +188,24 @@ struct PTYLaunchTests {
 
     Issue.record("Deferred resize did not finish within deadline")
   }
+}
+
+private func makeKeyEvent(
+  keyCode: UInt16,
+  characters: String,
+  charactersIgnoringModifiers: String,
+  modifierFlags: NSEvent.ModifierFlags
+) -> NSEvent? {
+  NSEvent.keyEvent(
+    with: .keyDown,
+    location: .zero,
+    modifierFlags: modifierFlags,
+    timestamp: 0,
+    windowNumber: 0,
+    context: nil,
+    characters: characters,
+    charactersIgnoringModifiers: charactersIgnoringModifiers,
+    isARepeat: false,
+    keyCode: keyCode
+  )
 }
