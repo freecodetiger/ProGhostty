@@ -225,6 +225,20 @@ final class AppModel: ObservableObject {
     sessionManager.writeInput(Data((command + "\n").utf8), to: selectedSessionID)
   }
 
+  func pasteDroppedPaths(_ text: String, intoPane paneID: UUID) {
+    guard
+      let activeWorkspaceID,
+      let runtime = workspaceRuntimes.first(where: { $0.id == activeWorkspaceID }),
+      let pane = PaneTreeReducer.findPane(in: runtime.layout.root, paneId: paneID)
+    else {
+      DebugLog.write("pasteDroppedPaths ignored: pane not found pane=\(paneID)")
+      return
+    }
+
+    selectPane(paneID)
+    sessionManager.writePaste(text, to: pane.sessionId)
+  }
+
   func surfaceView(for id: TerminalSessionID) -> NSView? {
     surfaceRegistry.viewForSession(id)
   }
