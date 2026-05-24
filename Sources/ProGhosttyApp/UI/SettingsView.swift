@@ -260,6 +260,8 @@ struct SettingsView: View {
       return text.settings
     case .openWorkspaceSwitcher:
       return text.openWorkspaceSwitcher
+    case .sideInput:
+      return text.sideInput
     case .splitRight:
       return text.splitRight
     case .splitDown:

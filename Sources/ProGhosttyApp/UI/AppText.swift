@@ -53,6 +53,8 @@ struct AppText {
   var recordingShortcut: String { text("Press shortcut", "按下快捷键") }
   var resetShortcut: String { text("Reset", "重置") }
   var openWorkspaceSwitcher: String { text("Switch Workspace", "切换工作区") }
+  var sideInput: String { text("Side Input", "旁路输入") }
+  var sideInputPlaceholder: String { text("Type without moving the terminal view", "输入不会打断当前终端预览位置") }
   var focusPreviousPane: String { text("Focus Previous Pane", "聚焦上一个分屏") }
   var focusNextPane: String { text("Focus Next Pane", "聚焦下一个分屏") }
   var shellTools: String { text("Terminal plugins", "终端插件") }

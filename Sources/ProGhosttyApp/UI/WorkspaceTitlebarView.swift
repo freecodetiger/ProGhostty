@@ -10,11 +10,11 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
   let backgroundColor: NSColor
   let usesDarkAppearance: Bool
   let toast: AppModel.TitlebarToast?
-  let onSettings: () -> Void
+  let onWorkspaceSwitcher: () -> Void
   let onToastClick: () -> Void
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(onSettings: onSettings, onToastClick: onToastClick)
+    Coordinator(onWorkspaceSwitcher: onWorkspaceSwitcher, onToastClick: onToastClick)
   }
 
   func makeNSView(context: Context) -> NSView {
@@ -29,7 +29,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     context.coordinator.backgroundColor = backgroundColor
     context.coordinator.usesDarkAppearance = usesDarkAppearance
     context.coordinator.toast = toast
-    context.coordinator.onSettings = onSettings
+    context.coordinator.onWorkspaceSwitcher = onWorkspaceSwitcher
     context.coordinator.onToastClick = onToastClick
 
     if let window = view.window {
@@ -56,27 +56,30 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     var backgroundColor: NSColor = .black
     var usesDarkAppearance = true
     var toast: AppModel.TitlebarToast?
-    var onSettings: () -> Void
+    var onWorkspaceSwitcher: () -> Void
     var onToastClick: () -> Void
+    private var isSubtitleHovered = false
 
     private weak var installedWindow: NSWindow?
     private let titlebarControlsStack = NSStackView()
-    private let subtitleLabel = NSTextField(labelWithString: "")
+    private let subtitleLabel = TitlebarHoverLabel(labelWithString: "")
     private let toastView = TitlebarToastCapsuleView()
     private let button = NSButton(title: "ProGhostty", target: nil, action: nil)
     private let titlebarBackgroundView = TitlebarBackgroundView()
+    private let subtitleWidthConstraint: NSLayoutConstraint
     private var titlebarBackgroundConstraints: [NSLayoutConstraint] = []
     private var subtitleConstraints: [NSLayoutConstraint] = []
     private var titlebarControlsConstraints: [NSLayoutConstraint] = []
     private let notificationObservers = NotificationObserverBag()
 
-    init(onSettings: @escaping () -> Void, onToastClick: @escaping () -> Void) {
-      self.onSettings = onSettings
+    init(onWorkspaceSwitcher: @escaping () -> Void, onToastClick: @escaping () -> Void) {
+      self.onWorkspaceSwitcher = onWorkspaceSwitcher
       self.onToastClick = onToastClick
+      subtitleWidthConstraint = subtitleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360)
       super.init()
       titlebarBackgroundView.identifier = ProGhosttyWindowAppearance.titlebarBackgroundIdentifier
       button.target = self
-      button.action = #selector(openSettings)
+      button.action = #selector(openWorkspaceSwitcher)
       button.bezelStyle = .inline
       button.isBordered = false
       button.wantsLayer = true
@@ -99,7 +102,11 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
       subtitleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
       subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-      subtitleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360).isActive = true
+      subtitleWidthConstraint.isActive = true
+      subtitleLabel.onHoverChanged = { [weak self] isHovered in
+        self?.isSubtitleHovered = isHovered
+        self?.updateSubtitle()
+      }
       titlebarControlsStack.orientation = .horizontal
       titlebarControlsStack.alignment = .centerY
       titlebarControlsStack.spacing = 8
@@ -168,13 +175,21 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         subtitleLabel.isHidden = true
         subtitleLabel.stringValue = ""
         subtitleLabel.toolTip = nil
+        isSubtitleHovered = false
+        subtitleWidthConstraint.constant = 360
         refreshAccessoryLayout()
         return
       }
 
       subtitleLabel.isHidden = false
-      subtitleLabel.stringValue = subtitle
-      subtitleLabel.toolTip = subtitleTooltip
+      if isSubtitleHovered, let subtitleTooltip, !subtitleTooltip.isEmpty {
+        subtitleLabel.stringValue = "📁 \(middleTruncated(subtitleTooltip, limit: 72))"
+        subtitleWidthConstraint.constant = 760
+      } else {
+        subtitleLabel.stringValue = subtitle
+        subtitleWidthConstraint.constant = 360
+      }
+      subtitleLabel.toolTip = nil
       refreshAccessoryLayout()
     }
 
@@ -211,6 +226,19 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       installedWindow?.contentView?.superview?.layoutSubtreeIfNeeded()
     }
 
+    private func middleTruncated(_ text: String, limit: Int) -> String {
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard trimmed.count > limit, limit > 1 else { return trimmed }
+
+      let ellipsis = "…"
+      let visibleCount = max(1, limit - ellipsis.count)
+      let prefixCount = max(1, visibleCount / 2)
+      let suffixCount = max(1, visibleCount - prefixCount)
+      let prefix = trimmed.prefix(prefixCount)
+      let suffix = trimmed.suffix(suffixCount)
+      return "\(prefix)\(ellipsis)\(suffix)"
+    }
+
     private func installTitlebarBackground(in window: NSWindow) {
       guard let titlebarHost = titlebarHost(in: window) else { return }
 
@@ -235,20 +263,6 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     private func installTitlebarControls(in window: NSWindow) {
       guard let host = titlebarOverlayHost(in: window) else { return }
 
-      if subtitleLabel.superview !== host {
-        NSLayoutConstraint.deactivate(subtitleConstraints)
-        subtitleConstraints.removeAll()
-        subtitleLabel.removeFromSuperview()
-        host.addSubview(subtitleLabel, positioned: .above, relativeTo: nil)
-        subtitleConstraints = [
-          subtitleLabel.centerXAnchor.constraint(equalTo: host.centerXAnchor),
-          subtitleLabel.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
-          subtitleLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
-          subtitleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: host.leadingAnchor, constant: 120),
-        ]
-        NSLayoutConstraint.activate(subtitleConstraints)
-      }
-
       if titlebarControlsStack.superview !== host {
         NSLayoutConstraint.deactivate(titlebarControlsConstraints)
         titlebarControlsConstraints.removeAll()
@@ -261,6 +275,21 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
           titlebarControlsStack.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
         ]
         NSLayoutConstraint.activate(titlebarControlsConstraints)
+      }
+
+      if subtitleLabel.superview !== host {
+        NSLayoutConstraint.deactivate(subtitleConstraints)
+        subtitleConstraints.removeAll()
+        subtitleLabel.removeFromSuperview()
+        host.addSubview(subtitleLabel, positioned: .above, relativeTo: nil)
+        subtitleConstraints = [
+          subtitleLabel.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+          subtitleLabel.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
+          subtitleLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
+          subtitleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: host.leadingAnchor, constant: 120),
+          subtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: titlebarControlsStack.leadingAnchor, constant: -12),
+        ]
+        NSLayoutConstraint.activate(subtitleConstraints)
       }
 
       keepTitlebarViewsOrdered(in: window)
@@ -339,8 +368,8 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       window.contentView?.superview ?? titlebarHost(in: window)
     }
 
-    @objc private func openSettings() {
-      onSettings()
+    @objc private func openWorkspaceSwitcher() {
+      onWorkspaceSwitcher()
     }
 
     @objc private func openToastAction() {
@@ -363,6 +392,36 @@ private extension AppModel.TitlebarToast {
 private final class TitlebarBackgroundView: NSView {
   override func hitTest(_ point: NSPoint) -> NSView? {
     nil
+  }
+}
+
+private final class TitlebarHoverLabel: NSTextField {
+  var onHoverChanged: ((Bool) -> Void)?
+  private var hoverTrackingArea: NSTrackingArea?
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let hoverTrackingArea {
+      removeTrackingArea(hoverTrackingArea)
+    }
+    let area = NSTrackingArea(
+      rect: bounds,
+      options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+      owner: self,
+      userInfo: nil
+    )
+    hoverTrackingArea = area
+    addTrackingArea(area)
+  }
+
+  override func mouseEntered(with event: NSEvent) {
+    super.mouseEntered(with: event)
+    onHoverChanged?(true)
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    super.mouseExited(with: event)
+    onHoverChanged?(false)
   }
 }
 

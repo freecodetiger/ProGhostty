@@ -22,6 +22,8 @@ struct AppSettingsTests {
     #expect(settings.themeName == "dark")
     #expect(settings.pgControlCommandsEnabled == true)
     #expect(settings.keyboardShortcuts.shortcut(for: .openSettings).key == ",")
+    #expect(settings.keyboardShortcuts.shortcut(for: .sideInput).key == "p")
+    #expect(settings.keyboardShortcuts.shortcut(for: .sideInput).modifiers == [.command])
     #expect(settings.keyboardShortcuts.shortcut(for: .splitRight).modifiers == [.command])
     #expect(settings.rendererMode == .auto)
     #expect(settings.smoothPixelScrollingEnabled == true)

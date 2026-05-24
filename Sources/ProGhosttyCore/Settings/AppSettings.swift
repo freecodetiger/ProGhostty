@@ -109,6 +109,7 @@ public enum KeyboardShortcutAction: String, CaseIterable, Codable, Sendable, Ide
   case closePane
   case focusPreviousPane
   case focusNextPane
+  case sideInput
 
   public var id: String { rawValue }
 }
@@ -210,6 +211,7 @@ public struct KeyboardShortcutSettings: Codable, Equatable, Sendable {
     .closePane: KeyboardShortcutBinding(key: "w", modifiers: [.command]),
     .focusPreviousPane: KeyboardShortcutBinding(key: "leftArrow", modifiers: [.command, .option]),
     .focusNextPane: KeyboardShortcutBinding(key: "rightArrow", modifiers: [.command, .option]),
+    .sideInput: KeyboardShortcutBinding(key: "p", modifiers: [.command]),
   ])
 
   public init(bindings: [KeyboardShortcutAction: KeyboardShortcutBinding]) {

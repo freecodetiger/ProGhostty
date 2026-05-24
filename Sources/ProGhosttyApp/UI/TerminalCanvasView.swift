@@ -39,6 +39,12 @@ private struct TerminalTreeLayoutView: NSViewControllerRepresentable {
 
   func updateNSViewController(_ controller: SplitContainerViewController, context: Context) {
     DebugLog.write("TerminalTreeLayoutView update leaves=\(PaneTreeReducer.listLeaves(in: root).count)")
+    let paneIDs = Set(PaneTreeReducer.listLeaves(in: root).map(\.paneId))
+    if !model.sideInputStore.paneIDs.isSubset(of: paneIDs) {
+      DispatchQueue.main.async {
+        model.pruneSideInputs(to: paneIDs)
+      }
+    }
     controller.update(
       root: root,
       selectedPaneID: model.selectedPaneID,
@@ -62,6 +68,15 @@ private struct TerminalTreeLayoutView: NSViewControllerRepresentable {
       onRatioChanged: { splitID, ratio in model.updateSplitRatio(splitID, ratio: ratio) },
       onWorkspaceSwitcher: { model.openWorkspaceSwitcher() },
       onSettings: { model.openSettingsWindow() },
+      sideInputStore: model.sideInputStore,
+      onSideInputTextChanged: { paneID, text in model.updateSideInputText(text, for: paneID) },
+      onSubmitSideInput: { paneID in model.submitSideInput(for: paneID) },
+      onCloseEmptySideInput: { paneID in model.closeEmptySideInput(for: paneID) },
+      onCancelSideInput: { paneID in model.closeSideInputAfterEscape(for: paneID) },
+      sideInputPlaceholder: model.appText.sideInputPlaceholder,
+      onSideInputFocusRequestHandled: { paneID, requestID in
+        model.markSideInputFocusRequestHandled(paneID: paneID, requestID: requestID)
+      },
       viewForSession: { model.surfaceView(for: $0) }
     )
   }
@@ -87,6 +102,13 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
   private var onRatioChanged: ((UUID, Double) -> Void)?
   private var onWorkspaceSwitcher: (() -> Void)?
   private var onSettings: (() -> Void)?
+  private var sideInputStore = TerminalSideInputStore.empty
+  private var onSideInputTextChanged: ((UUID, String) -> Void)?
+  private var onSubmitSideInput: ((UUID) -> Void)?
+  private var onCloseEmptySideInput: ((UUID) -> Void)?
+  private var onCancelSideInput: ((UUID) -> Void)?
+  private var sideInputPlaceholder = ""
+  private var onSideInputFocusRequestHandled: ((UUID, Int) -> Void)?
   private var viewForSession: ((TerminalSessionID) -> NSView?)?
   private let minimumPaneLength = CGFloat(SplitRatioLayout.minimumPaneLength)
   private var hasMultiplePanes = false
@@ -112,6 +134,13 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     onRatioChanged: @escaping (UUID, Double) -> Void,
     onWorkspaceSwitcher: @escaping () -> Void,
     onSettings: @escaping () -> Void,
+    sideInputStore: TerminalSideInputStore,
+    onSideInputTextChanged: @escaping (UUID, String) -> Void,
+    onSubmitSideInput: @escaping (UUID) -> Void,
+    onCloseEmptySideInput: @escaping (UUID) -> Void,
+    onCancelSideInput: @escaping (UUID) -> Void,
+    sideInputPlaceholder: String,
+    onSideInputFocusRequestHandled: @escaping (UUID, Int) -> Void,
     viewForSession: @escaping (TerminalSessionID) -> NSView?
   ) {
     let leafCount = PaneTreeReducer.listLeaves(in: root).count
@@ -132,6 +161,13 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     self.onRatioChanged = onRatioChanged
     self.onWorkspaceSwitcher = onWorkspaceSwitcher
     self.onSettings = onSettings
+    self.sideInputStore = sideInputStore
+    self.onSideInputTextChanged = onSideInputTextChanged
+    self.onSubmitSideInput = onSubmitSideInput
+    self.onCloseEmptySideInput = onCloseEmptySideInput
+    self.onCancelSideInput = onCancelSideInput
+    self.sideInputPlaceholder = sideInputPlaceholder
+    self.onSideInputFocusRequestHandled = onSideInputFocusRequestHandled
     self.viewForSession = viewForSession
 
     guard let currentRoot else {
@@ -227,6 +263,15 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
         },
         onWorkspaceSwitcher: { [weak self] in self?.onWorkspaceSwitcher?() },
         onSettings: { [weak self] in self?.onSettings?() },
+        sideInputStore: sideInputStore,
+        onSideInputTextChanged: { [weak self] paneID, text in self?.onSideInputTextChanged?(paneID, text) },
+        onSubmitSideInput: { [weak self] paneID in self?.onSubmitSideInput?(paneID) },
+        onCloseEmptySideInput: { [weak self] paneID in self?.onCloseEmptySideInput?(paneID) },
+        onCancelSideInput: { [weak self] paneID in self?.onCancelSideInput?(paneID) },
+        sideInputPlaceholder: sideInputPlaceholder,
+        onSideInputFocusRequestHandled: { [weak self] paneID, requestID in
+          self?.onSideInputFocusRequestHandled?(paneID, requestID)
+        },
         keyboardShortcuts: keyboardShortcuts
       )
       return controller
@@ -248,6 +293,13 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       controller.onRatioChanged = onRatioChanged
       controller.onWorkspaceSwitcher = onWorkspaceSwitcher
       controller.onSettings = onSettings
+      controller.sideInputStore = sideInputStore
+      controller.onSideInputTextChanged = onSideInputTextChanged
+      controller.onSubmitSideInput = onSubmitSideInput
+      controller.onCloseEmptySideInput = onCloseEmptySideInput
+      controller.onCancelSideInput = onCancelSideInput
+      controller.sideInputPlaceholder = sideInputPlaceholder
+      controller.onSideInputFocusRequestHandled = onSideInputFocusRequestHandled
       controller.viewForSession = viewForSession
       let splitView = TerminalSplitView()
       splitView.customDividerColor = palette.splitDivider
@@ -402,6 +454,13 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       splitController.selectedPaneID = selectedPaneID
       splitController.palette = palette
       splitController.hasMultiplePanes = hasMultiplePanes
+      splitController.sideInputStore = sideInputStore
+      splitController.onSideInputTextChanged = onSideInputTextChanged
+      splitController.onSubmitSideInput = onSubmitSideInput
+      splitController.onCloseEmptySideInput = onCloseEmptySideInput
+      splitController.onCancelSideInput = onCancelSideInput
+      splitController.sideInputPlaceholder = sideInputPlaceholder
+      splitController.onSideInputFocusRequestHandled = onSideInputFocusRequestHandled
       splitController.view.layer?.backgroundColor = palette.background.cgColor
       if let splitView = splitController.view as? TerminalSplitView {
         splitView.customDividerColor = palette.splitDivider
@@ -452,6 +511,15 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       },
       onWorkspaceSwitcher: { [weak self] in self?.onWorkspaceSwitcher?() },
       onSettings: { [weak self] in self?.onSettings?() },
+      sideInputStore: sideInputStore,
+      onSideInputTextChanged: { [weak self] paneID, text in self?.onSideInputTextChanged?(paneID, text) },
+      onSubmitSideInput: { [weak self] paneID in self?.onSubmitSideInput?(paneID) },
+      onCloseEmptySideInput: { [weak self] paneID in self?.onCloseEmptySideInput?(paneID) },
+      onCancelSideInput: { [weak self] paneID in self?.onCancelSideInput?(paneID) },
+      sideInputPlaceholder: sideInputPlaceholder,
+      onSideInputFocusRequestHandled: { [weak self] paneID, requestID in
+        self?.onSideInputFocusRequestHandled?(paneID, requestID)
+      },
       keyboardShortcuts: keyboardShortcuts
     )
   }
@@ -744,6 +812,7 @@ final class TerminalPaneViewController: NSViewController {
   private var pendingResizeGridSize: TerminalGridSize?
   private var pendingResizeWorkItem: DispatchWorkItem?
   private var resizeCoordinator = TerminalResizeCommitCoordinator()
+  private var sideInputOverlay: TerminalSideInputOverlayView?
 
   init(pane: TerminalPane, contentView: NSView?) {
     self.pane = pane
@@ -782,6 +851,13 @@ final class TerminalPaneViewController: NSViewController {
     onSplitAvailabilityChanged: @escaping (UUID, NSSize, Bool, Bool) -> Void,
     onWorkspaceSwitcher: @escaping () -> Void,
     onSettings: @escaping () -> Void,
+    sideInputStore: TerminalSideInputStore,
+    onSideInputTextChanged: @escaping (UUID, String) -> Void,
+    onSubmitSideInput: @escaping (UUID) -> Void,
+    onCloseEmptySideInput: @escaping (UUID) -> Void,
+    onCancelSideInput: @escaping (UUID) -> Void,
+    sideInputPlaceholder: String,
+    onSideInputFocusRequestHandled: @escaping (UUID, Int) -> Void,
     keyboardShortcuts: KeyboardShortcutSettings
   ) {
     self.onSelect = onSelect
@@ -792,6 +868,17 @@ final class TerminalPaneViewController: NSViewController {
     currentPalette = palette
     configureDropHandling()
     applyAppearance(isSelected: isSelected, palette: palette, dimsWhenInactive: dimsWhenInactive)
+    updateSideInputOverlay(
+      draft: sideInputStore.draft(for: pane.paneId),
+      pendingFocusRequest: sideInputStore.pendingFocusRequest,
+      palette: palette,
+      onTextChanged: onSideInputTextChanged,
+      onSubmit: onSubmitSideInput,
+      onCloseIfEmpty: onCloseEmptySideInput,
+      onCancel: onCancelSideInput,
+      placeholder: sideInputPlaceholder,
+      onFocusRequestHandled: onSideInputFocusRequestHandled
+    )
     install(menu: menu(
       onSelect: onSelect,
       onSplit: onSplit,
@@ -949,6 +1036,66 @@ final class TerminalPaneViewController: NSViewController {
       contentView.topAnchor.constraint(equalTo: view.topAnchor),
       contentView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
     ])
+  }
+
+  private func updateSideInputOverlay(
+    draft: TerminalSideInputDraft?,
+    pendingFocusRequest: TerminalSideInputFocusRequest?,
+    palette: TerminalSurfacePalette,
+    onTextChanged: @escaping (UUID, String) -> Void,
+    onSubmit: @escaping (UUID) -> Void,
+    onCloseIfEmpty: @escaping (UUID) -> Void,
+    onCancel: @escaping (UUID) -> Void,
+    placeholder: String,
+    onFocusRequestHandled: @escaping (UUID, Int) -> Void
+  ) {
+    guard let draft else {
+      sideInputOverlay?.removeFromSuperview()
+      sideInputOverlay = nil
+      return
+    }
+
+    let overlay: TerminalSideInputOverlayView
+    if let existing = sideInputOverlay {
+      overlay = existing
+    } else {
+      overlay = TerminalSideInputOverlayView()
+      overlay.translatesAutoresizingMaskIntoConstraints = false
+      view.addSubview(overlay)
+      let preferredWidth = overlay.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.72)
+      preferredWidth.priority = .defaultHigh
+      NSLayoutConstraint.activate([
+        overlay.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
+        overlay.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+        preferredWidth,
+        overlay.widthAnchor.constraint(lessThanOrEqualToConstant: 560),
+        overlay.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
+        overlay.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
+      ])
+      sideInputOverlay = overlay
+    }
+
+    overlay.configure(
+      paneID: pane.paneId,
+      text: draft.text,
+      palette: palette,
+      onTextChanged: onTextChanged,
+      onSubmit: onSubmit,
+      onCloseIfEmpty: onCloseIfEmpty,
+      onCancel: onCancel,
+      placeholder: placeholder
+    )
+    guard pendingFocusRequest == TerminalSideInputFocusRequest(
+      paneID: pane.paneId,
+      requestID: draft.focusRequestID
+    ) else {
+      return
+    }
+    DispatchQueue.main.async { [weak overlay, weak self] in
+      guard let overlay, overlay.superview === self?.view else { return }
+      overlay.focus()
+      onFocusRequestHandled(draft.paneID, draft.focusRequestID)
+    }
   }
 
   private func configureDropHandling() {
@@ -1199,6 +1346,157 @@ private final class TerminalPaneHostView: NSView {
       return []
     }
     return items
+  }
+}
+
+@MainActor private final class TerminalSideInputOverlayView: NSView {
+  private let scrollView = NSScrollView()
+  private let textView = TerminalSideInputTextView()
+  private let placeholderField = NSTextField(labelWithString: "")
+  private var heightConstraint: NSLayoutConstraint?
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    setup()
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+    setup()
+  }
+
+  func configure(
+    paneID: UUID,
+    text: String,
+    palette: TerminalSurfacePalette,
+    onTextChanged: @escaping (UUID, String) -> Void,
+    onSubmit: @escaping (UUID) -> Void,
+    onCloseIfEmpty: @escaping (UUID) -> Void,
+    onCancel: @escaping (UUID) -> Void,
+    placeholder: String
+  ) {
+    layer?.backgroundColor = palette.background.withAlphaComponent(0.92).cgColor
+    layer?.borderColor = palette.cursorBackground.withAlphaComponent(0.42).cgColor
+    textView.textColor = palette.foreground
+    textView.insertionPointColor = palette.cursorBackground
+    placeholderField.stringValue = placeholder
+    placeholderField.textColor = palette.foreground.withAlphaComponent(0.38)
+    textView.onTextChanged = { [weak self] value in
+      self?.updateHeight()
+      self?.updatePlaceholderVisibility()
+      onTextChanged(paneID, value)
+    }
+    textView.onSubmit = { onSubmit(paneID) }
+    textView.onCloseIfEmpty = { onCloseIfEmpty(paneID) }
+    textView.onCancel = { onCancel(paneID) }
+    if textView.string != text {
+      textView.string = text
+      updateHeight()
+    }
+    updatePlaceholderVisibility()
+  }
+
+  func focus() {
+    window?.makeFirstResponder(textView)
+  }
+
+  private func setup() {
+    wantsLayer = true
+    layer?.cornerRadius = 8
+    layer?.borderWidth = 1
+    layer?.masksToBounds = true
+    shadow = NSShadow()
+    shadow?.shadowBlurRadius = 12
+    shadow?.shadowOffset = NSSize(width: 0, height: -2)
+    shadow?.shadowColor = NSColor.black.withAlphaComponent(0.22)
+
+    scrollView.translatesAutoresizingMaskIntoConstraints = false
+    scrollView.drawsBackground = false
+    scrollView.hasVerticalScroller = false
+    scrollView.hasHorizontalScroller = false
+    scrollView.borderType = .noBorder
+
+    textView.drawsBackground = false
+    textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    textView.textContainerInset = NSSize(width: 10, height: 9)
+    textView.isRichText = false
+    textView.allowsUndo = true
+    textView.isAutomaticQuoteSubstitutionEnabled = false
+    textView.isAutomaticDashSubstitutionEnabled = false
+    textView.isAutomaticTextReplacementEnabled = false
+    textView.textContainer?.containerSize = NSSize(width: bounds.width, height: .greatestFiniteMagnitude)
+    textView.textContainer?.widthTracksTextView = true
+    textView.minSize = NSSize(width: 0, height: 0)
+    textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+    textView.isVerticallyResizable = true
+    textView.isHorizontallyResizable = false
+    textView.autoresizingMask = [.width]
+
+    placeholderField.translatesAutoresizingMaskIntoConstraints = false
+    placeholderField.font = textView.font
+    placeholderField.lineBreakMode = .byTruncatingTail
+    placeholderField.isEditable = false
+    placeholderField.isSelectable = false
+    placeholderField.drawsBackground = false
+
+    scrollView.documentView = textView
+    addSubview(scrollView)
+    addSubview(placeholderField)
+    let heightConstraint = heightAnchor.constraint(equalToConstant: 40)
+    self.heightConstraint = heightConstraint
+    NSLayoutConstraint.activate([
+      widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
+      heightConstraint,
+      scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+      scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+      scrollView.topAnchor.constraint(equalTo: topAnchor),
+      scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+      placeholderField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 15),
+      placeholderField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -15),
+      placeholderField.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+    ])
+    updatePlaceholderVisibility()
+  }
+
+  private func updateHeight() {
+    let lineCount = max(1, textView.string.split(separator: "\n", omittingEmptySubsequences: false).count)
+    heightConstraint?.constant = min(116, max(40, CGFloat(lineCount) * 18 + 22))
+  }
+
+  private func updatePlaceholderVisibility() {
+    placeholderField.isHidden = !textView.string.isEmpty
+  }
+}
+
+@MainActor private final class TerminalSideInputTextView: NSTextView {
+  var onTextChanged: ((String) -> Void)?
+  var onSubmit: (() -> Void)?
+  var onCloseIfEmpty: (() -> Void)?
+  var onCancel: (() -> Void)?
+
+  override func keyDown(with event: NSEvent) {
+    switch event.keyCode {
+    case 36 where !event.modifierFlags.contains(.shift),
+      76 where !event.modifierFlags.contains(.shift):
+      onSubmit?()
+    case 53:
+      onCancel?()
+    default:
+      super.keyDown(with: event)
+    }
+  }
+
+  override func resignFirstResponder() -> Bool {
+    if string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      onCloseIfEmpty?()
+    }
+    return super.resignFirstResponder()
+  }
+
+  override func didChangeText() {
+    super.didChangeText()
+    onTextChanged?(string)
   }
 }
 

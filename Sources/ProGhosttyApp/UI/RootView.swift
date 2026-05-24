@@ -32,7 +32,7 @@ struct RootView: View {
         backgroundColor: model.terminalBackgroundColor,
         usesDarkAppearance: model.usesDarkAppearance,
         toast: model.titlebarToast,
-        onSettings: { model.openSettingsWindow() },
+        onWorkspaceSwitcher: { model.openWorkspaceSwitcher() },
         onToastClick: { model.openTitlebarToastAction() }
       )
       .frame(width: 0, height: 0)
@@ -48,7 +48,9 @@ struct RootView: View {
     .background(
       TerminalShortcutHost(
         closePaneBinding: model.settings.keyboardShortcuts.shortcut(for: .closePane),
-        onClosePane: { model.closeSelectedPane() }
+        sideInputBinding: model.settings.keyboardShortcuts.shortcut(for: .sideInput),
+        onClosePane: { model.closeSelectedPane() },
+        onOpenSideInput: { model.openSideInput() }
       )
       .frame(width: 0, height: 0)
     )
@@ -162,19 +164,25 @@ private extension NSColor {
 
 private struct TerminalShortcutHost: NSViewRepresentable {
   let closePaneBinding: KeyboardShortcutBinding
+  let sideInputBinding: KeyboardShortcutBinding
   let onClosePane: () -> Void
+  let onOpenSideInput: () -> Void
 
   func makeNSView(context: Context) -> KeyView {
     let view = KeyView()
     view.closePaneBinding = closePaneBinding
+    view.sideInputBinding = sideInputBinding
     view.onClosePane = onClosePane
+    view.onOpenSideInput = onOpenSideInput
     view.installMonitor()
     return view
   }
 
   func updateNSView(_ view: KeyView, context: Context) {
     view.closePaneBinding = closePaneBinding
+    view.sideInputBinding = sideInputBinding
     view.onClosePane = onClosePane
+    view.onOpenSideInput = onOpenSideInput
     view.installMonitor()
   }
 
@@ -184,7 +192,9 @@ private struct TerminalShortcutHost: NSViewRepresentable {
 
   final class KeyView: NSView {
     var closePaneBinding: KeyboardShortcutBinding?
+    var sideInputBinding: KeyboardShortcutBinding?
     var onClosePane: (() -> Void)?
+    var onOpenSideInput: (() -> Void)?
     private var monitor: Any?
 
     func installMonitor() {
@@ -195,6 +205,10 @@ private struct TerminalShortcutHost: NSViewRepresentable {
         guard let window, event.window === window else { return event }
         if closePaneBinding?.matches(key: event.proGhosttyShortcutKey, modifiers: event.proGhosttyShortcutModifiers) == true {
           onClosePane?()
+          return nil
+        }
+        if sideInputBinding?.matches(key: event.proGhosttyShortcutKey, modifiers: event.proGhosttyShortcutModifiers) == true {
+          onOpenSideInput?()
           return nil
         }
         return event

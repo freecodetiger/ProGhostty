@@ -40,6 +40,7 @@ final class AppModel: ObservableObject {
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
   @Published var titlebarToast: TitlebarToast?
   @Published var commandLine = ""
+  @Published var sideInputStore = TerminalSideInputStore.empty
   @Published var workspaces: [Workspace] = []
   @Published var settings: AppSettings {
     didSet {
@@ -243,6 +244,46 @@ final class AppModel: ObservableObject {
     let command = commandLine
     commandLine = ""
     sessionManager.writeInput(Data((command + "\n").utf8), to: selectedSessionID)
+  }
+
+  func openSideInput() {
+    guard let selectedPaneID, let selectedSessionID else { return }
+    sideInputStore.open(paneID: selectedPaneID, sessionID: selectedSessionID)
+  }
+
+  func updateSideInputText(_ text: String, for paneID: UUID) {
+    sideInputStore.updateText(text, for: paneID)
+  }
+
+  func submitSideInput(for paneID: UUID) {
+    guard let submitted = sideInputStore.submit(paneID: paneID) else { return }
+    selectPane(paneID)
+    let session = submitted.sessionID
+    let text = submitted.text
+    sessionManager.writePaste(text, to: session)
+    applyFocusedTerminalSurface()
+    restoreTerminalKeyboardFocus()
+  }
+
+  func closeEmptySideInput(for paneID: UUID) {
+    sideInputStore.closeIfEmpty(paneID: paneID)
+  }
+
+  func closeSideInputAfterEscape(for paneID: UUID) {
+    if sideInputStore.draft(for: paneID)?.isEmpty == true {
+      sideInputStore.close(paneID: paneID)
+      selectPane(paneID)
+      applyFocusedTerminalSurface()
+      restoreTerminalKeyboardFocus()
+    }
+  }
+
+  func markSideInputFocusRequestHandled(paneID: UUID, requestID: Int) {
+    sideInputStore.markFocusRequestHandled(paneID: paneID, requestID: requestID)
+  }
+
+  func pruneSideInputs(to paneIDs: Set<UUID>) {
+    _ = sideInputStore.removeMissingPanes(paneIDs)
   }
 
   func pasteDroppedPaths(_ text: String, intoPane paneID: UUID) {
