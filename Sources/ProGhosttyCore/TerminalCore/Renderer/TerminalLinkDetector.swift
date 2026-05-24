@@ -128,8 +128,10 @@ public enum TerminalLinkDetector {
     let range = rawRange.location..<(rawRange.location + max(0, rawRange.length - removedCharacterCount))
     let target = TerminalLinkTarget.filePath(TerminalFilePathTarget(rawPath: parsed.path, line: parsed.line, column: parsed.column))
     return rows.compactMap { row in
-      let overlap = max(range.lowerBound, row.start)..<min(range.upperBound, row.end)
-      guard overlap.lowerBound < overlap.upperBound else { return nil }
+      let overlapLowerBound = max(range.lowerBound, row.start)
+      let overlapUpperBound = min(range.upperBound, row.end)
+      guard overlapLowerBound < overlapUpperBound else { return nil }
+      let overlap = overlapLowerBound..<overlapUpperBound
       return TerminalLinkHit(
         target: target,
         row: row.row,

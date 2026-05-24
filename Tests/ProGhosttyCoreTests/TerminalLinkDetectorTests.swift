@@ -77,6 +77,14 @@ struct TerminalLinkDetectorTests {
     #expect(hit.text == "Sources/App.swift:42:3")
   }
 
+  @Test func ignoresNonOverlappingRowsInWrappedPathCandidateGroup() throws {
+    let frame = frame(rows: ["prefix-without-space", "see docs/readme.md"], cols: 20)
+
+    let hit = try #require(TerminalLinkDetector.hitTest(row: 1, col: 6, in: frame))
+
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "docs/readme.md", line: nil, column: nil)))
+  }
+
   @Test func stripsTrailingSentencePunctuationFromPath() throws {
     let frame = frame(rows: ["see docs/readme.md."], cols: 28)
 
