@@ -44,6 +44,30 @@ struct PTYLaunchTests {
     #expect(environment.contains("NO_COLOR=1"))
   }
 
+  @Test func launchEnvironmentInjectsGhosttyZshIntegrationWhenResourcesExist() {
+    let environment = PTYLaunch.launchEnvironment(
+      [:],
+      baseEnvironment: ["ZDOTDIR": "/Users/zpc/.config/zsh"],
+      shellPath: "/bin/zsh",
+      ghosttyResourcesDirectory: "/Applications/ProGhostty.app/Contents/Resources/ghostty"
+    )
+
+    #expect(environment.contains("GHOSTTY_RESOURCES_DIR=/Applications/ProGhostty.app/Contents/Resources/ghostty"))
+    #expect(environment.contains("GHOSTTY_ZSH_ZDOTDIR=/Users/zpc/.config/zsh"))
+    #expect(environment.contains("ZDOTDIR=/Applications/ProGhostty.app/Contents/Resources/ghostty/shell-integration/zsh"))
+  }
+
+  @Test func launchEnvironmentDoesNotInjectZdotdirForNonZshShells() {
+    let environment = PTYLaunch.launchEnvironment(
+      [:],
+      baseEnvironment: [:],
+      shellPath: "/bin/bash",
+      ghosttyResourcesDirectory: "/Applications/ProGhostty.app/Contents/Resources/ghostty"
+    )
+
+    #expect(!environment.contains("ZDOTDIR=/Applications/ProGhostty.app/Contents/Resources/ghostty/shell-integration/zsh"))
+  }
+
   @Test func controlEnvironmentInjectsSessionIdentityAndHelperPath() {
     let session = TerminalSessionID(UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!)
     let environment = PTYTerminalSessionManager.controlEnvironment(

@@ -27,6 +27,8 @@ struct RootView: View {
       WorkspaceTitlebarView(
         title: model.activeTitlebarLabel,
         tooltip: model.activeTitlebarTooltip,
+        subtitle: model.activePaneTitlebarLabel,
+        subtitleTooltip: model.activePaneTitlebarTooltip,
         backgroundColor: model.terminalBackgroundColor,
         usesDarkAppearance: model.usesDarkAppearance,
         toast: model.titlebarToast,
@@ -50,6 +52,25 @@ struct RootView: View {
       )
       .frame(width: 0, height: 0)
     )
+    .background(
+      TerminalWindowResizeGuard(
+        minimumContentSize: {
+          guard let runtime = model.activeWorkspace else {
+            return NSSize(
+              width: ProGhosttyWindowSizing.minimumContentWidth,
+              height: ProGhosttyWindowSizing.minimumContentHeight
+            )
+          }
+          let minimum = SplitRatioLayout.windowMinimumContentSize(
+            for: runtime.layout.root,
+            baseWidth: ProGhosttyWindowSizing.minimumContentWidth,
+            baseHeight: ProGhosttyWindowSizing.minimumContentHeight
+          )
+          return NSSize(width: minimum.width, height: minimum.height)
+        }
+      )
+      .frame(width: 0, height: 0)
+    )
     .onAppear {
       model.activateMainWindowAndFocusTerminal()
     }
@@ -64,6 +85,65 @@ struct RootView: View {
     hasher.combine(model.usesDarkAppearance)
     hasher.combine(model.terminalBackgroundColor.rgbSignature)
     return hasher.finalize()
+  }
+}
+
+private struct TerminalWindowResizeGuard: NSViewRepresentable {
+  var minimumContentSize: () -> NSSize
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(minimumContentSize: minimumContentSize)
+  }
+
+  func makeNSView(context: Context) -> WindowView {
+    let view = WindowView()
+    view.resizeDelegate = context.coordinator
+    return view
+  }
+
+  func updateNSView(_ view: WindowView, context: Context) {
+    context.coordinator.minimumContentSize = minimumContentSize
+    view.resizeDelegate = context.coordinator
+    view.installResizeDelegate()
+  }
+
+  static func dismantleNSView(_ view: WindowView, coordinator: Coordinator) {
+    if view.window?.delegate === coordinator {
+      view.window?.delegate = nil
+    }
+  }
+
+  final class WindowView: NSView {
+    weak var resizeDelegate: NSWindowDelegate?
+
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      installResizeDelegate()
+    }
+
+    func installResizeDelegate() {
+      guard let window, let resizeDelegate else { return }
+      window.delegate = resizeDelegate
+    }
+  }
+
+  final class Coordinator: NSObject, NSWindowDelegate {
+    var minimumContentSize: () -> NSSize
+
+    init(minimumContentSize: @escaping () -> NSSize) {
+      self.minimumContentSize = minimumContentSize
+    }
+
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+      let contentMinimum = minimumContentSize()
+      sender.contentMinSize = contentMinimum
+      let frameMinimum = sender.frameRect(forContentRect: NSRect(origin: .zero, size: contentMinimum)).size
+      sender.minSize = frameMinimum
+      return NSSize(
+        width: max(frameSize.width, frameMinimum.width),
+        height: max(frameSize.height, frameMinimum.height)
+      )
+    }
   }
 }
 

@@ -64,6 +64,7 @@ final class AppModel: ObservableObject {
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
   private var rememberedWorkspaceContentSizes: [UUID: NSSize] = [:]
   private var titlebarToastTask: Task<Void, Never>?
+  private var paneSplitAvailability: [UUID: PaneSplitAvailability] = [:]
 
   struct TitlebarToast: Equatable, Sendable {
     var message: String
@@ -75,6 +76,21 @@ final class AppModel: ObservableObject {
       case info
       case error
       case update(URL)
+    }
+  }
+
+  private struct PaneSplitAvailability: Equatable {
+    var size: NSSize
+    var canSplitRight: Bool
+    var canSplitDown: Bool
+
+    func allows(axis: TerminalSplitAxis) -> Bool {
+      switch axis {
+      case .horizontal:
+        canSplitRight
+      case .vertical:
+        canSplitDown
+      }
     }
   }
 
@@ -216,6 +232,7 @@ final class AppModel: ObservableObject {
 
   func closeSelectedTerminal() {
     guard let closed = paneWorkspaceController.closeSelectedTerminal() else { return }
+    removePaneSplitAvailability(for: closed.panes)
     workspaceRuntimes.removeAll { $0.id == closed.workspaceID }
     activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
     syncWorkspaceSwitcherState()
@@ -261,27 +278,29 @@ final class AppModel: ObservableObject {
   }
 
   var activeTitlebarLabel: String {
-    let workspace = compactTitlebarTitle(activeWorkspaceTitle)
-    guard let cwd = compactPathComponent(selectedCwd ?? activeWorkspace?.displayPath),
-      cwd != workspace
-    else {
-      return workspace
-    }
-    return "\(workspace) · \(cwd)"
+    compactTitlebarTitle(activeWorkspaceTitle)
   }
 
   var activeTitlebarTooltip: String? {
     guard activeWorkspace != nil else { return nil }
-    let fullPath = displayPath(selectedCwd ?? activeWorkspace?.displayPath) ?? "-"
     let paneCount = activeWorkspacePaneCount
     let workspaceCount = workspaceRuntimes.count
     let paneLabel = paneCount == 1 ? "pane" : "panes"
     let workspaceLabel = workspaceCount == 1 ? "workspace" : "workspaces"
     return """
     \(activeWorkspaceTitle)
-    \(fullPath)
     \(paneCount) \(paneLabel) · \(workspaceCount) running \(workspaceLabel)
     """
+  }
+
+  var activePaneTitlebarLabel: String? {
+    guard let cwd = selectedCwd, let component = compactPathComponent(cwd) else { return nil }
+    return "📁 \(component)"
+  }
+
+  var activePaneTitlebarTooltip: String? {
+    guard let cwd = selectedCwd else { return nil }
+    return cwd
   }
 
   var appText: AppText {
@@ -425,10 +444,26 @@ final class AppModel: ObservableObject {
     splitPane(paneID, axis: axis)
   }
 
+  func updatePaneSplitAvailability(
+    _ paneID: UUID,
+    size: NSSize,
+    canSplitRight: Bool,
+    canSplitDown: Bool
+  ) {
+    let availability = PaneSplitAvailability(size: size, canSplitRight: canSplitRight, canSplitDown: canSplitDown)
+    guard paneSplitAvailability[paneID] != availability else { return }
+    paneSplitAvailability[paneID] = availability
+    DebugLog.write("pane split availability pane=\(paneID) size=\(size) right=\(canSplitRight) down=\(canSplitDown)")
+  }
+
   func splitPane(_ paneID: UUID, axis: TerminalSplitAxis) {
     DebugLog.write("splitPane requested pane=\(paneID) axis=\(axis)")
     guard let activeWorkspaceID, let index = workspaceRuntimes.firstIndex(where: { $0.id == activeWorkspaceID }) else {
       DebugLog.write("splitPane ignored: no active workspace")
+      return
+    }
+    guard canSplitPaneInCurrentBounds(paneID, axis: axis) else {
+      rejectSplitForInsufficientSpace(paneID: paneID, axis: axis, reason: "insufficient pane bounds")
       return
     }
     var runtime = workspaceRuntimes[index]
@@ -445,6 +480,11 @@ final class AppModel: ObservableObject {
       defaultWorkingDirectory: settings.defaultWorkingDirectory
     )
 
+    guard splitCanFitAvailableScreen(root: runtime.layout.root, targetPaneId: paneID, axis: axis) else {
+      rejectSplitForInsufficientSpace(paneID: paneID, axis: axis, reason: "insufficient screen space")
+      return
+    }
+
     do {
       let split = try paneWorkspaceController.splitPane(
         workspaceID: activeWorkspaceID,
@@ -456,6 +496,7 @@ final class AppModel: ObservableObject {
       )
       runtime.layout = split.workspace
       runtime.cwdBySession[split.pane.sessionId] = cwd
+      seedPaneSplitAvailabilityAfterSplit(originalPaneID: paneID, newPaneID: split.pane.paneId, axis: axis)
       workspaceRuntimes[index] = runtime
       persistWorkspaceRuntime(at: index)
       expandTerminalWindowIfNeeded(for: workspaceRuntimes[index])
@@ -466,6 +507,106 @@ final class AppModel: ObservableObject {
       shellIntegrationState = "split unavailable: \(error.localizedDescription)"
       DebugLog.write("splitPane failed error=\(error.localizedDescription)")
     }
+  }
+
+  private func canSplitPaneInCurrentBounds(_ paneID: UUID, axis: TerminalSplitAxis) -> Bool {
+    guard let availability = paneSplitAvailability[paneID] else { return true }
+    return availability.allows(axis: axis)
+  }
+
+  private func rejectSplitForInsufficientSpace(paneID: UUID, axis: TerminalSplitAxis, reason: String) {
+    let message = appText.splitRequiresMoreSpaceToast
+    shellIntegrationState = message
+    showTitlebarToast(message, style: .info, lifetime: .transient(2.0))
+    NSSound.beep()
+    DebugLog.write("splitPane blocked: \(reason) pane=\(paneID) axis=\(axis)")
+  }
+
+  private func seedPaneSplitAvailabilityAfterSplit(
+    originalPaneID: UUID,
+    newPaneID: UUID,
+    axis: TerminalSplitAxis
+  ) {
+    guard
+      let previous = paneSplitAvailability[originalPaneID],
+      let sizes = childPaneSizesAfterSplit(size: previous.size, axis: axis)
+    else {
+      return
+    }
+    paneSplitAvailability[originalPaneID] = paneSplitAvailability(for: sizes.first)
+    paneSplitAvailability[newPaneID] = paneSplitAvailability(for: sizes.second)
+    DebugLog.write("pane split availability seeded original=\(originalPaneID) new=\(newPaneID) axis=\(axis)")
+  }
+
+  private func childPaneSizesAfterSplit(
+    size: NSSize,
+    axis: TerminalSplitAxis
+  ) -> (first: NSSize, second: NSSize)? {
+    let dividerThickness = 1.0
+    switch axis {
+    case .horizontal:
+      guard let firstWidth = SplitRatioLayout.safeFirstLength(
+        totalLength: Double(size.width),
+        dividerThickness: dividerThickness,
+        ratio: 0.5
+      ) else {
+        return nil
+      }
+      let secondWidth = max(0, Double(size.width) - dividerThickness - firstWidth)
+      return (
+        NSSize(width: firstWidth, height: Double(size.height)),
+        NSSize(width: secondWidth, height: Double(size.height))
+      )
+    case .vertical:
+      guard let firstHeight = SplitRatioLayout.safeFirstLength(
+        totalLength: Double(size.height),
+        dividerThickness: dividerThickness,
+        ratio: 0.5
+      ) else {
+        return nil
+      }
+      let secondHeight = max(0, Double(size.height) - dividerThickness - firstHeight)
+      return (
+        NSSize(width: Double(size.width), height: firstHeight),
+        NSSize(width: Double(size.width), height: secondHeight)
+      )
+    }
+  }
+
+  private func paneSplitAvailability(for size: NSSize) -> PaneSplitAvailability {
+    PaneSplitAvailability(
+      size: size,
+      canSplitRight: SplitRatioLayout.canSplit(totalLength: Double(size.width), dividerThickness: 1),
+      canSplitDown: SplitRatioLayout.canSplit(totalLength: Double(size.height), dividerThickness: 1)
+    )
+  }
+
+  private func removePaneSplitAvailability(for panes: [TerminalPane]) {
+    for pane in panes {
+      paneSplitAvailability[pane.paneId] = nil
+    }
+  }
+
+  private func splitCanFitAvailableScreen(
+    root: PaneNode,
+    targetPaneId: UUID,
+    axis: TerminalSplitAxis
+  ) -> Bool {
+    guard
+      let minimum = SplitRatioLayout.windowMinimumContentSizeAfterSplit(
+        root: root,
+        targetPaneId: targetPaneId,
+        axis: axis,
+        baseWidth: ProGhosttyWindowSizing.minimumContentWidth,
+        baseHeight: ProGhosttyWindowSizing.minimumContentHeight
+      ),
+      let maximum = terminalWindowMaximumContentSize()
+    else {
+      return true
+    }
+
+    return minimum.width <= Double(maximum.width) + 0.5
+      && minimum.height <= Double(maximum.height) + 0.5
   }
 
   func closeSelectedPane() {
@@ -493,6 +634,7 @@ final class AppModel: ObservableObject {
       guard let updatedLayout = paneWorkspaceController.workspaceLayout(id: activeWorkspaceID) else { return }
       runtime.layout = updatedLayout
       runtime.cwdBySession[closed.sessionId] = nil
+      paneSplitAvailability[closed.paneId] = nil
       workspaceRuntimes[index] = runtime
       persistWorkspaceRuntime(at: index)
       applyTerminalWindowMinimumContentSize(for: runtime)
@@ -662,7 +804,7 @@ final class AppModel: ObservableObject {
     }
 
     let minimum = minimumContentSize(for: runtime.layout.root)
-    window.contentMinSize = nsSize(from: minimum)
+    applyTerminalWindowMinimumSize(to: window, minimum: minimum)
     let target = SplitRatioLayout.workspaceSwitchTargetContentSize(
       current: contentSize(from: currentSize),
       remembered: rememberedWorkspaceContentSizes[runtime.id].map(contentSize(from:)),
@@ -676,15 +818,24 @@ final class AppModel: ObservableObject {
 
   private func applyTerminalWindowMinimumContentSize(for runtime: WorkspaceRuntime) {
     guard let window = terminalWindow() else { return }
-    window.contentMinSize = nsSize(from: minimumContentSize(for: runtime.layout.root))
+    applyTerminalWindowMinimumSize(to: window, minimum: minimumContentSize(for: runtime.layout.root))
   }
 
   private func minimumContentSize(for root: PaneNode) -> SplitRatioLayout.ContentSize {
-    let treeMinimum = SplitRatioLayout.minimumContentSize(for: root)
-    return SplitRatioLayout.ContentSize(
-      width: max(ProGhosttyWindowSizing.minimumContentWidth, treeMinimum.width),
-      height: max(ProGhosttyWindowSizing.minimumContentHeight, treeMinimum.height)
+    SplitRatioLayout.windowMinimumContentSize(
+      for: root,
+      baseWidth: ProGhosttyWindowSizing.minimumContentWidth,
+      baseHeight: ProGhosttyWindowSizing.minimumContentHeight
     )
+  }
+
+  private func applyTerminalWindowMinimumSize(
+    to window: NSWindow,
+    minimum: SplitRatioLayout.ContentSize
+  ) {
+    let contentSize = nsSize(from: minimum)
+    window.contentMinSize = contentSize
+    window.minSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: contentSize)).size
   }
 
   private func terminalWindow() -> NSWindow? {
@@ -712,6 +863,14 @@ final class AppModel: ObservableObject {
       }
     }
     let size = window.contentLayoutRect.size
+    return size.width > 0 && size.height > 0 ? size : nil
+  }
+
+  private func terminalWindowMaximumContentSize() -> NSSize? {
+    guard let window = terminalWindow(), let screen = window.screen ?? NSScreen.main else {
+      return nil
+    }
+    let size = window.contentRect(forFrameRect: screen.visibleFrame).size
     return size.width > 0 && size.height > 0 ? size : nil
   }
 
@@ -1072,6 +1231,7 @@ final class AppModel: ObservableObject {
       for pane in runtimePanes {
         sessionManager.closeSession(pane.sessionId)
       }
+      removePaneSplitAvailability(for: runtimePanes)
       workspaceRuntimes.removeAll { $0.id == runtimeID }
       savedLayoutSnapshots[runtimeID] = nil
       rememberedWorkspaceContentSizes[runtimeID] = nil
@@ -1082,6 +1242,7 @@ final class AppModel: ObservableObject {
       syncWorkspaceSwitcherState()
       return runtimePanes
     }
+    removePaneSplitAvailability(for: closed.panes)
     workspaceRuntimes.removeAll { $0.id == closed.workspaceID }
     savedLayoutSnapshots[closed.workspaceID] = nil
     rememberedWorkspaceContentSizes[closed.workspaceID] = nil
@@ -1251,6 +1412,7 @@ final class AppModel: ObservableObject {
         workspace.layout.root = layoutUpdatingPaneCwd(workspace.layout.root, session: session, cwd: cwd)
         paneWorkspaceController.replaceWorkspaceLayout(workspace.layout)
       }
+      objectWillChange.send()
     case .osc(let session, let sequence):
       shellIntegrationState = "available"
       handleProGhosttyControlOsc(session: session, sequence: sequence)

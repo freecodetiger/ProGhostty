@@ -119,6 +119,7 @@ struct AppText {
   var pathNotFoundToast: String { text("Path not found", "路径不存在") }
   var relativePathMissingCwdToast: String { text("No working directory for relative path", "没有用于解析相对路径的工作目录") }
   var revealPathFailedToast: String { text("Could not reveal path", "无法在访达中定位路径") }
+  var splitRequiresMoreSpaceToast: String { text("Split needs more screen space", "屏幕空间不足，无法继续分屏") }
   var pluginReloadCommandHint: String {
     text(
       "To apply plugin changes in an existing pane, copy and paste this command when you need it.",

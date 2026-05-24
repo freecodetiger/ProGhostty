@@ -5,6 +5,8 @@ import SwiftUI
 struct WorkspaceTitlebarView: NSViewRepresentable {
   let title: String
   let tooltip: String?
+  let subtitle: String?
+  let subtitleTooltip: String?
   let backgroundColor: NSColor
   let usesDarkAppearance: Bool
   let toast: AppModel.TitlebarToast?
@@ -22,6 +24,8 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
   func updateNSView(_ view: NSView, context: Context) {
     context.coordinator.title = title
     context.coordinator.tooltip = tooltip
+    context.coordinator.subtitle = subtitle
+    context.coordinator.subtitleTooltip = subtitleTooltip
     context.coordinator.backgroundColor = backgroundColor
     context.coordinator.usesDarkAppearance = usesDarkAppearance
     context.coordinator.toast = toast
@@ -47,6 +51,8 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
   @MainActor final class Coordinator: NSObject {
     var title: String = "ProGhostty"
     var tooltip: String?
+    var subtitle: String?
+    var subtitleTooltip: String?
     var backgroundColor: NSColor = .black
     var usesDarkAppearance = true
     var toast: AppModel.TitlebarToast?
@@ -55,10 +61,12 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
 
     private weak var installedWindow: NSWindow?
     private let titlebarControlsStack = NSStackView()
+    private let subtitleLabel = NSTextField(labelWithString: "")
     private let toastView = TitlebarToastCapsuleView()
     private let button = NSButton(title: "ProGhostty", target: nil, action: nil)
     private let titlebarBackgroundView = TitlebarBackgroundView()
     private var titlebarBackgroundConstraints: [NSLayoutConstraint] = []
+    private var subtitleConstraints: [NSLayoutConstraint] = []
     private var titlebarControlsConstraints: [NSLayoutConstraint] = []
     private let notificationObservers = NotificationObserverBag()
 
@@ -80,6 +88,18 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       button.cell?.wraps = false
       button.setContentHuggingPriority(.required, for: .horizontal)
       button.widthAnchor.constraint(lessThanOrEqualToConstant: 360).isActive = true
+      subtitleLabel.font = .systemFont(ofSize: 12, weight: .medium)
+      subtitleLabel.alignment = .center
+      subtitleLabel.lineBreakMode = .byTruncatingMiddle
+      subtitleLabel.maximumNumberOfLines = 1
+      subtitleLabel.drawsBackground = false
+      subtitleLabel.isBordered = false
+      subtitleLabel.isEditable = false
+      subtitleLabel.isSelectable = false
+      subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
+      subtitleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+      subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+      subtitleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360).isActive = true
       titlebarControlsStack.orientation = .horizontal
       titlebarControlsStack.alignment = .centerY
       titlebarControlsStack.spacing = 8
@@ -106,6 +126,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       window.title = title
       button.title = title
       button.toolTip = tooltip
+      updateSubtitle()
       updateToast()
     }
 
@@ -119,6 +140,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       button.contentTintColor = usesDarkAppearance
         ? NSColor(calibratedWhite: 0.78, alpha: 1)
         : .secondaryLabelColor
+      subtitleLabel.textColor = button.contentTintColor
       updateToast()
       window.isMovableByWindowBackground = false
       installTitlebarBackground(in: window)
@@ -136,8 +158,24 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         self.installTitlebarControls(in: window)
         self.harmonizeTitlebarMaterials(in: window)
         self.keepTitlebarViewsOrdered(in: window)
+        self.updateSubtitle()
         self.updateToast()
       }
+    }
+
+    private func updateSubtitle() {
+      guard let subtitle else {
+        subtitleLabel.isHidden = true
+        subtitleLabel.stringValue = ""
+        subtitleLabel.toolTip = nil
+        refreshAccessoryLayout()
+        return
+      }
+
+      subtitleLabel.isHidden = false
+      subtitleLabel.stringValue = subtitle
+      subtitleLabel.toolTip = subtitleTooltip
+      refreshAccessoryLayout()
     }
 
     private func updateToast() {
@@ -166,6 +204,9 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       titlebarControlsStack.invalidateIntrinsicContentSize()
       titlebarControlsStack.needsLayout = true
       titlebarControlsStack.layoutSubtreeIfNeeded()
+      subtitleLabel.invalidateIntrinsicContentSize()
+      subtitleLabel.needsLayout = true
+      subtitleLabel.layoutSubtreeIfNeeded()
       installedWindow?.contentView?.superview?.needsLayout = true
       installedWindow?.contentView?.superview?.layoutSubtreeIfNeeded()
     }
@@ -193,6 +234,20 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
 
     private func installTitlebarControls(in window: NSWindow) {
       guard let host = titlebarOverlayHost(in: window) else { return }
+
+      if subtitleLabel.superview !== host {
+        NSLayoutConstraint.deactivate(subtitleConstraints)
+        subtitleConstraints.removeAll()
+        subtitleLabel.removeFromSuperview()
+        host.addSubview(subtitleLabel, positioned: .above, relativeTo: nil)
+        subtitleConstraints = [
+          subtitleLabel.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+          subtitleLabel.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
+          subtitleLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
+          subtitleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: host.leadingAnchor, constant: 120),
+        ]
+        NSLayoutConstraint.activate(subtitleConstraints)
+      }
 
       if titlebarControlsStack.superview !== host {
         NSLayoutConstraint.deactivate(titlebarControlsConstraints)
@@ -260,6 +315,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         window.standardWindowButton(.closeButton),
         window.standardWindowButton(.miniaturizeButton),
         window.standardWindowButton(.zoomButton),
+        subtitleLabel,
         titlebarControlsStack,
       ].compactMap { $0 }
 

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import ProGhosttyCore
@@ -10,13 +11,53 @@ struct SplitRatioLayoutTests {
   }
 
   @Test func mainWindowMinimumStillLeavesRoomForStableSinglePane() {
-    #expect(ProGhosttyWindowSizing.minimumContentWidth >= SplitRatioLayout.minimumPaneLength * 3)
-    #expect(ProGhosttyWindowSizing.minimumContentHeight >= SplitRatioLayout.minimumPaneLength * 2)
+    #expect(ProGhosttyWindowSizing.minimumContentWidth >= SplitRatioLayout.minimumPaneWidth * 2)
+    #expect(ProGhosttyWindowSizing.minimumContentHeight >= SplitRatioLayout.minimumPaneHeight * 3)
   }
 
   @Test func mainWindowDefaultCanStayLargerThanMinimum() {
     #expect(ProGhosttyWindowSizing.defaultContentWidth >= ProGhosttyWindowSizing.minimumContentWidth)
     #expect(ProGhosttyWindowSizing.defaultContentHeight >= ProGhosttyWindowSizing.minimumContentHeight)
+  }
+
+  @Test func windowMinimumContentSizeRespectsBaseWindowFloor() {
+    let root = PaneNode.leaf(TerminalPane(sessionId: TerminalSessionID(), title: "one"))
+    let size = SplitRatioLayout.windowMinimumContentSize(
+      for: root,
+      baseWidth: 560,
+      baseHeight: 360
+    )
+
+    #expect(size.width == 560)
+    #expect(size.height == 360)
+  }
+
+  @Test func windowMinimumContentSizeAfterSplitReturnsProspectiveMinimum() throws {
+    let pane = TerminalPane(sessionId: TerminalSessionID(), title: "one")
+    let root = PaneNode.leaf(pane)
+    let size = try #require(SplitRatioLayout.windowMinimumContentSizeAfterSplit(
+      root: root,
+      targetPaneId: pane.paneId,
+      axis: .horizontal,
+      baseWidth: 560,
+      baseHeight: 360
+    ))
+
+    #expect(size.width == 560)
+    #expect(size.height == 360)
+  }
+
+  @Test func windowMinimumContentSizeAfterSplitReturnsNilForMissingPane() {
+    let root = PaneNode.leaf(TerminalPane(sessionId: TerminalSessionID(), title: "one"))
+    let size = SplitRatioLayout.windowMinimumContentSizeAfterSplit(
+      root: root,
+      targetPaneId: UUID(),
+      axis: .horizontal,
+      baseWidth: 560,
+      baseHeight: 360
+    )
+
+    #expect(size == nil)
   }
 
   @Test func pluginManagerWindowHasIndependentConfigurationSize() {
@@ -127,6 +168,42 @@ struct SplitRatioLayoutTests {
     #expect(firstLength == 180)
   }
 
+  @Test func clampedDividerPositionKeepsBothPanesAboveMinimum() throws {
+    let low = try #require(SplitRatioLayout.clampedDividerPosition(
+      proposedPosition: 30,
+      totalLength: 360,
+      dividerThickness: 8,
+      minimumChildLength: 120
+    ))
+    let high = try #require(SplitRatioLayout.clampedDividerPosition(
+      proposedPosition: 300,
+      totalLength: 360,
+      dividerThickness: 8,
+      minimumChildLength: 120
+    ))
+    let middle = try #require(SplitRatioLayout.clampedDividerPosition(
+      proposedPosition: 180,
+      totalLength: 360,
+      dividerThickness: 8,
+      minimumChildLength: 120
+    ))
+
+    #expect(low == 120)
+    #expect(high == 232)
+    #expect(middle == 180)
+  }
+
+  @Test func clampedDividerPositionReturnsNilWhenSplitCannotFit() {
+    let position = SplitRatioLayout.clampedDividerPosition(
+      proposedPosition: 100,
+      totalLength: 200,
+      dividerThickness: 8,
+      minimumChildLength: 120
+    )
+
+    #expect(position == nil)
+  }
+
   @Test func paneTreeMinimumContentSizeAccumulatesNestedSplits() {
     let first = TerminalPane(sessionId: TerminalSessionID(), title: "one")
     let second = TerminalPane(sessionId: TerminalSessionID(), title: "two")
@@ -150,6 +227,41 @@ struct SplitRatioLayoutTests {
 
     #expect(size.width == 241)
     #expect(size.height == 161)
+  }
+
+  @Test func defaultPaneTreeMinimumUsesWiderTerminalLeaves() {
+    let first = TerminalPane(sessionId: TerminalSessionID(), title: "one")
+    let second = TerminalPane(sessionId: TerminalSessionID(), title: "two")
+    let root = PaneNode.split(SplitPane(
+      axis: .horizontal,
+      first: .leaf(first),
+      second: .leaf(second)
+    ))
+
+    let size = SplitRatioLayout.minimumContentSize(for: root)
+
+    #expect(size.width == SplitRatioLayout.minimumPaneWidth * 2 + 1)
+    #expect(size.height == SplitRatioLayout.minimumPaneHeight)
+  }
+
+  @Test func clampedDividerPositionSupportsDifferentChildMinimums() throws {
+    let low = try #require(SplitRatioLayout.clampedDividerPosition(
+      proposedPosition: 100,
+      totalLength: 760,
+      dividerThickness: 8,
+      minimumFirstLength: 489,
+      minimumSecondLength: 240
+    ))
+    let high = try #require(SplitRatioLayout.clampedDividerPosition(
+      proposedPosition: 650,
+      totalLength: 760,
+      dividerThickness: 8,
+      minimumFirstLength: 489,
+      minimumSecondLength: 240
+    ))
+
+    #expect(low == 489)
+    #expect(high == 512)
   }
 
   @Test func workspaceSwitchTargetSizeOnlyExpandsToRememberedOrLayoutMinimum() {

@@ -42,6 +42,13 @@ struct OscParserTests {
     #expect(CwdTracker.cwd(from: sequences[0]) == "/Users/zpc/project")
   }
 
+  @Test func parseKittyShellCwd() {
+    var parser = OscParser()
+    let sequences = parser.parse(Data("\u{1B}]7;kitty-shell-cwd://MacBook-Pro.local/Users/zpc/project\u{07}".utf8))
+    #expect(sequences.first?.command == "7")
+    #expect(CwdTracker.cwd(from: sequences[0]) == "/Users/zpc/project")
+  }
+
   @Test func parseChunkedOsc() {
     var parser = OscParser()
     #expect(parser.parse(Data("\u{1B}]133".utf8)).isEmpty)

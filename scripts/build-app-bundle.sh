@@ -24,6 +24,10 @@ mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 cp "${BUILD_DIR}/${PRODUCT}" "${MACOS_DIR}/${PRODUCT}"
 cp "${GENERATED_ICON}" "${RESOURCES_DIR}/${ICON_FILE}"
 
+mkdir -p "${RESOURCES_DIR}/ghostty" "${RESOURCES_DIR}/terminfo/78"
+cp -R "${ROOT_DIR}/Vendor/ghostty/src/shell-integration" "${RESOURCES_DIR}/ghostty/"
+touch "${RESOURCES_DIR}/terminfo/78/xterm-ghostty"
+
 cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"

@@ -1,5 +1,6 @@
 import AppKit
 import ProGhosttyCore
+import QuartzCore
 import SwiftUI
 
 struct TerminalCanvasView: View {
@@ -50,6 +51,14 @@ private struct TerminalTreeLayoutView: NSViewControllerRepresentable {
       palette: model.terminalPalette,
       onResize: { paneID, rows, cols in model.resizePane(paneID, rows: rows, cols: cols) },
       isResizeSensitiveScreen: { paneID in model.paneIsResizeSensitiveScreen(paneID) },
+      onSplitAvailabilityChanged: { paneID, size, canSplitRight, canSplitDown in
+        model.updatePaneSplitAvailability(
+          paneID,
+          size: size,
+          canSplitRight: canSplitRight,
+          canSplitDown: canSplitDown
+        )
+      },
       onRatioChanged: { splitID, ratio in model.updateSplitRatio(splitID, ratio: ratio) },
       onWorkspaceSwitcher: { model.openWorkspaceSwitcher() },
       onSettings: { model.openSettingsWindow() },
@@ -74,6 +83,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
   private var palette = TerminalSurfacePalette.dark
   private var onResize: ((UUID, Int, Int) -> Void)?
   private var isResizeSensitiveScreen: ((UUID) -> Bool)?
+  private var onSplitAvailabilityChanged: ((UUID, NSSize, Bool, Bool) -> Void)?
   private var onRatioChanged: ((UUID, Double) -> Void)?
   private var onWorkspaceSwitcher: (() -> Void)?
   private var onSettings: (() -> Void)?
@@ -98,6 +108,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     palette: TerminalSurfacePalette,
     onResize: @escaping (UUID, Int, Int) -> Void,
     isResizeSensitiveScreen: @escaping (UUID) -> Bool,
+    onSplitAvailabilityChanged: @escaping (UUID, NSSize, Bool, Bool) -> Void,
     onRatioChanged: @escaping (UUID, Double) -> Void,
     onWorkspaceSwitcher: @escaping () -> Void,
     onSettings: @escaping () -> Void,
@@ -117,6 +128,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     view.layer?.backgroundColor = palette.background.cgColor
     self.onResize = onResize
     self.isResizeSensitiveScreen = isResizeSensitiveScreen
+    self.onSplitAvailabilityChanged = onSplitAvailabilityChanged
     self.onRatioChanged = onRatioChanged
     self.onWorkspaceSwitcher = onWorkspaceSwitcher
     self.onSettings = onSettings
@@ -210,6 +222,9 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
         palette: palette,
         onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
         isResizeSensitiveScreen: { [weak self] paneID in self?.isResizeSensitiveScreen?(paneID) ?? false },
+        onSplitAvailabilityChanged: { [weak self] paneID, size, canSplitRight, canSplitDown in
+          self?.onSplitAvailabilityChanged?(paneID, size, canSplitRight, canSplitDown)
+        },
         onWorkspaceSwitcher: { [weak self] in self?.onWorkspaceSwitcher?() },
         onSettings: { [weak self] in self?.onSettings?() },
         keyboardShortcuts: keyboardShortcuts
@@ -229,12 +244,14 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       controller.hasMultiplePanes = hasMultiplePanes
       controller.onResize = onResize
       controller.isResizeSensitiveScreen = isResizeSensitiveScreen
+      controller.onSplitAvailabilityChanged = onSplitAvailabilityChanged
       controller.onRatioChanged = onRatioChanged
       controller.onWorkspaceSwitcher = onWorkspaceSwitcher
       controller.onSettings = onSettings
       controller.viewForSession = viewForSession
       let splitView = TerminalSplitView()
       splitView.customDividerColor = palette.splitDivider
+      controller.configureMinimumLengths(on: splitView, for: split)
       splitView.wantsLayer = true
       splitView.layer?.backgroundColor = palette.background.cgColor
       splitView.isVertical = split.axis == .horizontal
@@ -282,7 +299,9 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     guard let position = SplitRatioLayout.safeFirstLength(
       totalLength: Double(total),
       dividerThickness: Double(splitView.dividerThickness),
-      ratio: targetRatio
+      ratio: targetRatio,
+      minimumFirstLength: Double((splitView as? TerminalSplitView)?.minimumFirstLength ?? minimumPaneLength),
+      minimumSecondLength: Double((splitView as? TerminalSplitView)?.minimumSecondLength ?? minimumPaneLength)
     ) else {
       DebugLog.write("SplitContainer skip applyRatio split=\(splitId?.uuidString ?? "-") total=\(total) divider=\(splitView.dividerThickness) target=\(targetRatio): insufficient space")
       return
@@ -300,6 +319,19 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     childView.setContentHuggingPriority(.defaultLow, for: .vertical)
     childView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     childView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+  }
+
+  private func configureMinimumLengths(on splitView: TerminalSplitView, for split: SplitPane) {
+    let first = SplitRatioLayout.minimumContentSize(for: split.first)
+    let second = SplitRatioLayout.minimumContentSize(for: split.second)
+    switch split.axis {
+    case .horizontal:
+      splitView.minimumFirstLength = CGFloat(first.width)
+      splitView.minimumSecondLength = CGFloat(second.width)
+    case .vertical:
+      splitView.minimumFirstLength = CGFloat(first.height)
+      splitView.minimumSecondLength = CGFloat(second.height)
+    }
   }
 
   private func applyRatioRecursively() {
@@ -371,7 +403,10 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       splitController.palette = palette
       splitController.hasMultiplePanes = hasMultiplePanes
       splitController.view.layer?.backgroundColor = palette.background.cgColor
-      (splitController.view as? TerminalSplitView)?.customDividerColor = palette.splitDivider
+      if let splitView = splitController.view as? TerminalSplitView {
+        splitView.customDividerColor = palette.splitDivider
+        splitController.configureMinimumLengths(on: splitView, for: split)
+      }
       guard
         sync(node: split.first, with: splitController.children[0], selectedPaneID: selectedPaneID),
         sync(node: split.second, with: splitController.children[1], selectedPaneID: selectedPaneID)
@@ -412,6 +447,9 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       dimsWhenInactive: hasMultiplePanes,
       onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
       isResizeSensitiveScreen: { [weak self] paneID in self?.isResizeSensitiveScreen?(paneID) ?? false },
+      onSplitAvailabilityChanged: { [weak self] paneID, size, canSplitRight, canSplitDown in
+        self?.onSplitAvailabilityChanged?(paneID, size, canSplitRight, canSplitDown)
+      },
       onWorkspaceSwitcher: { [weak self] in self?.onWorkspaceSwitcher?() },
       onSettings: { [weak self] in self?.onSettings?() },
       keyboardShortcuts: keyboardShortcuts
@@ -430,11 +468,14 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     let total = splitView.isVertical ? splitView.bounds.width : splitView.bounds.height
     guard SplitRatioLayout.canSplit(
       totalLength: Double(total),
-      dividerThickness: Double(splitView.dividerThickness)
+      dividerThickness: Double(splitView.dividerThickness),
+      minimumFirstLength: Double((splitView as? TerminalSplitView)?.minimumFirstLength ?? minimumPaneLength),
+      minimumSecondLength: Double((splitView as? TerminalSplitView)?.minimumSecondLength ?? minimumPaneLength)
     ) else {
       return proposedMinimumPosition
     }
-    return max(proposedMinimumPosition, minimumPaneLength)
+    let minimum = (splitView as? TerminalSplitView)?.minimumFirstLength ?? minimumPaneLength
+    return max(proposedMinimumPosition, minimum)
   }
 
   func splitView(
@@ -445,21 +486,30 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     let total = splitView.isVertical ? splitView.bounds.width : splitView.bounds.height
     guard SplitRatioLayout.canSplit(
       totalLength: Double(total),
-      dividerThickness: Double(splitView.dividerThickness)
+      dividerThickness: Double(splitView.dividerThickness),
+      minimumFirstLength: Double((splitView as? TerminalSplitView)?.minimumFirstLength ?? minimumPaneLength),
+      minimumSecondLength: Double((splitView as? TerminalSplitView)?.minimumSecondLength ?? minimumPaneLength)
     ) else {
       return proposedMaximumPosition
     }
-    return min(proposedMaximumPosition, total - splitView.dividerThickness - minimumPaneLength)
+    let minimum = (splitView as? TerminalSplitView)?.minimumSecondLength ?? minimumPaneLength
+    return min(proposedMaximumPosition, total - splitView.dividerThickness - minimum)
   }
 }
 
 private final class TerminalSplitView: NSSplitView {
   var isUserResizingDivider = false
   var onUserResizeFinished: (() -> Void)?
+  var minimumFirstLength = CGFloat(SplitRatioLayout.minimumPaneLength)
+  var minimumSecondLength = CGFloat(SplitRatioLayout.minimumPaneLength)
   private let dividerInteractionOutset: CGFloat = 4
+  private var isEnforcingMinimumDividerPosition = false
+  private var previewDividerPosition: CGFloat?
+  private let previewDividerLayer = CALayer()
   var customDividerColor = TerminalSurfacePalette.dark.splitDivider {
     didSet {
       needsDisplay = true
+      updatePreviewDividerLayer()
     }
   }
 
@@ -478,16 +528,134 @@ private final class TerminalSplitView: NSSplitView {
     }
   }
 
+  override func layout() {
+    super.layout()
+    enforceMinimumDividerPosition()
+    updatePreviewDividerLayer()
+  }
+
   override func mouseDown(with event: NSEvent) {
-    guard dividerIndex(at: event) != nil else {
+    guard let dividerIndex = dividerIndex(at: event) else {
       super.mouseDown(with: event)
       return
     }
 
-    isUserResizingDivider = true
-    super.mouseDown(with: event)
-    isUserResizingDivider = false
-    onUserResizeFinished?()
+    trackDividerPreview(afterSubviewAt: dividerIndex, initialEvent: event)
+  }
+
+  private func trackDividerPreview(afterSubviewAt dividerIndex: Int, initialEvent: NSEvent) {
+    guard let initialPosition = currentDividerPosition(afterSubviewAt: dividerIndex) else { return }
+    showPreviewDivider(at: initialPosition)
+
+    var finalPosition = initialPosition
+    var didDrag = false
+    while let event = window?.nextEvent(
+      matching: [.leftMouseDragged, .leftMouseUp],
+      until: .distantFuture,
+      inMode: .eventTracking,
+      dequeue: true
+    ) {
+      switch event.type {
+      case .leftMouseDragged:
+        guard let position = clampedDividerPosition(for: event) else { continue }
+        didDrag = true
+        finalPosition = position
+        showPreviewDivider(at: position)
+      case .leftMouseUp:
+        hidePreviewDivider()
+        if didDrag {
+          isUserResizingDivider = true
+          setPosition(finalPosition, ofDividerAt: dividerIndex)
+          adjustSubviews()
+          isUserResizingDivider = false
+          onUserResizeFinished?()
+        }
+        return
+      default:
+        continue
+      }
+    }
+
+    hidePreviewDivider()
+  }
+
+  private func clampedDividerPosition(for event: NSEvent) -> CGFloat? {
+    let location = convert(event.locationInWindow, from: nil)
+    let proposed = isVertical ? location.x : location.y
+    let total = isVertical ? bounds.width : bounds.height
+    guard let position = SplitRatioLayout.clampedDividerPosition(
+      proposedPosition: Double(proposed),
+      totalLength: Double(total),
+      dividerThickness: Double(dividerThickness),
+      minimumFirstLength: Double(minimumFirstLength),
+      minimumSecondLength: Double(minimumSecondLength)
+    ) else {
+      return nil
+    }
+    return CGFloat(position)
+  }
+
+  private func enforceMinimumDividerPosition() {
+    guard
+      !isEnforcingMinimumDividerPosition,
+      arrangedSubviews.count == 2,
+      let currentPosition = currentDividerPosition(afterSubviewAt: 0)
+    else {
+      return
+    }
+    let total = isVertical ? bounds.width : bounds.height
+    guard let position = SplitRatioLayout.clampedDividerPosition(
+      proposedPosition: Double(currentPosition),
+      totalLength: Double(total),
+      dividerThickness: Double(dividerThickness),
+      minimumFirstLength: Double(minimumFirstLength),
+      minimumSecondLength: Double(minimumSecondLength)
+    ) else {
+      return
+    }
+    let nextPosition = CGFloat(position)
+    guard abs(nextPosition - currentPosition) > 0.5 else { return }
+
+    isEnforcingMinimumDividerPosition = true
+    setPosition(nextPosition, ofDividerAt: 0)
+    adjustSubviews()
+    isEnforcingMinimumDividerPosition = false
+  }
+
+  private func currentDividerPosition(afterSubviewAt index: Int) -> CGFloat? {
+    guard index >= 0, index < arrangedSubviews.count - 1 else { return nil }
+    let subviewFrame = arrangedSubviews[index].frame
+    return isVertical ? subviewFrame.maxX : subviewFrame.maxY
+  }
+
+  private func showPreviewDivider(at position: CGFloat) {
+    previewDividerPosition = position
+    updatePreviewDividerLayer()
+  }
+
+  private func hidePreviewDivider() {
+    previewDividerPosition = nil
+    previewDividerLayer.removeFromSuperlayer()
+  }
+
+  private func updatePreviewDividerLayer() {
+    guard let previewDividerPosition else {
+      previewDividerLayer.removeFromSuperlayer()
+      return
+    }
+    wantsLayer = true
+    guard let layer else { return }
+    if previewDividerLayer.superlayer !== layer {
+      layer.addSublayer(previewDividerLayer)
+    }
+
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    previewDividerLayer.zPosition = 1_000
+    previewDividerLayer.backgroundColor = customDividerColor.withAlphaComponent(0.58).cgColor
+    previewDividerLayer.frame = previewDividerLayerFrame(position: previewDividerPosition)
+    previewDividerLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+    CATransaction.commit()
   }
 
   private func dividerIndex(at event: NSEvent) -> Int? {
@@ -533,6 +701,25 @@ private final class TerminalSplitView: NSSplitView {
     }
   }
 
+  private func previewDividerLayerFrame(position: CGFloat) -> CGRect {
+    let thickness = max(3, dividerThickness + 2)
+    if isVertical {
+      return CGRect(
+        x: position,
+        y: bounds.minY,
+        width: thickness,
+        height: bounds.height
+      )
+    } else {
+      return CGRect(
+        x: bounds.minX,
+        y: position,
+        width: bounds.width,
+        height: thickness
+      )
+    }
+  }
+
   private func dividerInteractionRect(afterSubviewAt index: Int) -> NSRect {
     dividerRect(afterSubviewAt: index)
       .insetBy(
@@ -549,9 +736,11 @@ final class TerminalPaneViewController: NSViewController {
   private var onPasteDroppedPaths: ((UUID, String) -> Void)?
   private var onResize: ((UUID, Int, Int) -> Void)?
   private var isResizeSensitiveScreen: ((UUID) -> Bool)?
+  private var onSplitAvailabilityChanged: ((UUID, NSSize, Bool, Bool) -> Void)?
   private var currentPalette = TerminalSurfacePalette.dark
   private var isDropTargeted = false
   private var lastAppliedGridSize: TerminalGridSize?
+  private var lastSplitAvailability: (canSplitRight: Bool, canSplitDown: Bool)?
   private var pendingResizeGridSize: TerminalGridSize?
   private var pendingResizeWorkItem: DispatchWorkItem?
   private var resizeCoordinator = TerminalResizeCommitCoordinator()
@@ -590,6 +779,7 @@ final class TerminalPaneViewController: NSViewController {
     dimsWhenInactive: Bool = true,
     onResize: @escaping (UUID, Int, Int) -> Void,
     isResizeSensitiveScreen: @escaping (UUID) -> Bool,
+    onSplitAvailabilityChanged: @escaping (UUID, NSSize, Bool, Bool) -> Void,
     onWorkspaceSwitcher: @escaping () -> Void,
     onSettings: @escaping () -> Void,
     keyboardShortcuts: KeyboardShortcutSettings
@@ -597,6 +787,7 @@ final class TerminalPaneViewController: NSViewController {
     self.onSelect = onSelect
     self.onResize = onResize
     self.isResizeSensitiveScreen = isResizeSensitiveScreen
+    self.onSplitAvailabilityChanged = onSplitAvailabilityChanged
     self.onPasteDroppedPaths = onPasteDroppedPaths
     currentPalette = palette
     configureDropHandling()
@@ -641,6 +832,7 @@ final class TerminalPaneViewController: NSViewController {
       pendingResizeWorkItem = nil
       return
     }
+    reportSplitAvailability()
 
     let gridSize = terminalGridSize(for: size)
     let liveResizeActive = isLiveResizeActive
@@ -910,6 +1102,20 @@ final class TerminalPaneViewController: NSViewController {
   private func canSplit(axis: SplitAxis) -> Bool {
     let length = axis == .horizontal ? view.bounds.width : view.bounds.height
     return SplitRatioLayout.canSplit(totalLength: Double(length), dividerThickness: 1)
+  }
+
+  private func reportSplitAvailability() {
+    let availability = (
+      canSplitRight: canSplit(axis: .horizontal),
+      canSplitDown: canSplit(axis: .vertical)
+    )
+    guard lastSplitAvailability?.canSplitRight != availability.canSplitRight
+      || lastSplitAvailability?.canSplitDown != availability.canSplitDown
+    else {
+      return
+    }
+    lastSplitAvailability = availability
+    onSplitAvailabilityChanged?(pane.paneId, view.bounds.size, availability.canSplitRight, availability.canSplitDown)
   }
 }
 

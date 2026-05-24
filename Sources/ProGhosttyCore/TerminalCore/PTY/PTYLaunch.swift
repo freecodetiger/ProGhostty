@@ -35,7 +35,7 @@ public enum PTYLaunch {
     var pid = pid_t()
     var fd: Int32 = -1
     let arguments = shellArguments(shellPath: config.shellPath, launchCommand: config.launchCommand)
-    let environment = launchEnvironment(config.environment)
+    let environment = launchEnvironment(config.environment, shellPath: config.shellPath)
 
     let result = try withCStringArray(arguments) { argv in
       try withCStringArray(environment) { envp in
@@ -76,7 +76,9 @@ public enum PTYLaunch {
 
   static func launchEnvironment(
     _ overrides: [String: String],
-    baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
+    shellPath: String? = nil,
+    ghosttyResourcesDirectory: String? = ghosttyResourcesDirectory()
   ) -> [String] {
     var environment = baseEnvironment
     environment["TERM"] = environment["TERM"] ?? "xterm-256color"
@@ -84,6 +86,16 @@ public enum PTYLaunch {
     environment["CLICOLOR"] = environment["CLICOLOR"] ?? "1"
     environment["PROGHOSTTY"] = "1"
     environment["PROMPT_EOL_MARK"] = environment["PROMPT_EOL_MARK"] ?? ""
+    if let ghosttyResourcesDirectory {
+      environment["GHOSTTY_RESOURCES_DIR"] = environment["GHOSTTY_RESOURCES_DIR"] ?? ghosttyResourcesDirectory
+      environment["GHOSTTY_SHELL_FEATURES"] = environment["GHOSTTY_SHELL_FEATURES"] ?? "cursor:blink,path,title"
+      if isZsh(shellPath) {
+        if let existingZdotdir = environment["ZDOTDIR"] {
+          environment["GHOSTTY_ZSH_ZDOTDIR"] = environment["GHOSTTY_ZSH_ZDOTDIR"] ?? existingZdotdir
+        }
+        environment["ZDOTDIR"] = "\(ghosttyResourcesDirectory)/shell-integration/zsh"
+      }
+    }
     if overrides["NO_COLOR"] == nil {
       environment.removeValue(forKey: "NO_COLOR")
     }
@@ -91,6 +103,24 @@ public enum PTYLaunch {
       environment[key] = value
     }
     return environment.map { "\($0.key)=\($0.value)" }.sorted()
+  }
+
+  private static func isZsh(_ shellPath: String?) -> Bool {
+    guard let shellPath else { return false }
+    return URL(fileURLWithPath: shellPath).lastPathComponent == "zsh"
+  }
+
+  private static func ghosttyResourcesDirectory() -> String? {
+    guard let resourcesURL = Bundle.main.resourceURL else { return nil }
+    let ghosttyURL = resourcesURL.appendingPathComponent("ghostty", isDirectory: true)
+    let zshIntegrationURL = ghosttyURL
+      .appendingPathComponent("shell-integration", isDirectory: true)
+      .appendingPathComponent("zsh", isDirectory: true)
+      .appendingPathComponent(".zshenv", isDirectory: false)
+    guard FileManager.default.isReadableFile(atPath: zshIntegrationURL.path) else {
+      return nil
+    }
+    return ghosttyURL.path
   }
 }
 
