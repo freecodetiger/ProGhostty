@@ -40,6 +40,16 @@ public struct TerminalLinkHit: Equatable, Sendable {
 }
 
 public enum TerminalLinkDetector {
+  private struct LogicalRow {
+    var row: Int
+    var text: String
+    var start: Int
+
+    var end: Int {
+      start + text.count
+    }
+  }
+
   private static let pathPattern =
     #"(?<![A-Za-z0-9_])((?:~\/|\.{1,2}\/|/)[^\s<>"']+|(?:[A-Za-z0-9._@%+=~-]+/)+[A-Za-z0-9._@%+=~-]+\.[A-Za-z0-9._@%+=~-]+(?::\d+){0,2})"#
   private static let trailingCharacters = CharacterSet(charactersIn: ".,;!?)]}")
@@ -60,30 +70,73 @@ public enum TerminalLinkDetector {
   }
 
   private static func visiblePathHits(inRow row: Int, frame: GhosttyTerminalFrame) -> [TerminalLinkHit] {
-    let rowStart = row * frame.cols
-    let rowEnd = min(rowStart + frame.cols, frame.cells.count)
-    guard rowStart < rowEnd else { return [] }
-    let line = frame.cells[rowStart..<rowEnd].map { String($0.scalar) }.joined()
+    let rows = logicalRows(around: row, frame: frame)
+    guard !rows.isEmpty else { return [] }
+    let line = rows.map(\.text).joined()
     let nsLine = line as NSString
     let fullRange = NSRange(location: 0, length: nsLine.length)
     guard let regex = try? NSRegularExpression(pattern: pathPattern) else { return [] }
-    return regex.matches(in: line, options: [], range: fullRange).compactMap { match in
-      pathHit(from: nsLine.substring(with: match.range(at: 1)), range: match.range(at: 1), row: row)
+    return regex.matches(in: line, options: [], range: fullRange).flatMap { match in
+      pathHits(from: nsLine.substring(with: match.range(at: 1)), range: match.range(at: 1), rows: rows)
+    }.filter { hit in
+      hit.row == row
     }
   }
 
-  private static func pathHit(from rawText: String, range rawRange: NSRange, row: Int) -> TerminalLinkHit? {
+  private static func logicalRows(around row: Int, frame: GhosttyTerminalFrame) -> [LogicalRow] {
+    guard row >= 0, row < frame.rows, frame.cols > 0 else { return [] }
+    var firstRow = row
+    while firstRow > 0, rowMaySoftWrapToNext(firstRow - 1, frame: frame) {
+      firstRow -= 1
+    }
+
+    var lastRow = row
+    while lastRow + 1 < frame.rows, rowMaySoftWrapToNext(lastRow, frame: frame) {
+      lastRow += 1
+    }
+
+    var offset = 0
+    return (firstRow...lastRow).compactMap { row in
+      guard let text = text(inRow: row, frame: frame) else { return nil }
+      defer { offset += text.count }
+      return LogicalRow(row: row, text: text, start: offset)
+    }
+  }
+
+  private static func text(inRow row: Int, frame: GhosttyTerminalFrame) -> String? {
+    guard row >= 0, row < frame.rows, frame.cols > 0 else { return nil }
+    let rowStart = row * frame.cols
+    let rowEnd = min(rowStart + frame.cols, frame.cells.count)
+    guard rowStart < rowEnd else { return nil }
+    return frame.cells[rowStart..<rowEnd].map { String($0.scalar) }.joined()
+  }
+
+  private static func rowMaySoftWrapToNext(_ row: Int, frame: GhosttyTerminalFrame) -> Bool {
+    guard let text = text(inRow: row, frame: frame),
+      let lastScalar = text.unicodeScalars.last
+    else {
+      return false
+    }
+    return !CharacterSet.whitespacesAndNewlines.contains(lastScalar)
+  }
+
+  private static func pathHits(from rawText: String, range rawRange: NSRange, rows: [LogicalRow]) -> [TerminalLinkHit] {
     let trimmed = trimmingTrailingCharacters(from: rawText)
-    guard !trimmed.isEmpty else { return nil }
+    guard !trimmed.isEmpty else { return [] }
     let parsed = stripLineAndColumn(from: trimmed)
     let removedCharacterCount = rawText.count - parsed.visibleText.count
     let range = rawRange.location..<(rawRange.location + max(0, rawRange.length - removedCharacterCount))
-    return TerminalLinkHit(
-      target: .filePath(TerminalFilePathTarget(rawPath: parsed.path, line: parsed.line, column: parsed.column)),
-      row: row,
-      range: range,
-      text: parsed.visibleText
-    )
+    let target = TerminalLinkTarget.filePath(TerminalFilePathTarget(rawPath: parsed.path, line: parsed.line, column: parsed.column))
+    return rows.compactMap { row in
+      let overlap = max(range.lowerBound, row.start)..<min(range.upperBound, row.end)
+      guard overlap.lowerBound < overlap.upperBound else { return nil }
+      return TerminalLinkHit(
+        target: target,
+        row: row.row,
+        range: (overlap.lowerBound - row.start)..<(overlap.upperBound - row.start),
+        text: parsed.visibleText
+      )
+    }
   }
 
   private static func trimmingTrailingCharacters(from text: String) -> String {

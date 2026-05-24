@@ -55,6 +55,28 @@ struct TerminalLinkDetectorTests {
     #expect(hit.text == "Sources/App.swift:42:3")
   }
 
+  @Test func detectsAbsolutePathWrappedAcrossVisualRows() throws {
+    let frame = frame(rows: ["/Users/zpc/projects/", "proghostty/README.md"], cols: 20)
+
+    let firstRowHit = try #require(TerminalLinkDetector.hitTest(row: 0, col: 8, in: frame))
+    let secondRowHit = try #require(TerminalLinkDetector.hitTest(row: 1, col: 4, in: frame))
+
+    let target = TerminalLinkTarget.filePath(TerminalFilePathTarget(rawPath: "/Users/zpc/projects/proghostty/README.md"))
+    #expect(firstRowHit.target == target)
+    #expect(firstRowHit.text == "/Users/zpc/projects/proghostty/README.md")
+    #expect(secondRowHit.target == target)
+    #expect(secondRowHit.text == "/Users/zpc/projects/proghostty/README.md")
+  }
+
+  @Test func detectsRelativePathWithLineColumnWrappedAcrossVisualRows() throws {
+    let frame = frame(rows: ["Sources/App.swift", ":42:3"], cols: 17)
+
+    let hit = try #require(TerminalLinkDetector.hitTest(row: 1, col: 2, in: frame))
+
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "Sources/App.swift", line: 42, column: 3)))
+    #expect(hit.text == "Sources/App.swift:42:3")
+  }
+
   @Test func stripsTrailingSentencePunctuationFromPath() throws {
     let frame = frame(rows: ["see docs/readme.md."], cols: 28)
 
