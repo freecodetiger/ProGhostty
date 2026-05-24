@@ -230,6 +230,10 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
   public func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?) {
     surfaceRegistry.setLinkHoverHandler(handler)
   }
+
+  public func setLinkTargetHandler(_ handler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?) {
+    surfaceRegistry.setLinkTargetHandler(handler)
+  }
 }
 
 @MainActor
@@ -645,6 +649,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   private var pasteHandler: (@MainActor (TerminalSessionID, String) -> Void)?
   private var activationHandler: (@MainActor (TerminalSessionID) -> Void)?
   private var linkHoverHandler: (@MainActor (TerminalSessionID, Bool) -> Void)?
+  private var linkTargetHandler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?
   private var viewportScrollHandler: (@MainActor (TerminalSessionID, Int) -> Bool)?
   private var rendererOptions = TerminalRendererOptions()
 
@@ -693,6 +698,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     }
     gridView.linkHoverHandler = { [weak self] isHovering in
       self?.linkHoverHandler?(id, isHovering)
+    }
+    gridView.openLinkTargetHandler = { [weak self] target in
+      self?.linkTargetHandler?(id, target)
     }
     gridView.pasteboard = .general
     gridView.applyPalette(palette)
@@ -856,6 +864,15 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     for (id, surface) in surfaces {
       surface.gridView.linkHoverHandler = { [weak self] isHovering in
         self?.linkHoverHandler?(id, isHovering)
+      }
+    }
+  }
+
+  public func setLinkTargetHandler(_ handler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?) {
+    linkTargetHandler = handler
+    for (id, surface) in surfaces {
+      surface.gridView.openLinkTargetHandler = { [weak self] target in
+        self?.linkTargetHandler?(id, target)
       }
     }
   }
@@ -1483,6 +1500,7 @@ public final class PTYGridView: NSView {
   public var openURLHandler: ((URL) -> Void)? = { url in
     _ = NSWorkspace.shared.open(url)
   }
+  public var openLinkTargetHandler: ((TerminalLinkTarget) -> Void)?
   public var linkHoverHandler: ((Bool) -> Void)?
   public var pasteboard = NSPasteboard.general
 
@@ -1836,11 +1854,11 @@ public final class PTYGridView: NSView {
     )
   }
 
-  private static func urlHitsByRow(in frame: GhosttyTerminalFrame) -> [Int: [TerminalURLHit]] {
+  private static func urlHitsByRow(in frame: GhosttyTerminalFrame) -> [Int: [TerminalLinkHit]] {
     guard frame.rows > 0, frame.cols > 0 else { return [:] }
-    var hitsByRow: [Int: [TerminalURLHit]] = [:]
+    var hitsByRow: [Int: [TerminalLinkHit]] = [:]
     for row in 0..<frame.rows {
-      let hits = TerminalURLDetector.hits(inRow: row, frame: frame)
+      let hits = TerminalLinkDetector.hits(inRow: row, frame: frame)
       if !hits.isEmpty {
         hitsByRow[row] = hits
       }
@@ -1849,7 +1867,7 @@ public final class PTYGridView: NSView {
   }
 
   private static func urlCursorRects(
-    urlHitsByRow: [Int: [TerminalURLHit]],
+    urlHitsByRow: [Int: [TerminalLinkHit]],
     cellSize: CGSize,
     inset: CGSize,
     verticalOffsetY: CGFloat = 0
@@ -2099,9 +2117,13 @@ public final class PTYGridView: NSView {
     window?.makeFirstResponder(self)
     stopSelectionAutoScroll()
     if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
-      let hit = urlHit(at: convert(event.locationInWindow, from: nil))
+      let hit = linkHit(at: convert(event.locationInWindow, from: nil))
     {
-      openURLHandler?(hit.url)
+      if let openLinkTargetHandler {
+        openLinkTargetHandler(hit.target)
+      } else if case .url(let url) = hit.target {
+        openURLHandler?(url)
+      }
       return
     }
     let oldDirtyRects = selectionDirtyRects()
@@ -2525,17 +2547,17 @@ public final class PTYGridView: NSView {
     return GridCoordinate(row: row, col: col)
   }
 
-  private func urlHit(at point: NSPoint) -> TerminalURLHit? {
+  private func linkHit(at point: NSPoint) -> TerminalLinkHit? {
     guard let geometry = renderedGeometry(),
       let coordinate = geometry.coordinate(at: point)
     else {
       return nil
     }
-    return TerminalURLDetector.hitTest(row: coordinate.row, col: coordinate.col, in: geometry.frame)
+    return TerminalLinkDetector.hitTest(row: coordinate.row, col: coordinate.col, in: geometry.frame)
   }
 
   private func updateLinkHover(at point: NSPoint) {
-    updateLinkHover(isHovering: urlHit(at: point) != nil)
+    updateLinkHover(isHovering: linkHit(at: point) != nil)
   }
 
   private func updateLinkHover(isHovering: Bool) {

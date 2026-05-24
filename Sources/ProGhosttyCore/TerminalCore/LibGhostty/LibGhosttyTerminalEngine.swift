@@ -37,4 +37,5 @@ public final class LibGhosttyTerminalEngine: TerminalSessionManager, TerminalSur
   public func setPasteHandler(_ handler: (@MainActor (TerminalSessionID, String) -> Void)?) {}
   public func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?) {}
   public func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?) {}
+  public func setLinkTargetHandler(_ handler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?) {}
 }

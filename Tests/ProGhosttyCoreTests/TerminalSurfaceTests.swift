@@ -1337,6 +1337,70 @@ struct TerminalSurfaceTests {
     #expect(openedURL == nil)
   }
 
+  @MainActor @Test func ptyGridCommandClickOpensFilePathTarget() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["edit Sources/App.swift"], cols: 32, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    var openedTarget: TerminalLinkTarget?
+    gridView.openLinkTargetHandler = { openedTarget = $0 }
+    let rect = PTYGridView.textGlyphRect(row: 0, col: 8, cellSize: cellSize, inset: inset)
+    let event = try #require(NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: NSPoint(x: rect.midX, y: rect.midY),
+      modifierFlags: [.command],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    ))
+
+    gridView.mouseDown(with: event)
+
+    #expect(openedTarget == .filePath(TerminalFilePathTarget(rawPath: "Sources/App.swift")))
+  }
+
+  @MainActor @Test func ptyGridPlainClickOnFilePathDoesNotOpenTarget() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["edit Sources/App.swift"], cols: 32, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    var openedTarget: TerminalLinkTarget?
+    gridView.openLinkTargetHandler = { openedTarget = $0 }
+    let rect = PTYGridView.textGlyphRect(row: 0, col: 8, cellSize: cellSize, inset: inset)
+    let event = try #require(NSEvent.mouseEvent(
+      with: .leftMouseDown,
+      location: NSPoint(x: rect.midX, y: rect.midY),
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: 1
+    ))
+
+    gridView.mouseDown(with: event)
+
+    #expect(openedTarget == nil)
+  }
+
   @MainActor @Test func ptyGridCommandClickOpensOSC8HyperlinkMetadata() throws {
     let gridView = PTYGridView()
     var frame = frameWithText(rows: ["project docs"], cols: 24, cursorX: 0, cursorY: 0)

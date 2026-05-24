@@ -144,6 +144,7 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
   }
 
   public func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?) {}
+  public func setLinkTargetHandler(_ handler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?) {}
 
   private func run(command: String, session id: TerminalSessionID) {
     guard let state = sessions[id] else { return }
