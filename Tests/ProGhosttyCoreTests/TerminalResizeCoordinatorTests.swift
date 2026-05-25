@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Terminal resize coordinator")
 struct TerminalResizeCoordinatorTests {
-  @Test func normalScreenCommitsGridChangesDuringLiveResize() {
+  @Test func normalScreenDefersGridChangesDuringLiveResize() {
     var coordinator = TerminalResizeCommitCoordinator()
     let grid = TerminalGridSize(rows: 36, cols: 104)
 
@@ -14,9 +14,22 @@ struct TerminalResizeCoordinatorTests {
       isResizeSensitiveScreen: false
     )
 
-    #expect(decision == .commit(grid))
+    #expect(decision == .deferUntilLiveResizeEnds)
     #expect(coordinator.lastCommittedGridSize == nil)
     #expect(coordinator.pendingGridSize == grid)
+  }
+
+  @Test func normalScreenCommitsOnlyLatestPendingGridWhenLiveResizeEnds() {
+    var coordinator = TerminalResizeCommitCoordinator()
+    let first = TerminalGridSize(rows: 36, cols: 104)
+    let second = TerminalGridSize(rows: 38, cols: 110)
+
+    _ = coordinator.update(gridSize: first, isLiveResize: true, isResizeSensitiveScreen: false)
+    _ = coordinator.update(gridSize: second, isLiveResize: true, isResizeSensitiveScreen: false)
+    let decision = coordinator.finishLiveResize()
+
+    #expect(decision == .commit(second))
+    #expect(coordinator.pendingGridSize == nil)
   }
 
   @Test func alternateScreenDefersGridChangesDuringLiveResize() {

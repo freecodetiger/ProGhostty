@@ -798,6 +798,8 @@ private final class TerminalSplitView: NSSplitView {
 }
 
 final class TerminalPaneViewController: NSViewController {
+  private static let resizeCommitDebounce: DispatchTimeInterval = .milliseconds(80)
+
   let pane: TerminalPane
   private weak var contentView: NSView?
   private var onSelect: ((UUID) -> Void)?
@@ -966,7 +968,7 @@ final class TerminalPaneViewController: NSViewController {
     }
 
     pendingResizeWorkItem = workItem
-    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(40), execute: workItem)
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.resizeCommitDebounce, execute: workItem)
   }
 
   private func commitPendingLiveResize() {

@@ -24,13 +24,13 @@ public struct TerminalResizeCommitCoordinator: Sendable {
       return .ignore
     }
     guard gridSize != pendingGridSize else {
-      if isResizeSensitiveScreen && isLiveResize {
+      if isLiveResize {
         return .deferUntilLiveResizeEnds
       }
       return gridSize == lastCommittedGridSize ? .ignore : .commit(gridSize)
     }
 
-    if isResizeSensitiveScreen && isLiveResize {
+    if isLiveResize {
       pendingGridSize = gridSize
       return .deferUntilLiveResizeEnds
     }
