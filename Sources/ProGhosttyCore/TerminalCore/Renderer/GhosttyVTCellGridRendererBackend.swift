@@ -57,14 +57,22 @@ public final class GhosttyVTCellGridRendererBackend: TerminalRendererBackend {
   }
 
   public func render(frame: GhosttyTerminalFrame) {
-    pendingScrollFrame = nil
-    pendingFrame = frame
-    scheduleFlush()
+    render(TerminalRenderFrame(frame: frame, isFocused: gridView.isFocusedTerminal))
   }
 
   public func render(scrollFrame: GhosttyTerminalScrollFrame) {
-    pendingScrollFrame = scrollFrame
-    pendingFrame = scrollFrame.viewport
+    render(TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: gridView.isFocusedTerminal))
+  }
+
+  public func render(_ renderFrame: TerminalRenderFrame) {
+    setFocused(renderFrame.isFocused)
+    if let scrollFrame = renderFrame.scrollFrame {
+      pendingScrollFrame = scrollFrame
+      pendingFrame = scrollFrame.viewport
+    } else {
+      pendingScrollFrame = nil
+      pendingFrame = renderFrame.frame
+    }
     scheduleFlush()
   }
 

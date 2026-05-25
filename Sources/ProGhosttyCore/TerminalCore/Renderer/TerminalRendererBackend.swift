@@ -28,6 +28,32 @@ public struct TerminalRendererOptions: Equatable, Sendable {
   }
 }
 
+public enum TerminalRenderFramePresentation: Equatable, Sendable {
+  case frame
+  case scrollFrame
+}
+
+public struct TerminalRenderFrame: Sendable, Equatable {
+  public let frame: GhosttyTerminalFrame
+  public let scrollFrame: GhosttyTerminalScrollFrame?
+  public let isFocused: Bool
+  public let presentation: TerminalRenderFramePresentation
+
+  public init(frame: GhosttyTerminalFrame, isFocused: Bool = false) {
+    self.frame = frame
+    scrollFrame = nil
+    self.isFocused = isFocused
+    presentation = .frame
+  }
+
+  public init(scrollFrame: GhosttyTerminalScrollFrame, isFocused: Bool = false) {
+    frame = scrollFrame.viewport
+    self.scrollFrame = scrollFrame
+    self.isFocused = isFocused
+    presentation = .scrollFrame
+  }
+}
+
 public enum RendererDebug {
   public static let enableExperimentalPixelScroll =
     ProcessInfo.processInfo.environment["PROGHOSTTY_EXPERIMENTAL_PIXEL_SCROLL"] != "0"

@@ -5,6 +5,42 @@ import Testing
 
 @Suite("Terminal renderer backend")
 struct TerminalRendererBackendTests {
+  @Test func terminalRenderFramePreservesScrollFrameAndFocus() {
+    let scrollFrame = scrollFrame(
+      viewportRows: ["two", "three"],
+      overscanTop: ["one"],
+      overscanBottom: ["four"],
+      cols: 8
+    )
+
+    let renderFrame = TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: true)
+
+    #expect(renderFrame.presentation == .scrollFrame)
+    #expect(renderFrame.frame == scrollFrame.viewport)
+    #expect(renderFrame.scrollFrame == scrollFrame)
+    #expect(renderFrame.isFocused)
+  }
+
+  @MainActor @Test func cellGridBackendConsumesUnifiedRenderFrame() {
+    let backend = GhosttyVTCellGridRendererBackend()
+    let renderFrame = TerminalRenderFrame(
+      scrollFrame: scrollFrame(
+        viewportRows: ["two", "three"],
+        overscanTop: ["one"],
+        overscanBottom: ["four"],
+        cols: 8
+      ),
+      isFocused: true
+    )
+
+    backend.render(renderFrame)
+    backend.flushPendingFrame()
+
+    #expect(backend.gridView.canRenderPixelScroll(for: 5))
+    #expect(backend.diagnostics.overscanTopRows == 1)
+    #expect(backend.diagnostics.overscanBottomRows == 1)
+  }
+
   @Test func cellGridDirtyTrackerScopesSingleCharacterChangeToOneRow() {
     let old = frame(rows: ["abc", "def"], cols: 8, cursorX: 1, cursorY: 0)
     let new = frame(rows: ["abc", "dxf"], cols: 8, cursorX: 1, cursorY: 0)

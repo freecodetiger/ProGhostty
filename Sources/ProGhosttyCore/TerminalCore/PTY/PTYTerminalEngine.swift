@@ -1132,11 +1132,10 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       if shouldTransferFocus {
         surface.gridView.window?.makeFirstResponder(surface.gridView)
       }
-      surface.cellGridBackend.setFocused(isFocused(id))
       if let scrollFrame = snapshot.scrollFrame {
-        surface.cellGridBackend.render(scrollFrame: scrollFrame)
+        surface.cellGridBackend.render(TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: isFocused(id)))
       } else {
-        surface.cellGridBackend.render(frame: frame)
+        surface.cellGridBackend.render(TerminalRenderFrame(frame: frame, isFocused: isFocused(id)))
       }
       surface.cellGridBackend.flushPendingFrame()
       PTYRenderDebugLog.write(
@@ -1217,8 +1216,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     in backend: GhosttyVTCellGridRendererBackend,
     isFocused: Bool
   ) {
-    backend.setFocused(isFocused)
-    backend.render(frame: frame)
+    backend.render(TerminalRenderFrame(frame: frame, isFocused: isFocused))
   }
 
   private func render(
@@ -1227,13 +1225,12 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     in backend: GhosttyVTCellGridRendererBackend,
     isFocused: Bool
   ) {
-    backend.setFocused(isFocused)
     guard let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2) else {
-      backend.render(frame: frame)
+      backend.render(TerminalRenderFrame(frame: frame, isFocused: isFocused))
       backend.updateOverscanDiagnostics(topRows: 0, bottomRows: 0)
       return
     }
-    backend.render(scrollFrame: scrollFrame)
+    backend.render(TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: isFocused))
   }
 
   private func render(
