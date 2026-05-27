@@ -152,7 +152,7 @@ struct TerminalSurfaceTests {
     #expect(surfaceView.liveGridView.isHidden == false)
   }
 
-  @MainActor @Test func autoRendererUsesCellGridForOrdinaryPromptFrames() throws {
+  @MainActor @Test func autoRendererUsesDirectBackendForOrdinaryPromptFrames() throws {
     let registry = PTYTerminalSurfaceRegistry()
     let session = TerminalSessionID()
     registry.createSurface(session: session)
@@ -163,13 +163,18 @@ struct TerminalSurfaceTests {
     registry.flushPendingRenderers()
 
     let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
 
     #expect(surfaceView.isShowingLiveGrid)
+    #expect(surfaceView.liveGridView is MetalDirectRendererView)
     #expect(surfaceView.liveGridView.renderedText.contains("prompt"))
+    #expect(diagnostics.backend == .metalDirect)
+    #expect(diagnostics.requestedBackend == nil)
   }
 
   @MainActor @Test func liveCellGridScrollsLibGhosttyViewportForScrollbackHistory() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTCellGrid))
     let session = TerminalSessionID()
     registry.createSurface(session: session)
     let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
@@ -273,12 +278,30 @@ struct TerminalSurfaceTests {
     #expect(surfaceView.liveGridView.renderedText.contains("first") || surfaceView.liveGridView.renderedText.contains("second"))
 
     scrollBridgeToBottom(bridge)
-    registry.prepareForUserInput(session: session)
+    let shouldRenderInputSnapshot = registry.prepareForUserInput(session: session)
     registry.render(bridge, session: session)
     registry.flushPendingRenderers()
 
+    #expect(shouldRenderInputSnapshot)
     #expect(surfaceView.liveGridView.viewport == TerminalViewport())
     #expect(surfaceView.liveGridView.renderedText.contains("fourth"))
+  }
+
+  @MainActor @Test func liveCellGridUserInputDoesNotPreRenderWhenAlreadyAtLiveBottom() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try codexLikeBridge(suggestions: [
+      "/resume       resume a previous session",
+      "/review       review current changes",
+    ])
+
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let shouldRenderInputSnapshot = registry.prepareForUserInput(session: session)
+
+    #expect(!shouldRenderInputSnapshot)
   }
 
   @MainActor @Test func liveCellGridOutputWhileViewingHistoryDoesNotReplaceVisibleRows() throws {
@@ -484,6 +507,7 @@ struct TerminalSurfaceTests {
 
   @MainActor @Test func liveCellGridWheelScrollReturnsToBottomAndIgnoresPastTopEdge() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTCellGrid))
     let session = TerminalSessionID()
     registry.createSurface(session: session)
     let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
@@ -517,6 +541,7 @@ struct TerminalSurfaceTests {
 
   @MainActor @Test func surfaceRegistryExposesCellGridRendererDiagnostics() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTCellGrid))
     let session = TerminalSessionID()
     registry.createSurface(session: session)
     let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
@@ -529,6 +554,138 @@ struct TerminalSurfaceTests {
 
     #expect(diagnostics.backend == .ghosttyVTCellGrid)
     #expect(diagnostics.visibleRowCount == 2)
+  }
+
+  @MainActor @Test func metalLiveRendererModeFallsBackToLiveCellGridWhenUnavailable() throws {
+    let registry = PTYTerminalSurfaceRegistry(isMetalLiveAvailable: false)
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalLive))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 12, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("prompt".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
+    #expect(diagnostics.backend == .ghosttyVTCellGrid)
+    #expect(diagnostics.requestedBackend == .metalLive)
+    #expect(diagnostics.backendFallbackReason == TerminalRendererDiagnostics.metalLiveUnavailableFallbackReason)
+  }
+
+  @MainActor @Test func metalLiveRendererModeUsesMetalBackendWhenAvailable() throws {
+    let registry = PTYTerminalSurfaceRegistry(isMetalLiveAvailable: true)
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalLive))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 12, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("prompt".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
+
+    #expect(surfaceView.liveGridView is MetalLiveRendererView)
+    #expect(diagnostics.backend == .metalLive)
+    #expect(diagnostics.requestedBackend == .metalLive)
+    #expect(diagnostics.backendFallbackReason == nil)
+  }
+
+  @MainActor @Test func metalDirectRendererModeUsesDirectBackendWhenAvailable() throws {
+    let registry = PTYTerminalSurfaceRegistry(isMetalDirectAvailable: true)
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalDirect))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 12, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("prompt".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
+
+    #expect(surfaceView.liveGridView is MetalDirectRendererView)
+    #expect(diagnostics.backend == .metalDirect)
+    #expect(diagnostics.requestedBackend == .metalDirect)
+    #expect(diagnostics.backendFallbackReason == nil)
+    #expect(diagnostics.usesBitmapCapture == false)
+  }
+
+  @MainActor @Test func metalDirectRendererModeFallsBackToCellGridWhenPipelineIsUnavailable() throws {
+    let registry = PTYTerminalSurfaceRegistry(
+      isMetalDirectAvailable: true,
+      makeDirectRenderer: { _ in PipelineFailingDirectRendererBackend() }
+    )
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalDirect))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 12, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("prompt".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
+
+    #expect(diagnostics.backend == .ghosttyVTCellGrid)
+    #expect(diagnostics.requestedBackend == .metalDirect)
+    #expect(diagnostics.backendFallbackReason == TerminalRendererDiagnostics.metalDirectUnavailableFallbackReason)
+  }
+
+  @MainActor @Test func metalDirectRendererFallsBackToCellGridWhenRenderFailsAtRuntime() throws {
+    let registry = PTYTerminalSurfaceRegistry(
+      isMetalDirectAvailable: true,
+      makeDirectRenderer: { options in
+        MetalDirectRendererBackend(options: options) { _ in
+          RuntimeFailingMetalDirectRenderingEngine()
+        }
+      }
+    )
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalDirect))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 12, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("prompt".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
+
+    #expect(surfaceView.liveGridView is MetalDirectRendererView == false)
+    #expect(surfaceView.liveGridView.renderedText.contains("prompt"))
+    #expect(diagnostics.backend == .ghosttyVTCellGrid)
+    #expect(diagnostics.requestedBackend == .metalDirect)
+    #expect(diagnostics.backendFallbackReason == TerminalRendererDiagnostics.metalDirectRenderFailedFallbackReason)
+  }
+
+  @MainActor @Test func metalLiveRendererPreservesOverscanPixelRemainder() throws {
+    let registry = PTYTerminalSurfaceRegistry(isMetalLiveAvailable: true)
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalLive))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let bottomText = surfaceView.liveGridView.renderedText
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(5)
+    registry.flushPendingRenderers()
+
+    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
+    #expect(surfaceView.liveGridView is MetalLiveRendererView)
+    #expect(surfaceView.liveGridView.renderedText == bottomText)
+    #expect(surfaceView.liveGridView.viewport == TerminalViewport(startRow: 0, visualOffsetY: 5))
+    #expect(diagnostics.backend == .metalLive)
+    #expect(diagnostics.pixelRemainderY == 5)
+    #expect(diagnostics.pixelSmoothScroll == .experimental)
   }
 
   @MainActor @Test func ptySurfaceUsesBarCursorOverlayWithoutPaintingBlankCellBackground() throws {
@@ -573,6 +730,30 @@ struct TerminalSurfaceTests {
     let inactiveColor = try #require(inactiveTextView.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)
 
     #expect(inactiveColor.lightness < activeColor.lightness)
+  }
+
+  @MainActor @Test func metalDirectFocusChangeRepaintsImmediately() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalDirect))
+    let activeSession = TerminalSessionID()
+    let inactiveSession = TerminalSessionID()
+    registry.createSurface(session: activeSession)
+    registry.createSurface(session: inactiveSession)
+
+    let activeBridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+    let inactiveBridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+    activeBridge.write(Data("active".utf8))
+    inactiveBridge.write(Data("inactive".utf8))
+    registry.render(activeBridge, session: activeSession)
+    registry.render(inactiveBridge, session: inactiveSession)
+    registry.flushPendingRenderers()
+
+    registry.setFocusedSession(activeSession)
+
+    let inactiveDiagnostics = try #require(registry.rendererDiagnostics(for: inactiveSession))
+    #expect(inactiveDiagnostics.backend == .metalDirect)
+    #expect(inactiveDiagnostics.redrawMode == .full)
+    #expect(inactiveDiagnostics.metalDirectDrawnRowCount == 2)
   }
 
   @MainActor @Test func textFallbackSurfacePreservesFaintSuggestionStyle() throws {
@@ -799,6 +980,7 @@ struct TerminalSurfaceTests {
 
   @MainActor @Test func liveCellGridStaysActiveAcrossRepeatedCodexLikeAnsiRefreshes() throws {
     let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTCellGrid))
     let session = TerminalSessionID()
     registry.createSurface(session: session)
     let bridge = try GhosttyVTBridge(cols: 96, rows: 12, maxScrollback: 200)
@@ -1232,6 +1414,96 @@ struct TerminalSurfaceTests {
     )
   }
 
+  @MainActor @Test func ptyGridExposesMarkedTextOverlayAtCursor() {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["      "], cols: 6, cursorX: 2, cursorY: 0)
+    gridView.render(frame, isFocused: true)
+
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    let overlay = gridView.currentMarkedTextOverlay
+    #expect(overlay?.row == 0)
+    #expect(overlay?.col == 2)
+    #expect((overlay?.width ?? 0) >= gridView.terminalCellSize.width)
+    #expect(gridView.currentMarkedTextString == "zhong")
+
+    gridView.unmarkText()
+
+    #expect(gridView.currentMarkedTextOverlay == nil)
+    #expect(gridView.currentMarkedTextString == nil)
+  }
+
+  @MainActor @Test func ptyGridCursorCellRectIncludesPixelScrollOffsetDuringScrollFrame() {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: ["visible text"], cols: 24, cursorX: 0, cursorY: 0)
+    frame.isAlternateScreen = false
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    let scrollFrame = GhosttyTerminalScrollFrame(
+      viewport: frame,
+      overscanTop: [cellRow(text: "previous row", cols: frame.cols)],
+      overscanBottom: [cellRow(text: "next row", cols: frame.cols)],
+      requestedOverscanTop: 1,
+      requestedOverscanBottom: 1,
+      viewportStartRow: 1
+    )
+
+    gridView.render(scrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: [0]))
+    let pixelOffset = cellSize.height * 0.75
+    gridView.testScrollWheelDeltaY(pixelOffset)
+
+    let expectedRect = PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset)
+      .offsetBy(dx: 0, dy: pixelOffset)
+
+    #expect(gridView.cursorCellRect == expectedRect)
+  }
+
+  @MainActor @Test func ptyGridFirstRectTracksPixelScrolledCursorAnchor() {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: ["visible text"], cols: 24, cursorX: 0, cursorY: 0)
+    frame.isAlternateScreen = false
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    let window = NSWindow(
+      contentRect: gridView.frame,
+      styleMask: [],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = gridView
+    let scrollFrame = GhosttyTerminalScrollFrame(
+      viewport: frame,
+      overscanTop: [cellRow(text: "previous row", cols: frame.cols)],
+      overscanBottom: [cellRow(text: "next row", cols: frame.cols)],
+      requestedOverscanTop: 1,
+      requestedOverscanBottom: 1,
+      viewportStartRow: 1
+    )
+
+    gridView.render(scrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: [0]))
+    let pixelOffset = cellSize.height * 0.75
+    gridView.testScrollWheelDeltaY(pixelOffset)
+
+    let expectedViewRect = PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset)
+      .offsetBy(dx: 0, dy: pixelOffset)
+    let expectedScreenRect = window.convertToScreen(gridView.convert(expectedViewRect, to: nil))
+    let firstRect = gridView.firstRect(forCharacterRange: NSRange(location: 0, length: 1), actualRange: nil)
+
+    #expect(firstRect == expectedScreenRect)
+  }
+
   @MainActor @Test func ptyGridMarkedTextHidesTerminalCursorDuringComposition() throws {
     let gridView = PTYGridView()
     let frame = frameWithText(rows: ["x     "], cols: 6, cursorX: 0, cursorY: 0)
@@ -1641,6 +1913,32 @@ struct TerminalSurfaceTests {
     #expect(hoverStates == [true, false])
   }
 
+  @MainActor @Test func ptyGridExposesHoveredLinkCellRange() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["open http://localhost:5173 now"], cols: 36, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    let urlRect = PTYGridView.textGlyphRect(row: 0, col: 9, cellSize: cellSize, inset: inset)
+    let plainRect = PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset)
+
+    gridView.mouseMoved(with: try mouseEvent(.mouseMoved, viewPoint: NSPoint(x: urlRect.midX, y: urlRect.midY), in: gridView))
+
+    #expect(gridView.currentLinkHoverCellRanges == [
+      GridSelectionCellRange(row: 0, cols: 5..<26),
+    ])
+
+    gridView.mouseMoved(with: try mouseEvent(.mouseMoved, viewPoint: NSPoint(x: plainRect.midX, y: plainRect.midY), in: gridView))
+
+    #expect(gridView.currentLinkHoverCellRanges == [])
+  }
+
   @MainActor @Test func ptyTextCommandCAndVUseCopyPasteActions() throws {
     let pasteboard = NSPasteboard(name: NSPasteboard.Name("proghostty.shortcuts.test.\(UUID().uuidString)"))
     pasteboard.clearContents()
@@ -1932,6 +2230,100 @@ struct TerminalSurfaceTests {
 
   private enum SurfaceLookupError: Error {
     case notFound(String)
+  }
+}
+
+@MainActor
+private final class PipelineFailingDirectRendererBackend: TerminalLiveRendererBackend {
+  let gridView = PTYGridView()
+  private let diagnosticsState = TerminalRendererDiagnostics(
+    backend: .metalDirect,
+    requestedBackend: .metalDirect,
+    backendFallbackReason: TerminalRendererDiagnostics.metalDirectUnavailableFallbackReason,
+    usesBitmapCapture: false,
+    dirtyRowCount: 0,
+    visibleRowCount: 0,
+    cacheHitRate: 0,
+    averageDrawTime: 0,
+    maxDrawTime: 0,
+    redrawMode: .clean,
+    smoothScrollOffset: 0,
+    coalescedFrames: 0,
+    droppedFrames: 0,
+    alternateScreenActive: false,
+    resizeSensitiveScreen: false,
+    scrollMode: .rowBased,
+    overscanTopRows: 0,
+    overscanBottomRows: 0,
+    pixelSmoothScroll: .unavailable,
+    pixelSmoothScrollReason: TerminalRendererDiagnostics.missingOverscanRowsReason,
+    pixelRemainderY: 0,
+    committedRowDelta: 0,
+    pendingScrollRowDelta: 0,
+    pendingScrollWheelEvents: 0,
+    lastScrollCommitDuration: 0,
+    lastScrollRenderDuration: 0,
+    lastResizeTotalDuration: 0,
+    lastResizeVTDuration: 0,
+    lastResizeSnapshotDuration: 0,
+    pendingResize: false,
+    metalDirectPlanRows: 0,
+    metalDirectPlanCols: 0,
+    metalDirectUploadedRowCount: 0,
+    metalDirectUploadedCellCount: 0,
+    metalDirectGlyphAtlasEntryCount: 0,
+    metalDirectPresentedFrameCount: 0,
+    metalDirectDrawPassCount: 0,
+    metalDirectPipelineReady: false,
+    styleStats: TerminalCellStyleStats()
+  )
+
+  var view: NSView { gridView }
+  var diagnostics: TerminalRendererDiagnostics { diagnosticsState }
+  var selectedText: String? { nil }
+
+  func setInputHandler(_ handler: ((Data) -> Void)?) {}
+  func setActivationHandler(_ handler: (() -> Void)?) {}
+  func applyPalette(_ palette: TerminalSurfacePalette) {}
+  func applyFont(family: String, size: CGFloat) {}
+  func setFocused(_ isFocused: Bool) {}
+  func render(frame: GhosttyTerminalFrame) {}
+  func focus() {}
+
+  func applyOptions(_ options: TerminalRendererOptions) {}
+  func render(_ renderFrame: TerminalRenderFrame) {}
+  func flushPendingFrame() {}
+  func updateOverscanDiagnostics(topRows: Int, bottomRows: Int) {}
+  func markResizePending() {}
+  func applyResizeDiagnostics(_ diagnostics: TerminalResizeDiagnostics) {}
+  func resetViewportStartRowKeepingVisualOffset() {}
+  func resetPixelScroll(suppressMomentum: Bool) {}
+}
+
+@MainActor
+private final class RuntimeFailingMetalDirectRenderingEngine: MetalDirectRenderingEngine {
+  let drawPassCount = 0
+  let presentedFrameCount = 0
+  let latestSubmittedGeneration = 0
+  let latestPresentedGeneration = 0
+  let pipelineReady = true
+  let lastRenderedRowCount = 0
+  let lastRenderedCellCount = 0
+  let lastRenderedRunCount = 0
+  let lastRenderPassLoadPolicy = MetalDirectRenderPassLoadPolicy.clear
+  let lastWaitedForCompletion = false
+  let staleCompletionCount = 0
+
+  func resetTextureCache() {}
+
+  func render(
+    renderFrame: TerminalRenderFrame,
+    plan: MetalTerminalRenderPlan,
+    view: MetalDirectRendererView,
+    palette: TerminalSurfacePalette,
+    glyphAtlas: MetalGlyphAtlas
+  ) -> Bool {
+    false
   }
 }
 

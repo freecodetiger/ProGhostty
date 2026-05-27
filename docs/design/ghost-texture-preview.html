@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ProGhostty Ghost Texture Preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #07090a;
+      --surface: #0a0e0f;
+      --surface-2: #0e1314;
+      --text: #dce8e3;
+      --soft: #82908a;
+      --dim: #4c5753;
+      --line: rgba(218, 255, 242, 0.1);
+      --line-strong: rgba(218, 255, 242, 0.18);
+      --accent: #94e4ce;
+      --accent-soft: rgba(148, 228, 206, 0.18);
+      --terminal: "SF Mono", Menlo, Monaco, ui-monospace, monospace;
+      --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, #0b0f10 0%, var(--page) 42%, #050606 100%);
+      color: var(--text);
+      font-family: var(--ui);
+      letter-spacing: 0;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px),
+        linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px);
+      background-size: 36px 36px;
+      opacity: 0.32;
+      mask-image: linear-gradient(180deg, black, transparent 76%);
+    }
+
+    .wrap {
+      width: min(1440px, calc(100vw - 44px));
+      margin: 0 auto;
+      padding: 30px 0 44px;
+    }
+
+    .header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 20px;
+      align-items: end;
+      margin-bottom: 20px;
+    }
+
+    .kicker {
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 640;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 820px;
+      font-size: clamp(28px, 4vw, 54px);
+      line-height: 1.04;
+      font-weight: 700;
+    }
+
+    .intro {
+      max-width: 680px;
+      margin: 12px 0 0;
+      color: var(--soft);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .legend {
+      justify-self: end;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 12px;
+      color: var(--soft);
+      background: rgba(255,255,255,0.03);
+      font-size: 12px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .concept {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 22px;
+      background: var(--surface);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.38);
+    }
+
+    .concept-head {
+      height: 46px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 0 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      background: var(--surface);
+    }
+
+    .traffic {
+      display: flex;
+      gap: 7px;
+    }
+
+    .traffic span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      opacity: 0.72;
+    }
+
+    .red { background: #ff6159; }
+    .yellow { background: #ffbd2e; }
+    .green { background: #28c840; }
+
+    .concept-title {
+      color: var(--soft);
+      font-size: 12px;
+      font-weight: 560;
+    }
+
+    .score {
+      color: var(--accent);
+      font: 11px var(--terminal);
+    }
+
+    .terminal {
+      min-height: 430px;
+      display: grid;
+      grid-template-rows: 1fr 0.82fr;
+      position: relative;
+    }
+
+    .pane {
+      position: relative;
+      overflow: hidden;
+      padding: 18px 18px 16px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.018), transparent 32%),
+        var(--surface);
+      border-bottom: 1px solid var(--line);
+      color: var(--text);
+      font: 12.5px/1.65 var(--terminal);
+    }
+
+    .pane.secondary {
+      color: color-mix(in srgb, var(--text) 64%, var(--surface));
+      background: var(--surface-2);
+    }
+
+    .pane pre {
+      position: relative;
+      z-index: 3;
+      margin: 0;
+      white-space: pre-wrap;
+    }
+
+    .prompt { color: var(--accent); }
+    .cmd { color: #f0fff9; }
+    .muted { color: var(--soft); }
+    .dim { color: var(--dim); }
+    .select {
+      background: rgba(148, 228, 206, 0.16);
+      border-radius: 3px;
+      color: #effff9;
+    }
+
+    .ghost-map {
+      position: absolute;
+      z-index: 1;
+      pointer-events: none;
+      color: var(--accent);
+    }
+
+    .ghost-map svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .watermark .ghost-map {
+      right: -14px;
+      bottom: -26px;
+      width: 190px;
+      height: 210px;
+      opacity: 0.05;
+      filter: blur(0.2px);
+    }
+
+    .fog .ghost-map {
+      right: -34px;
+      top: 20px;
+      width: 250px;
+      height: 280px;
+      opacity: 0.11;
+      filter: blur(9px);
+    }
+
+    .burn .ghost-map {
+      right: 10px;
+      bottom: 14px;
+      width: 210px;
+      height: 230px;
+      opacity: 0.075;
+      filter: contrast(1.2);
+      mix-blend-mode: screen;
+    }
+
+    .burn .ghost-map::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        repeating-linear-gradient(0deg, transparent 0 7px, rgba(255,255,255,0.42) 8px, transparent 9px);
+      opacity: 0.24;
+      mask: inherit;
+    }
+
+    .grain {
+      position: absolute;
+      z-index: 2;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.22;
+      background-image:
+        radial-gradient(circle at 23% 19%, rgba(255,255,255,0.13) 0 1px, transparent 1px),
+        radial-gradient(circle at 76% 68%, rgba(255,255,255,0.1) 0 1px, transparent 1px);
+      background-size: 17px 19px, 29px 31px;
+      mix-blend-mode: soft-light;
+    }
+
+    .footer {
+      padding: 15px 16px 17px;
+      border-top: 1px solid rgba(255,255,255,0.035);
+      background: rgba(255,255,255,0.018);
+    }
+
+    .footer h2 {
+      margin: 0 0 7px;
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .footer p {
+      margin: 0;
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.58;
+    }
+
+    .wide {
+      margin-top: 16px;
+      border: 1px solid var(--line-strong);
+      border-radius: 22px;
+      overflow: hidden;
+      background: var(--surface);
+    }
+
+    .wide-terminal {
+      min-height: 340px;
+      display: grid;
+      grid-template-columns: 1.4fr 1fr 0.9fr;
+    }
+
+    .wide .pane {
+      min-height: 340px;
+      border-bottom: 0;
+      border-right: 1px solid var(--line);
+    }
+
+    .wide .pane:last-child {
+      border-right: 0;
+    }
+
+    .wide .ghost-map {
+      right: -18px;
+      bottom: -42px;
+      width: 220px;
+      height: 240px;
+      opacity: 0.044;
+    }
+
+    .recommendation {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(255,255,255,0.026);
+    }
+
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 15px;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--soft);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    @media (max-width: 1100px) {
+      .grid,
+      .recommendation,
+      .wide-terminal {
+        grid-template-columns: 1fr;
+      }
+
+      .wide .pane {
+        min-height: 240px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 720px) {
+      .wrap {
+        width: calc(100vw - 24px);
+        padding-top: 18px;
+      }
+
+      .header {
+        grid-template-columns: 1fr;
+      }
+
+      .legend {
+        justify-self: start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="header">
+      <div>
+        <div class="kicker">ProGhostty visual research</div>
+        <h1>Ghost 贴图不应该像壁纸，而应该像终端深处的残影。</h1>
+        <p class="intro">下面三种方案都把 Ghost 做成 pane 内部的背景层。它会被分屏裁切，跟着每个 pane 走，不跨越 split tree，也不覆盖输入区。</p>
+      </div>
+      <div class="legend">opacity 3%-11% · pane-local · no mascot</div>
+    </header>
+
+    <section class="grid">
+      <article class="concept">
+        <div class="concept-head">
+          <div class="traffic"><span class="red"></span><span class="yellow"></span><span class="green"></span></div>
+          <div class="concept-title">Watermark Ghost</div>
+          <div class="score">safe</div>
+        </div>
+        <div class="terminal">
+          <div class="pane watermark">
+            <div class="ghost-map" aria-hidden="true">
+              <svg viewBox="0 0 160 190" fill="none">
+                <path d="M28 168V82C28 39 49 18 80 18s52 21 52 64v86l-18-13-17 14-17-14-18 14-16-14-18 13Z" fill="currentColor"/>
+                <circle cx="62" cy="75" r="7" fill="#020404"/>
+                <circle cx="99" cy="75" r="7" fill="#020404"/>
+                <path d="M61 108c13 8 26 8 39 0" stroke="#020404" stroke-width="6" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <div class="grain"></div>
+            <pre><span class="prompt">~/core</span> % <span class="cmd">swift test</span>
+Test run started.
+Renderer backend passed.
+Terminal surface passed.
+
+<span class="muted"># 贴图几乎只在空白处可见</span>
+<span class="prompt">~/core</span> % <span class="select">git status --short</span>
+?? docs/design/ghost-texture-preview.html
+
+<span class="prompt">~/core</span> %</pre>
+          </div>
+          <div class="pane secondary watermark">
+            <pre><span class="prompt">logs</span> % tail -f vt.log
+[scroll] overscan top 2
+[grid] dirty rows 3
+[focus] active pane</pre>
+          </div>
+        </div>
+        <footer class="footer">
+          <h2>最稳，适合默认 Ghost 主题</h2>
+          <p>像水印一样存在。优点是耐看、不打扰；缺点是第一眼不够激进。</p>
+        </footer>
+      </article>
+
+      <article class="concept">
+        <div class="concept-head">
+          <div class="traffic"><span class="red"></span><span class="yellow"></span><span class="green"></span></div>
+          <div class="concept-title">Fog Silhouette</div>
+          <div class="score">cool</div>
+        </div>
+        <div class="terminal">
+          <div class="pane fog">
+            <div class="ghost-map" aria-hidden="true">
+              <svg viewBox="0 0 160 190" fill="none">
+                <path d="M28 168V82C28 39 49 18 80 18s52 21 52 64v86l-18-13-17 14-17-14-18 14-16-14-18 13Z" fill="currentColor"/>
+                <circle cx="62" cy="75" r="7" fill="#020404"/>
+                <circle cx="99" cy="75" r="7" fill="#020404"/>
+              </svg>
+            </div>
+            <div class="grain"></div>
+            <pre><span class="prompt">~/core</span> % <span class="cmd">codex --yolo</span>
+Reading workspace...
+Applying patch...
+Running tests...
+
+<span class="muted"># 边缘像雾，不是清晰角色贴图</span>
+<span class="prompt">~/core</span> %</pre>
+          </div>
+          <div class="pane secondary fog">
+            <pre><span class="prompt">worker</span> % npm run dev
+Local: http://localhost:5173
+Network: unavailable</pre>
+          </div>
+        </div>
+        <footer class="footer">
+          <h2>更自然，适合“幽灵感”</h2>
+          <p>把 Ghost 变成光雾里的轮廓。酷，但必须限制出现面积和亮度。</p>
+        </footer>
+      </article>
+
+      <article class="concept">
+        <div class="concept-head">
+          <div class="traffic"><span class="red"></span><span class="yellow"></span><span class="green"></span></div>
+          <div class="concept-title">CRT Burn-In</div>
+          <div class="score">bold</div>
+        </div>
+        <div class="terminal">
+          <div class="pane burn">
+            <div class="ghost-map" aria-hidden="true">
+              <svg viewBox="0 0 160 190" fill="none">
+                <path d="M28 168V82C28 39 49 18 80 18s52 21 52 64v86l-18-13-17 14-17-14-18 14-16-14-18 13Z" stroke="currentColor" stroke-width="10" stroke-linejoin="round"/>
+                <circle cx="62" cy="75" r="7" fill="currentColor"/>
+                <circle cx="99" cy="75" r="7" fill="currentColor"/>
+                <path d="M61 108c13 8 26 8 39 0" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <div class="grain"></div>
+            <pre><span class="prompt">~/core</span> % <span class="cmd">tail -f renderer.log</span>
+[cell-grid] viewport rows 46
+[url] command click armed
+[resize] pending false
+
+<span class="muted"># 像屏幕老化留下的痕迹</span>
+<span class="prompt">~/core</span> %</pre>
+          </div>
+          <div class="pane secondary burn">
+            <pre><span class="prompt">release</span> % git tag -l
+v0.1.0
+v0.1.2
+v0.1.3
+v0.1.4</pre>
+          </div>
+        </div>
+        <footer class="footer">
+          <h2>最有终端气质</h2>
+          <p>不是插画，而是烧屏残留。适合 ProGhostty，但需要很低透明度。</p>
+        </footer>
+      </article>
+    </section>
+
+    <section class="wide">
+      <div class="concept-head">
+        <div class="traffic"><span class="red"></span><span class="yellow"></span><span class="green"></span></div>
+        <div class="concept-title">Pane-local texture in multi-split</div>
+        <div class="score">recommended</div>
+      </div>
+      <div class="wide-terminal">
+        <div class="pane watermark">
+          <div class="ghost-map" aria-hidden="true">
+            <svg viewBox="0 0 160 190" fill="none">
+              <path d="M28 168V82C28 39 49 18 80 18s52 21 52 64v86l-18-13-17 14-17-14-18 14-16-14-18 13Z" fill="currentColor"/>
+              <circle cx="62" cy="75" r="7" fill="#020404"/>
+              <circle cx="99" cy="75" r="7" fill="#020404"/>
+            </svg>
+          </div>
+          <div class="grain"></div>
+          <pre><span class="prompt">main</span> % <span class="cmd">seq 1 200</span>
+196
+197
+198
+199
+200
+<span class="prompt">main</span> %</pre>
+        </div>
+        <div class="pane watermark secondary">
+          <div class="ghost-map" aria-hidden="true">
+            <svg viewBox="0 0 160 190" fill="none">
+              <path d="M28 168V82C28 39 49 18 80 18s52 21 52 64v86l-18-13-17 14-17-14-18 14-16-14-18 13Z" fill="currentColor"/>
+              <circle cx="62" cy="75" r="7" fill="#020404"/>
+              <circle cx="99" cy="75" r="7" fill="#020404"/>
+            </svg>
+          </div>
+          <pre><span class="prompt">codex</span> % render path
+cell-grid
+dirty-row
+overscan snapshot
+no html fallback</pre>
+        </div>
+        <div class="pane watermark secondary">
+          <div class="ghost-map" aria-hidden="true">
+            <svg viewBox="0 0 160 190" fill="none">
+              <path d="M28 168V82C28 39 49 18 80 18s52 21 52 64v86l-18-13-17 14-17-14-18 14-16-14-18 13Z" fill="currentColor"/>
+              <circle cx="62" cy="75" r="7" fill="#020404"/>
+              <circle cx="99" cy="75" r="7" fill="#020404"/>
+            </svg>
+          </div>
+          <pre><span class="prompt">git</span> % status
+clean
+
+<span class="dim">texture is clipped per pane</span></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="recommendation">
+      <div class="card">
+        <h2>我的推荐</h2>
+        <p>用 Pane-local Watermark 作为默认贴图策略，再给空白状态和 workspace switcher 加一点 Fog Silhouette。这样有 Ghost 识别度，但不会破坏多分屏。</p>
+      </div>
+      <div class="card">
+        <h2>不要做的方向</h2>
+        <p>不要整窗铺一张 Ghost 图，不要让贴图跨分屏，不要使用彩色角色插画，不要在输入、滚动、TUI 活动中做动态飘动。</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -414,8 +414,9 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
         guard let self, let current = self.sessions[id], current.resizeGeneration == generation else {
           return
         }
-        self.surfaceRegistry.prepareForUserInput(session: id)
-        self.surfaceRegistry.render(snapshot, bridge: bridge, session: id)
+        if self.surfaceRegistry.prepareForUserInput(session: id) {
+          self.surfaceRegistry.render(snapshot, bridge: bridge, session: id)
+        }
       }
     }
     data.withUnsafeBytes { bytes in
@@ -671,13 +672,15 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     var scrollView: NSScrollView
     var textView: PTYTextView
     var gridView: PTYGridView
-    var cellGridBackend: GhosttyVTCellGridRendererBackend
+    var liveRenderer: any TerminalLiveRendererBackend
     var textBackend: GhosttyVTTextRendererBackend
     var bridge: GhosttyVTBridge? = nil
     var scrollbar: GhosttyTerminalScrollbar? = nil
     var lastFrame: GhosttyTerminalFrame? = nil
+    var lastRenderFrame: TerminalRenderFrame? = nil
     var lastHTMLSnapshot: String? = nil
     var lastCursorFrame: GhosttyTerminalFrame? = nil
+    var liveRendererFallbackReason: String? = nil
   }
 
   private struct CursorTextPlacement {
@@ -698,8 +701,21 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   private var linkTargetHandler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?
   private var viewportScrollHandler: (@MainActor (TerminalSessionID, Int) -> Bool)?
   private var rendererOptions = TerminalRendererOptions()
+  private let isMetalLiveAvailable: Bool
+  private let isMetalDirectAvailable: Bool
+  private let makeDirectRenderer: (TerminalRendererOptions) -> any TerminalLiveRendererBackend
 
-  public init() {}
+  public init(
+    isMetalLiveAvailable: Bool = MetalLiveRendererBackend.isRuntimeAvailable,
+    isMetalDirectAvailable: Bool = MetalDirectRendererBackend.isRuntimeAvailable,
+    makeDirectRenderer: @escaping (TerminalRendererOptions) -> any TerminalLiveRendererBackend = { options in
+      MetalDirectRendererBackend(options: options)
+    }
+  ) {
+    self.isMetalLiveAvailable = isMetalLiveAvailable
+    self.isMetalDirectAvailable = isMetalDirectAvailable
+    self.makeDirectRenderer = makeDirectRenderer
+  }
 
   public func createSurface(session id: TerminalSessionID) {
     let textBackend = GhosttyVTTextRendererBackend(
@@ -721,8 +737,47 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     let textView = textBackend.textView
     let scrollView = textBackend.scrollView
 
-    let cellGridBackend = GhosttyVTCellGridRendererBackend(options: rendererOptions)
-    let gridView = cellGridBackend.gridView
+    let liveRenderer = makeLiveRenderer()
+    let gridView = liveRenderer.gridView
+    configureLiveGridView(gridView, session: id)
+
+    let containerView = PTYTerminalSurfaceView(scrollView: scrollView, liveGridView: gridView)
+    containerView.onWindowAvailable = { [weak self] in
+      self?.focusPendingSessionIfNeeded()
+    }
+    containerView.applyPalette(palette)
+    surfaces[id] = SurfaceState(
+      containerView: containerView,
+      scrollView: scrollView,
+      textView: textView,
+      gridView: gridView,
+      liveRenderer: liveRenderer,
+      textBackend: textBackend
+    )
+  }
+
+  private func makeLiveRenderer() -> any TerminalLiveRendererBackend {
+    let selection = TerminalRendererBackendSelection.resolve(
+      mode: rendererOptions.mode,
+      hasFrame: true,
+      isMetalLiveAvailable: isMetalLiveAvailable,
+      isMetalDirectAvailable: isMetalDirectAvailable
+    )
+    switch selection.activeBackend {
+    case .metalDirect:
+      let directRenderer = makeDirectRenderer(rendererOptions)
+      if directRenderer.diagnostics.metalDirectPipelineReady {
+        return directRenderer
+      }
+      return GhosttyVTCellGridRendererBackend(options: rendererOptions)
+    case .metalLive:
+      return MetalLiveRendererBackend(options: rendererOptions)
+    case .ghosttyVTCellGrid, .ghosttyVTTextFallback:
+      return GhosttyVTCellGridRendererBackend(options: rendererOptions)
+    }
+  }
+
+  private func configureLiveGridView(_ gridView: PTYGridView, session id: TerminalSessionID) {
     gridView.inputHandler = { [weak self] data in
       guard let self else { return }
       inputHandler?(id, data)
@@ -731,9 +786,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       guard let self else { return }
       pasteHandler?(id, text)
     }
-    gridView.viewportScrollHandler = { [weak self, weak cellGridBackend] rowDelta in
+    gridView.viewportScrollHandler = { [weak self] rowDelta in
       guard let self, rowDelta != 0 else { return false }
-      return self.scrollViewport(session: id, rowDelta: rowDelta, backend: cellGridBackend)
+      return self.scrollViewport(session: id, rowDelta: rowDelta, backend: self.surfaces[id]?.liveRenderer)
     }
     gridView.viewportCanScrollHandler = { [weak self] rowDelta in
       guard let self, rowDelta != 0 else { return false }
@@ -752,20 +807,27 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     gridView.applyPalette(palette)
     gridView.applyFont(family: fontFamily, size: fontSize)
     gridView.applyRendererOptions(rendererOptions)
+  }
 
-    let containerView = PTYTerminalSurfaceView(scrollView: scrollView, liveGridView: gridView)
-    containerView.onWindowAvailable = { [weak self] in
-      self?.focusPendingSessionIfNeeded()
+  private func replaceLiveRenderer(
+    _ newRenderer: any TerminalLiveRendererBackend,
+    session id: TerminalSessionID,
+    surface: inout SurfaceState,
+    fallbackReason: String? = nil,
+    preserveVisibleFrame: Bool = true
+  ) {
+    let oldGridView = surface.gridView
+    surface.liveRenderer = newRenderer
+    surface.gridView = newRenderer.gridView
+    surface.liveRendererFallbackReason = fallbackReason
+    if oldGridView !== surface.gridView {
+      surface.containerView.replaceLiveGridView(with: surface.gridView)
     }
-    containerView.applyPalette(palette)
-    surfaces[id] = SurfaceState(
-      containerView: containerView,
-      scrollView: scrollView,
-      textView: textView,
-      gridView: gridView,
-      cellGridBackend: cellGridBackend,
-      textBackend: textBackend
-    )
+    configureLiveGridView(surface.gridView, session: id)
+    if preserveVisibleFrame, let renderFrame = surface.lastRenderFrame {
+      render(renderFrame, in: surface.liveRenderer)
+      surface.liveRenderer.flushPendingFrame()
+    }
   }
 
   public func removeSurface(session id: TerminalSessionID) {
@@ -789,9 +851,14 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   public func rendererDiagnostics(for id: TerminalSessionID) -> TerminalRendererDiagnostics? {
     guard let surface = surfaces[id] else { return nil }
-    return surface.containerView.isShowingLiveGrid
-      ? surface.cellGridBackend.diagnostics
-      : surface.textBackend.diagnostics
+    if surface.containerView.isShowingLiveGrid {
+      var diagnostics = surface.liveRenderer.diagnostics
+      if let liveRendererFallbackReason = surface.liveRendererFallbackReason {
+        diagnostics.backendFallbackReason = liveRendererFallbackReason
+      }
+      return diagnostics
+    }
+    return surface.textBackend.diagnostics
   }
 
   public func applyPalette(_ palette: TerminalSurfacePalette) {
@@ -799,7 +866,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     for (sessionID, surface) in surfaces {
       surface.containerView.applyPalette(palette)
       surface.gridView.applyPalette(palette)
-      surface.cellGridBackend.applyPalette(palette)
+      surface.liveRenderer.applyPalette(palette)
       surface.textBackend.applyPalette(palette)
       if let html = surface.lastHTMLSnapshot,
         let attributed = try? attributedTerminalSnapshot(
@@ -810,7 +877,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       {
         surface.textBackend.render(attributed: attributed, scrollToEnd: false)
       } else if let frame = surface.lastFrame {
-        render(frame, in: surface.cellGridBackend, isFocused: isFocused(sessionID))
+        render(frame, in: surface.liveRenderer, isFocused: isFocused(sessionID))
       }
     }
   }
@@ -821,7 +888,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     for (sessionID, surface) in surfaces {
       surface.textView.font = terminalFont(weight: .regular)
       surface.gridView.applyFont(family: family, size: size)
-      surface.cellGridBackend.applyFont(family: family, size: size)
+      surface.liveRenderer.applyFont(family: family, size: size)
       surface.textBackend.applyFont(family: family, size: size)
       if let html = surface.lastHTMLSnapshot,
         let attributed = try? attributedTerminalSnapshot(
@@ -832,7 +899,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       {
         surface.textBackend.render(attributed: attributed, scrollToEnd: false)
       } else if let frame = surface.lastFrame {
-        render(frame, in: surface.cellGridBackend, isFocused: isFocused(sessionID))
+        render(frame, in: surface.liveRenderer, isFocused: isFocused(sessionID))
       }
       surface.textView.window?.invalidateCursorRects(for: surface.textView)
       surface.gridView.window?.invalidateCursorRects(for: surface.gridView)
@@ -843,14 +910,17 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     rendererOptions = options
     for surface in surfaces.values {
       surface.gridView.applyRendererOptions(options)
-      surface.cellGridBackend.applyOptions(options)
+      surface.liveRenderer.applyOptions(options)
     }
   }
 
   public func flushPendingRenderers() {
-    for surface in surfaces.values {
-      surface.gridView.flushPendingScrollCommit()
-      surface.cellGridBackend.flushPendingFrame()
+    for sessionID in Array(surfaces.keys) {
+      surfaces[sessionID]?.gridView.flushPendingScrollCommit()
+      surfaces[sessionID]?.liveRenderer.flushPendingFrame()
+      guard var surface = surfaces[sessionID] else { continue }
+      handleLiveRendererFailureIfNeeded(session: sessionID, surface: &surface)
+      surfaces[sessionID] = surface
     }
   }
 
@@ -867,7 +937,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       {
         surface.textBackend.render(attributed: attributed, scrollToEnd: false)
       } else if let frame = surface.lastFrame {
-        render(frame, in: surface.cellGridBackend, isFocused: isFocused(sessionID))
+        render(frame, in: surface.liveRenderer, isFocused: isFocused(sessionID))
       }
     }
   }
@@ -962,7 +1032,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       return
     }
     if wasPinnedToBottom {
-      surface.cellGridBackend.resetPixelScroll()
+      surface.liveRenderer.resetPixelScroll(suppressMomentum: false)
     }
     render(snapshot, surface: &surface, session: id)
     surfaces[id] = surface
@@ -977,32 +1047,32 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     surface.bridge = bridge
     surface.scrollbar = snapshot.scrollbar
     render(snapshot, surface: &surface, session: id)
-    surface.cellGridBackend.flushPendingFrame()
-    surface.cellGridBackend.resetViewportStartRowKeepingVisualOffset()
+    surface.liveRenderer.flushPendingFrame()
+    surface.liveRenderer.resetViewportStartRowKeepingVisualOffset()
     surfaces[id] = surface
   }
 
   public func cancelQueuedViewportScroll(session id: TerminalSessionID) {
     guard let surface = surfaces[id] else { return }
-    surface.cellGridBackend.resetPixelScroll()
+    surface.liveRenderer.resetPixelScroll(suppressMomentum: false)
   }
 
   public func markResizePending(session id: TerminalSessionID) {
     guard let surface = surfaces[id] else { return }
-    surface.cellGridBackend.markResizePending()
+    surface.liveRenderer.markResizePending()
     surface.textBackend.markResizePending()
   }
 
   public func applyResizeDiagnostics(_ diagnostics: TerminalResizeDiagnostics, session id: TerminalSessionID) {
     guard let surface = surfaces[id] else { return }
-    surface.cellGridBackend.applyResizeDiagnostics(diagnostics)
+    surface.liveRenderer.applyResizeDiagnostics(diagnostics)
     surface.textBackend.applyResizeDiagnostics(diagnostics)
   }
 
   private func scrollViewport(
     session id: TerminalSessionID,
     rowDelta: Int,
-    backend: GhosttyVTCellGridRendererBackend?
+    backend: (any TerminalLiveRendererBackend)?
   ) -> Bool {
     guard var surface = surfaces[id], let backend, let bridge = surface.bridge else { return false }
     // The grid controller uses positive deltas for visual downward movement
@@ -1020,7 +1090,8 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     surface.scrollbar = try? bridge.scrollbar()
     render(bridge, surface: &surface, session: id)
     backend.flushPendingFrame()
-    backend.resetViewportStartRowKeepingVisualOffset()
+    handleLiveRendererFailureIfNeeded(session: id, surface: &surface)
+    surface.liveRenderer.resetViewportStartRowKeepingVisualOffset()
     surfaces[id] = surface
     return true
   }
@@ -1035,12 +1106,20 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     wasPinnedToBottom: Bool
   ) {
     guard wasPinnedToBottom, let surface = surfaces[id] else { return }
-    surface.cellGridBackend.resetPixelScroll()
+    surface.liveRenderer.resetPixelScroll(suppressMomentum: false)
   }
 
-  func prepareForUserInput(session id: TerminalSessionID) {
-    guard let surface = surfaces[id] else { return }
-    surface.cellGridBackend.resetPixelScroll(suppressMomentum: true)
+  @discardableResult
+  func prepareForUserInput(session id: TerminalSessionID) -> Bool {
+    guard let surface = surfaces[id] else { return false }
+    let isPinnedToBottom = surface.scrollbar.map { scrollbar in
+      scrollbar.offset + scrollbar.length >= scrollbar.total
+    } ?? true
+    let shouldRenderInputSnapshot = surface.gridView.isViewingHistory
+      || surface.gridView.viewport != TerminalViewport()
+      || !isPinnedToBottom
+    surface.liveRenderer.resetPixelScroll(suppressMomentum: true)
+    return shouldRenderInputSnapshot
   }
 
   private func canScrollViewport(session id: TerminalSessionID, rowDelta: Int) -> Bool {
@@ -1072,15 +1151,44 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     GhosttyVTQueueWork.scrollToBottom(bridge)
   }
 
+  private func handleLiveRendererFailureIfNeeded(
+    session id: TerminalSessionID,
+    surface: inout SurfaceState
+  ) {
+    guard surface.liveRenderer.diagnostics.backend == .metalDirect,
+      surface.liveRenderer.diagnostics.backendFallbackReason == TerminalRendererDiagnostics.metalDirectRenderFailedFallbackReason
+    else {
+      return
+    }
+    let fallbackRenderer = GhosttyVTCellGridRendererBackend(options: rendererOptions)
+    replaceLiveRenderer(
+      fallbackRenderer,
+      session: id,
+      surface: &surface,
+      fallbackReason: TerminalRendererDiagnostics.metalDirectRenderFailedFallbackReason
+    )
+  }
+
+  private func render(_ renderFrame: TerminalRenderFrame, in backend: any TerminalLiveRendererBackend) {
+    backend.render(renderFrame)
+  }
+
   private func render(_ bridge: GhosttyVTBridge, surface: inout SurfaceState, session id: TerminalSessionID) {
     surface.bridge = bridge
     let shouldFollowOutput = surface.textBackend.isScrolledToBottom
     let frame = try? bridge.frame()
-    let rendererMode = rendererMode(for: frame)
-    if let frame, rendererMode == .ghosttyVTCellGrid {
+    let rendererSelection = rendererSelection(for: frame)
+    if let frame, rendererSelection.presentation == .liveCellGrid {
+      let renderFrame: TerminalRenderFrame
+      if let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2) {
+        renderFrame = TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: isFocused(id))
+      } else {
+        renderFrame = TerminalRenderFrame(frame: frame, isFocused: isFocused(id))
+      }
       surface.lastHTMLSnapshot = nil
       surface.lastFrame = frame
       surface.lastCursorFrame = nil
+      surface.lastRenderFrame = renderFrame
       let shouldTransferFocus = surface.textView.window?.firstResponder === surface.textView
       surface.containerView.showLiveGrid()
       PTYRenderDebugLog.write(
@@ -1089,13 +1197,13 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       if shouldTransferFocus {
         surface.gridView.window?.makeFirstResponder(surface.gridView)
       }
-      render(bridge: bridge, fallbackFrame: frame, in: surface.cellGridBackend, isFocused: isFocused(id))
+      render(renderFrame, in: surface.liveRenderer)
       if let scrollbar = try? bridge.scrollbar(), let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2) {
         PTYRenderDebugLog.write(
           "snapshot session=\(id) scrollbar=(offset:\(scrollbar.offset), length:\(scrollbar.length), total:\(scrollbar.total)) viewportStart=\(String(describing: scrollFrame.viewportStartRow)) tail=\"\(Self.tailText(from: scrollFrame.viewport))\""
         )
       }
-      PTYRenderDebugLog.write("diagnostics session=\(id) \(surface.cellGridBackend.diagnostics.debugSummary)")
+      PTYRenderDebugLog.write("diagnostics session=\(id) \(surface.liveRenderer.diagnostics.debugSummary)")
     } else if let html = try? bridge.htmlText(),
       let attributed = try? attributedTerminalSnapshot(fromHTML: html, cursorFrame: frame, isFocused: isFocused(id))
     {
@@ -1122,24 +1230,24 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   private func render(_ snapshot: ResizeRenderSnapshot, surface: inout SurfaceState, session id: TerminalSessionID) {
     let shouldFollowOutput = surface.textBackend.isScrolledToBottom
-    let rendererMode = rendererMode(for: snapshot.frame)
-    if let frame = snapshot.frame, rendererMode == .ghosttyVTCellGrid {
+    let rendererSelection = rendererSelection(for: snapshot.frame)
+    if let frame = snapshot.frame, rendererSelection.presentation == .liveCellGrid {
+      let renderFrame = snapshot.scrollFrame.map { TerminalRenderFrame(scrollFrame: $0, isFocused: isFocused(id)) }
+        ?? TerminalRenderFrame(frame: frame, isFocused: isFocused(id))
       surface.lastHTMLSnapshot = nil
       surface.lastFrame = frame
       surface.lastCursorFrame = nil
+      surface.lastRenderFrame = renderFrame
       let shouldTransferFocus = surface.textView.window?.firstResponder === surface.textView
       surface.containerView.showLiveGrid()
       if shouldTransferFocus {
         surface.gridView.window?.makeFirstResponder(surface.gridView)
       }
-      if let scrollFrame = snapshot.scrollFrame {
-        surface.cellGridBackend.render(TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: isFocused(id)))
-      } else {
-        surface.cellGridBackend.render(TerminalRenderFrame(frame: frame, isFocused: isFocused(id)))
-      }
-      surface.cellGridBackend.flushPendingFrame()
+      render(renderFrame, in: surface.liveRenderer)
+      surface.liveRenderer.flushPendingFrame()
+      handleLiveRendererFailureIfNeeded(session: id, surface: &surface)
       PTYRenderDebugLog.write(
-        "resize-render session=\(id) mode=live-grid rows=\(frame.rows) cols=\(frame.cols) scrollbar=(offset:\(snapshot.scrollbar?.offset ?? 0), length:\(snapshot.scrollbar?.length ?? 0), total:\(snapshot.scrollbar?.total ?? 0)) diagnostics=\(surface.cellGridBackend.diagnostics.debugSummary)"
+        "resize-render session=\(id) mode=live-grid rows=\(frame.rows) cols=\(frame.cols) scrollbar=(offset:\(snapshot.scrollbar?.offset ?? 0), length:\(snapshot.scrollbar?.length ?? 0), total:\(snapshot.scrollbar?.total ?? 0)) diagnostics=\(surface.liveRenderer.diagnostics.debugSummary)"
       )
     } else if let html = snapshot.html,
       let attributed = try? attributedTerminalSnapshot(
@@ -1169,16 +1277,13 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     frame.isAlternateScreen || frame.cursorShape != .block || hasRenderedContentBelowCursor(in: frame)
   }
 
-  private func rendererMode(for frame: GhosttyTerminalFrame?) -> TerminalRendererMode {
-    switch rendererOptions.mode {
-    case .ghosttyVTTextFallback:
-      return .ghosttyVTTextFallback
-    case .ghosttyVTCellGrid:
-      return .ghosttyVTCellGrid
-    case .auto:
-      guard frame != nil else { return .ghosttyVTTextFallback }
-      return .ghosttyVTCellGrid
-    }
+  private func rendererSelection(for frame: GhosttyTerminalFrame?) -> TerminalRendererBackendSelection {
+    TerminalRendererBackendSelection.resolve(
+      mode: rendererOptions.mode,
+      hasFrame: frame != nil,
+      isMetalLiveAvailable: isMetalLiveAvailable,
+      isMetalDirectAvailable: isMetalDirectAvailable
+    )
   }
 
   private func hasRenderedContentBelowCursor(in frame: GhosttyTerminalFrame) -> Bool {
@@ -1213,7 +1318,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   private func render(
     _ frame: GhosttyTerminalFrame,
-    in backend: GhosttyVTCellGridRendererBackend,
+    in backend: any TerminalLiveRendererBackend,
     isFocused: Bool
   ) {
     backend.render(TerminalRenderFrame(frame: frame, isFocused: isFocused))
@@ -1222,7 +1327,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   private func render(
     bridge: GhosttyVTBridge,
     fallbackFrame frame: GhosttyTerminalFrame,
-    in backend: GhosttyVTCellGridRendererBackend,
+    in backend: any TerminalLiveRendererBackend,
     isFocused: Bool
   ) {
     guard let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2) else {
@@ -1465,7 +1570,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
 public final class PTYTerminalSurfaceView: NSView {
   public let scrollView: NSScrollView
-  public let liveGridView: PTYGridView
+  public private(set) var liveGridView: PTYGridView
   var onWindowAvailable: (() -> Void)?
 
   public var isShowingLiveGrid: Bool {
@@ -1506,6 +1611,18 @@ public final class PTYTerminalSurfaceView: NSView {
     liveGridView.isHidden = true
   }
 
+  func replaceLiveGridView(with newLiveGridView: PTYGridView) {
+    let shouldShowLiveGrid = isShowingLiveGrid
+    liveGridView.removeFromSuperview()
+    liveGridView = newLiveGridView
+    addFullSizeSubview(newLiveGridView)
+    if shouldShowLiveGrid {
+      showLiveGrid()
+    } else {
+      showScrollback()
+    }
+  }
+
   private func addFullSizeSubview(_ subview: NSView) {
     subview.translatesAutoresizingMaskIntoConstraints = false
     addSubview(subview)
@@ -1530,7 +1647,7 @@ struct GridCoordinate: Comparable {
   }
 }
 
-public final class PTYGridView: NSView {
+public class PTYGridView: NSView {
   private static let scrollCommitInterval: TimeInterval = 1.0 / 120.0
   private static let selectionAutoScrollEdgeInset: CGFloat = 24
   private static let selectionAutoScrollInterval: TimeInterval = 1.0 / 15.0
@@ -1539,6 +1656,8 @@ public final class PTYGridView: NSView {
   public var pasteHandler: ((String) -> Void)?
   public var viewportScrollHandler: ((Int) -> Bool)?
   public var viewportCanScrollHandler: ((Int) -> Bool)?
+  public var viewportDidChangeHandler: (() -> Void)?
+  public var transientOverlayDidChangeHandler: (() -> Void)?
   public var activationHandler: (() -> Void)?
   public var openURLHandler: ((URL) -> Void)? = { url in
     _ = NSWorkspace.shared.open(url)
@@ -1560,7 +1679,14 @@ public final class PTYGridView: NSView {
   private var scrollCoordinator = PaneScrollCoordinator()
   private var scrollCommitCoordinator = ScrollCommitCoordinator()
   private var suppressMomentumScroll = false
-  private(set) public var viewport = TerminalViewport()
+  private(set) public var viewport = TerminalViewport() {
+    didSet {
+      guard oldValue != viewport else { return }
+      viewportDidChangeHandler?()
+      needsDisplay = true
+      window?.invalidateCursorRects(for: self)
+    }
+  }
   private(set) public var lastDrawDuration: TimeInterval = 0
   private(set) public var lastScrollCommitDuration: TimeInterval = 0
   private(set) public var maxDrawDuration: TimeInterval = 0
@@ -1575,6 +1701,7 @@ public final class PTYGridView: NSView {
   private var selectionDragPoint: NSPoint?
   private var commandLinkMode = false
   private var isHoveringLink = false
+  private var hoveredLinkHit: TerminalLinkHit?
   private var mouseTrackingArea: NSTrackingArea?
   private var markedText = NSAttributedString(string: "")
   private var markedTextRange = NSRange(location: NSNotFound, length: 0)
@@ -1595,8 +1722,7 @@ public final class PTYGridView: NSView {
   }
 
   public var cursorCellRect: NSRect? {
-    guard let frame = frameSnapshot else { return nil }
-    return rectForCell(row: frame.cursorY, col: frame.cursorX)
+    renderedCursorRect()
   }
 
   public var terminalCellSize: CGSize {
@@ -2306,6 +2432,48 @@ public final class PTYGridView: NSView {
     selectionRows()
   }
 
+  public var currentSelectionCellRanges: [GridSelectionCellRange] {
+    guard
+      let range = normalizedSelectionRange(),
+      let frame = selectionFrameSnapshot ?? renderedGeometry()?.frame
+    else {
+      return []
+    }
+    return (range.lower.row...range.upper.row).compactMap { row in
+      let lowerCol = row == range.lower.row ? range.lower.col : 0
+      let upperCol = row == range.upper.row ? range.upper.col : max(0, frame.cols - 1)
+      guard lowerCol <= upperCol else { return nil }
+      return GridSelectionCellRange(row: row, cols: lowerCol..<(upperCol + 1))
+    }
+  }
+
+  public var currentLinkHoverCellRanges: [GridSelectionCellRange] {
+    guard let hoveredLinkHit else { return [] }
+    return [GridSelectionCellRange(row: hoveredLinkHit.row, cols: hoveredLinkHit.range)]
+  }
+
+  public var currentMarkedTextOverlay: GridMarkedTextOverlay? {
+    guard hasMarkedText(), !markedText.string.isEmpty, let frame = frameSnapshot else { return nil }
+    let terminalRect = Self.terminalContentClipRect(
+      cols: frame.cols,
+      rows: frame.rows,
+      cellSize: cellSize,
+      inset: contentInset
+    )
+    let textWidth = ceil((markedText.string as NSString).size(withAttributes: markedTextAttributes()).width) + 4
+    let width = min(
+      max(cellSize.width, textWidth),
+      max(0, terminalRect.maxX - (renderedCursorRect()?.minX ?? rectForCell(row: frame.cursorY, col: frame.cursorX).minX))
+    )
+    guard width > 0 else { return nil }
+    return GridMarkedTextOverlay(row: frame.cursorY, col: frame.cursorX, width: width)
+  }
+
+  public var currentMarkedTextString: String? {
+    guard hasMarkedText(), !markedText.string.isEmpty else { return nil }
+    return markedText.string
+  }
+
   private func selectionDirtyRects() -> [NSRect] {
     selectionRows().map(rowRect)
   }
@@ -2314,6 +2482,7 @@ public final class PTYGridView: NSView {
     for rect in previous + selectionDirtyRects() {
       setNeedsDisplay(rect)
     }
+    transientOverlayDidChangeHandler?()
   }
 
   private func selectionRows() -> Set<Int> {
@@ -2451,7 +2620,7 @@ public final class PTYGridView: NSView {
 
   private func markedTextDirtyRect() -> NSRect? {
     guard hasMarkedText(), let frame = frameSnapshot else { return nil }
-    let originCell = rectForCell(row: frame.cursorY, col: frame.cursorX)
+    let originCell = renderedCursorRect() ?? rectForCell(row: frame.cursorY, col: frame.cursorX)
     let terminalRect = Self.terminalContentClipRect(
       cols: frame.cols,
       rows: frame.rows,
@@ -2600,12 +2769,19 @@ public final class PTYGridView: NSView {
   }
 
   private func updateLinkHover(at point: NSPoint) {
-    updateLinkHover(isHovering: linkHit(at: point) != nil)
+    let hit = linkHit(at: point)
+    hoveredLinkHit = hit
+    updateLinkHover(isHovering: hit != nil)
   }
 
   private func updateLinkHover(isHovering: Bool) {
+    if !isHovering {
+      hoveredLinkHit = nil
+    }
     guard isHoveringLink != isHovering else { return }
     isHoveringLink = isHovering
+    needsDisplay = true
+    transientOverlayDidChangeHandler?()
     linkHoverHandler?(isHovering)
   }
 
@@ -2690,6 +2866,7 @@ public final class PTYGridView: NSView {
       updateSelectionHead(at: selectionDragPoint)
     }
     needsDisplay = true
+    transientOverlayDidChangeHandler?()
   }
 
   private func renderedGeometry() -> RenderedGridGeometry? {
@@ -2711,6 +2888,11 @@ public final class PTYGridView: NSView {
       inset: contentInset,
       clipRect: renderedClipRect(for: frameSnapshot, fallbackFrame: frameSnapshot)
     )
+  }
+
+  private func renderedCursorRect() -> NSRect? {
+    guard let geometry = renderedGeometry() else { return nil }
+    return geometry.rectForCell(row: geometry.frame.cursorY, col: geometry.frame.cursorX)
   }
 
   private func clippedCursorRect(_ rect: NSRect, to clipRect: NSRect) -> NSRect? {
@@ -2799,6 +2981,7 @@ extension PTYGridView: @preconcurrency NSTextInputClient {
     if let oldRect {
       setNeedsDisplay(oldRect)
     }
+    transientOverlayDidChangeHandler?()
     guard let text = committedText(from: string), !text.isEmpty else { return }
     inputHandler?(Data(text.utf8))
   }
@@ -2819,6 +3002,7 @@ extension PTYGridView: @preconcurrency NSTextInputClient {
     if let newRect = markedTextDirtyRect() {
       setNeedsDisplay(newRect)
     }
+    transientOverlayDidChangeHandler?()
   }
 
   public func unmarkText() {
@@ -2828,6 +3012,7 @@ extension PTYGridView: @preconcurrency NSTextInputClient {
     if let oldRect {
       setNeedsDisplay(oldRect)
     }
+    transientOverlayDidChangeHandler?()
   }
 
   public func selectedRange() -> NSRange {
@@ -2877,6 +3062,28 @@ struct GridSelectionCoordinate: Equatable, Sendable {
   init(row: Int, col: Int) {
     self.row = row
     self.col = col
+  }
+}
+
+public struct GridSelectionCellRange: Equatable, Sendable {
+  public var row: Int
+  public var cols: Range<Int>
+
+  public init(row: Int, cols: Range<Int>) {
+    self.row = row
+    self.cols = cols
+  }
+}
+
+public struct GridMarkedTextOverlay: Equatable, Sendable {
+  public var row: Int
+  public var col: Int
+  public var width: CGFloat
+
+  public init(row: Int, col: Int, width: CGFloat) {
+    self.row = row
+    self.col = col
+    self.width = width
   }
 }
 

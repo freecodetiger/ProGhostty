@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ProGhostty Ghost Theme Preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #080b0d;
+      --terminal: #0b0f11;
+      --terminal-2: #101517;
+      --titlebar: #0b0f11;
+      --text: #dce6e2;
+      --muted: #74807c;
+      --faint: #46504d;
+      --line: rgba(202, 232, 222, 0.09);
+      --line-strong: rgba(204, 244, 232, 0.18);
+      --accent: #9de9d2;
+      --accent-2: #d8fff3;
+      --selection: rgba(157, 233, 210, 0.18);
+      --panel: rgba(13, 19, 21, 0.86);
+      --panel-border: rgba(213, 255, 244, 0.14);
+      --shadow: rgba(0, 0, 0, 0.42);
+      --blur: 22px;
+      --radius: 18px;
+      --mono: "SF Mono", "Menlo", "Monaco", "Cascadia Mono", monospace;
+      --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    }
+
+    [data-theme="mist"] {
+      color-scheme: light;
+      --page: #edf2ef;
+      --terminal: #f7faf7;
+      --terminal-2: #eef4f1;
+      --titlebar: #f7faf7;
+      --text: #17201d;
+      --muted: #62716b;
+      --faint: #9aa6a1;
+      --line: rgba(20, 38, 32, 0.08);
+      --line-strong: rgba(20, 38, 32, 0.16);
+      --accent: #167b68;
+      --accent-2: #083d36;
+      --selection: rgba(22, 123, 104, 0.13);
+      --panel: rgba(250, 253, 250, 0.88);
+      --panel-border: rgba(18, 56, 48, 0.12);
+      --shadow: rgba(38, 61, 52, 0.18);
+    }
+
+    [data-theme="violet"] {
+      --page: #08080b;
+      --terminal: #0d0d12;
+      --terminal-2: #13131a;
+      --titlebar: #0d0d12;
+      --text: #e5e2ee;
+      --muted: #7c7889;
+      --faint: #4e4b58;
+      --line: rgba(231, 222, 255, 0.08);
+      --line-strong: rgba(231, 222, 255, 0.17);
+      --accent: #c7b8ff;
+      --accent-2: #f3edff;
+      --selection: rgba(199, 184, 255, 0.16);
+      --panel: rgba(18, 18, 26, 0.86);
+      --panel-border: rgba(231, 222, 255, 0.13);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(1200px 720px at 50% -24%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 58%),
+        linear-gradient(180deg, var(--page), color-mix(in srgb, var(--page) 88%, #000 12%));
+      color: var(--text);
+      font-family: var(--ui);
+      letter-spacing: 0;
+      transition: background 220ms ease, color 220ms ease;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.28;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 44px 44px;
+      mask-image: linear-gradient(180deg, black, transparent 72%);
+    }
+
+    .page {
+      width: min(1320px, calc(100vw - 48px));
+      margin: 0 auto;
+      padding: 32px 0 48px;
+    }
+
+    .header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .brand img {
+      width: 42px;
+      height: 42px;
+      object-fit: contain;
+      filter: drop-shadow(0 8px 24px color-mix(in srgb, var(--accent) 20%, transparent));
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.05;
+      font-weight: 640;
+    }
+
+    .subtitle {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .theme-controls {
+      display: flex;
+      gap: 8px;
+      padding: 5px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--panel) 70%, transparent);
+      backdrop-filter: blur(var(--blur));
+    }
+
+    .theme-controls button {
+      border: 0;
+      border-radius: 999px;
+      padding: 8px 12px;
+      color: var(--muted);
+      background: transparent;
+      font: 12px var(--ui);
+      cursor: pointer;
+    }
+
+    .theme-controls button.active {
+      color: var(--accent-2);
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+
+    .stage {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 24px;
+      background: var(--terminal);
+      box-shadow: 0 32px 90px var(--shadow);
+    }
+
+    .stage::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, transparent 0 54%, color-mix(in srgb, var(--accent) 5%, transparent) 54% 54.2%, transparent 54.2%),
+        linear-gradient(180deg, transparent 0 49%, color-mix(in srgb, var(--accent) 4%, transparent) 49% 49.2%, transparent 49.2%);
+      opacity: 0.62;
+    }
+
+    .titlebar {
+      height: 44px;
+      display: grid;
+      grid-template-columns: 120px 1fr auto;
+      align-items: center;
+      padding: 0 14px;
+      background: var(--titlebar);
+    }
+
+    .lights {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .light {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      opacity: 0.82;
+    }
+
+    .red { background: #ff6b62; }
+    .yellow { background: #f0be4b; }
+    .green { background: #62c554; }
+
+    .workspace-label {
+      justify-self: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 520;
+    }
+
+    .toast {
+      justify-self: end;
+      border-radius: 999px;
+      padding: 6px 10px;
+      color: var(--accent-2);
+      background: color-mix(in srgb, var(--accent) 14%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+      font-size: 12px;
+    }
+
+    .terminal {
+      display: grid;
+      grid-template-columns: 1.18fr 0.82fr;
+      grid-template-rows: 316px 258px;
+      min-height: 574px;
+      border-top: 1px solid transparent;
+    }
+
+    .pane {
+      position: relative;
+      padding: 20px 22px;
+      overflow: hidden;
+      background: var(--terminal);
+      border-top: 1px solid var(--line);
+      border-left: 1px solid var(--line);
+      font: 13px/1.62 var(--mono);
+    }
+
+    .pane:first-child {
+      grid-row: 1 / 3;
+      border-left: 0;
+    }
+
+    .pane.focused {
+      color: var(--text);
+    }
+
+    .pane:not(.focused) {
+      color: color-mix(in srgb, var(--text) 62%, var(--terminal));
+    }
+
+    .pane::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, transparent), transparent 34%),
+        linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 3%, transparent), transparent);
+      opacity: 0.72;
+    }
+
+    .pane pre {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      white-space: pre-wrap;
+    }
+
+    .prompt { color: var(--accent); }
+    .cmd { color: var(--accent-2); }
+    .comment { color: var(--muted); }
+    .faint { color: var(--faint); }
+    .selection {
+      background: var(--selection);
+      border-radius: 4px;
+    }
+
+    .cursor {
+      display: inline-block;
+      width: 7px;
+      height: 15px;
+      transform: translateY(2px);
+      background: var(--accent);
+      animation: blink 1.15s steps(1) infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    .switcher {
+      position: absolute;
+      width: 420px;
+      right: 52px;
+      top: 82px;
+      padding: 10px;
+      border-radius: 18px;
+      border: 1px solid var(--panel-border);
+      background: var(--panel);
+      backdrop-filter: blur(28px) saturate(1.12);
+      box-shadow: 0 24px 70px var(--shadow);
+      z-index: 5;
+    }
+
+    .switcher::before {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      border-radius: inherit;
+      pointer-events: none;
+      border: 1px solid color-mix(in srgb, var(--accent) 9%, transparent);
+    }
+
+    .switcher-row {
+      display: grid;
+      grid-template-columns: 18px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      height: 42px;
+      padding: 0 12px;
+      border-radius: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .switcher-row.active {
+      color: var(--accent-2);
+      background: color-mix(in srgb, var(--accent) 11%, transparent);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--faint);
+    }
+
+    .active .dot {
+      background: var(--accent);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 10%, transparent);
+    }
+
+    .kbd {
+      color: var(--faint);
+      font: 11px var(--mono);
+    }
+
+    .theme-notes {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .note {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      background: color-mix(in srgb, var(--panel) 74%, transparent);
+      backdrop-filter: blur(var(--blur));
+    }
+
+    .note h2 {
+      margin: 0 0 8px;
+      font-size: 14px;
+      font-weight: 620;
+    }
+
+    .note p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.58;
+    }
+
+    @media (max-width: 860px) {
+      .page {
+        width: min(100vw - 24px, 720px);
+        padding-top: 18px;
+      }
+
+      .header,
+      .theme-notes {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+
+      .theme-controls {
+        justify-self: start;
+      }
+
+      .terminal {
+        grid-template-columns: 1fr;
+        grid-template-rows: repeat(3, 240px);
+      }
+
+      .pane:first-child {
+        grid-row: auto;
+      }
+
+      .switcher {
+        left: 18px;
+        right: 18px;
+        width: auto;
+      }
+    }
+  </style>
+</head>
+<body data-theme="graphite">
+  <main class="page">
+    <header class="header">
+      <div class="brand">
+        <img src="../../logo.png" alt="ProGhostty logo">
+        <div>
+          <h1>Ghost Theme Direction</h1>
+          <div class="subtitle">不是贴图，而是把 Ghost 做成材质、层次、残影和低饱和高光。</div>
+        </div>
+      </div>
+      <nav class="theme-controls" aria-label="Theme variants">
+        <button class="active" data-select="graphite">Spectral Graphite</button>
+        <button data-select="mist">Mist Light</button>
+        <button data-select="violet">Phantom Violet</button>
+      </nav>
+    </header>
+
+    <section class="stage" aria-label="ProGhostty ghost theme mockup">
+      <div class="titlebar">
+        <div class="lights">
+          <span class="light red"></span>
+          <span class="light yellow"></span>
+          <span class="light green"></span>
+        </div>
+        <div class="workspace-label">core · ~/projects/proghostty</div>
+        <div class="toast">link copied</div>
+      </div>
+
+      <div class="terminal">
+        <article class="pane focused">
+          <pre><span class="prompt">zpc@proghostty</span> <span class="faint">~/projects/proghostty</span> % <span class="cmd">swift test</span>
+Test run started.
+Suite "Terminal renderer backend" passed.
+Suite "Terminal surface" passed.
+Suite "Workspace store" passed.
+
+<span class="comment"># focused pane: text stays crisp, background stays quiet</span>
+<span class="prompt">zpc@proghostty</span> <span class="faint">~/projects/proghostty</span> % <span class="selection">git status --short</span>
+?? docs/design/ghost-theme-preview.html
+
+<span class="prompt">zpc@proghostty</span> <span class="faint">~/projects/proghostty</span> % <span class="cursor"></span></pre>
+        </article>
+
+        <article class="pane">
+          <pre><span class="prompt">workspace</span> % <span class="cmd">codex --yolo</span>
+Analyzing terminal rendering path...
+Using Ghostty VT snapshot.
+Dirty rows: 4
+Pixel scroll: available
+
+<span class="comment">non-focused pane recedes by foreground,
+not by painting a separate background.</span></pre>
+        </article>
+
+        <article class="pane">
+          <pre><span class="prompt">logs</span> % <span class="cmd">tail -f renderer.log</span>
+[cell-grid] viewport rows 42
+[scroll] overscan top 2 bottom 2
+[resize] defer alternate screen
+[focus] pane 7E2F active
+
+<span class="faint">subtle border only appears where it helps structure.</span></pre>
+        </article>
+      </div>
+
+      <aside class="switcher" aria-label="Workspace switcher preview">
+        <div class="switcher-row active"><span class="dot"></span><span>core</span><span class="kbd">active</span></div>
+        <div class="switcher-row"><span class="dot"></span><span>release</span><span class="kbd">running</span></div>
+        <div class="switcher-row"><span class="dot"></span><span>research</span><span class="kbd">2 panes</span></div>
+        <div class="switcher-row"><span class="dot"></span><span>Add workspace</span><span class="kbd">return</span></div>
+      </aside>
+    </section>
+
+    <section class="theme-notes">
+      <div class="note">
+        <h2>Ghost as Presence</h2>
+        <p>Ghost 感来自窗口边缘的微弱雾化、浮层材质和文字明度层次。终端内容仍然最清晰，不引入常驻装饰。</p>
+      </div>
+      <div class="note">
+        <h2>Ghost Trail</h2>
+        <p>切换 workspace、显示 toast、打开浮层时可以有 120-180ms 的残影式过渡。只解释状态变化，不做动画表演。</p>
+      </div>
+      <div class="note">
+        <h2>Spectral Accent</h2>
+        <p>主题只在小面积使用冷白、幽青或雾紫。分屏边界、URL hover、当前 workspace 和 toast 可以共享这一组高光。</p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const root = document.body;
+    const buttons = document.querySelectorAll("[data-select]");
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => {
+        root.dataset.theme = button.dataset.select;
+        buttons.forEach((item) => item.classList.toggle("active", item === button));
+      });
+    });
+  </script>
+</body>
+</html>
