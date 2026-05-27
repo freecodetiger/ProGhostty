@@ -1037,6 +1037,39 @@ struct TerminalSurfaceTests {
     ))
   }
 
+  @MainActor @Test func terminalOutputCoordinatorKeepsLatestSnapshotDuringCoalescingWindow() async throws {
+    let session = TerminalSessionID()
+    let bridge = try GhosttyVTBridge(cols: 12, rows: 2, maxScrollback: 100)
+    var deliveredCursorPositions: [GridCoordinate] = []
+    let coordinator = TerminalOutputCoordinator(coalescingDelayNanoseconds: 8_000_000) { snapshot, _, _, _ in
+      if let frame = snapshot.frame {
+        deliveredCursorPositions.append(GridCoordinate(row: frame.cursorY, col: frame.cursorX))
+      }
+    }
+
+    bridge.write(Data("one".utf8))
+    let firstSnapshot = ResizeRenderSnapshot.capture(from: bridge)
+    bridge.write(Data("\r\nabc".utf8))
+    let secondSnapshot = ResizeRenderSnapshot.capture(from: bridge)
+
+    coordinator.scheduleRender(
+      snapshot: firstSnapshot,
+      bridge: bridge,
+      session: session,
+      wasPinnedToBottom: true
+    )
+    coordinator.scheduleRender(
+      snapshot: secondSnapshot,
+      bridge: bridge,
+      session: session,
+      wasPinnedToBottom: true
+    )
+
+    try await Task.sleep(nanoseconds: 20_000_000)
+
+    #expect(deliveredCursorPositions == [GridCoordinate(row: 1, col: 3)])
+  }
+
   @Test func scrollAnchorPreservesCursorScreenPositionWhenLiveDocumentHeightChanges() {
     let origin = TerminalScrollAnchor.replacementOrigin(
       previousOriginY: 100,
