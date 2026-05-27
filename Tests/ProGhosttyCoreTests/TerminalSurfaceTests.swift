@@ -1003,6 +1003,40 @@ struct TerminalSurfaceTests {
     }
   }
 
+  @MainActor @Test func liveCellGridCoalescesTransientCodexCursorMovesBeforePresentingOutput() async throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTCellGrid))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try codexLikeBridge(suggestions: [
+      "/resume       resume a previous session",
+      "/review       review current changes",
+    ])
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let initialCursor = try #require(surfaceView.liveGridView.cursorCellRect)
+
+    bridge.write(Data("\u{1B}[8;1H".utf8))
+    let transientSnapshot = ResizeRenderSnapshot.capture(from: bridge)
+    registry.renderOutput(transientSnapshot, bridge: bridge, session: session, wasPinnedToBottom: true)
+    try await Task.sleep(nanoseconds: 1_000_000)
+
+    #expect(surfaceView.liveGridView.cursorCellRect == initialCursor)
+
+    bridge.write(Data("\u{1B}[10;1H> /r\u{1B}[11;1H\u{1B}[J/resume       resume a previous session\u{1B}[10;5H".utf8))
+    let finalSnapshot = ResizeRenderSnapshot.capture(from: bridge)
+    registry.renderOutput(finalSnapshot, bridge: bridge, session: session, wasPinnedToBottom: true)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.cursorCellRect == PTYGridView.textGlyphRect(
+      row: 9,
+      col: 4,
+      cellSize: surfaceView.liveGridView.terminalCellSize,
+      inset: surfaceView.liveGridView.terminalContentInset
+    ))
+  }
+
   @Test func scrollAnchorPreservesCursorScreenPositionWhenLiveDocumentHeightChanges() {
     let origin = TerminalScrollAnchor.replacementOrigin(
       previousOriginY: 100,

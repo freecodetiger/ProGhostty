@@ -683,12 +683,21 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     var liveRendererFallbackReason: String? = nil
   }
 
+  private struct PendingOutputRender {
+    var snapshot: ResizeRenderSnapshot
+    var bridge: GhosttyVTBridge
+    var wasPinnedToBottom: Bool
+  }
+
   private struct CursorTextPlacement {
     var index: Int
     var filler: String
   }
 
+  private static let outputRenderCoalescingDelayNanoseconds: UInt64 = 8_000_000
   private var surfaces: [TerminalSessionID: SurfaceState] = [:]
+  private var pendingOutputRenders: [TerminalSessionID: PendingOutputRender] = [:]
+  private var outputRenderTasks: [TerminalSessionID: Task<Void, Never>] = [:]
   private var palette = TerminalSurfacePalette.dark
   private var fontFamily = FontManager.defaultMonospacedFontName()
   private var fontSize: CGFloat = 14
@@ -831,6 +840,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   }
 
   public func removeSurface(session id: TerminalSessionID) {
+    cancelPendingOutputRender(session: id)
     surfaces[id] = nil
   }
 
@@ -916,6 +926,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   public func flushPendingRenderers() {
     for sessionID in Array(surfaces.keys) {
+      flushPendingOutputRender(session: sessionID)
       surfaces[sessionID]?.gridView.flushPendingScrollCommit()
       surfaces[sessionID]?.liveRenderer.flushPendingFrame()
       guard var surface = surfaces[sessionID] else { continue }
@@ -999,6 +1010,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   public func render(_ bridge: GhosttyVTBridge, session id: TerminalSessionID) {
     guard var surface = surfaces[id] else { return }
+    cancelPendingOutputRender(session: id)
     surface.scrollbar = try? bridge.scrollbar()
     render(bridge, surface: &surface, session: id)
     surfaces[id] = surface
@@ -1006,6 +1018,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   public func render(_ snapshot: ResizeRenderSnapshot, bridge: GhosttyVTBridge, session id: TerminalSessionID) {
     guard var surface = surfaces[id] else { return }
+    cancelPendingOutputRender(session: id)
     surface.bridge = bridge
     surface.scrollbar = snapshot.scrollbar
     render(snapshot, surface: &surface, session: id)
@@ -1018,24 +1031,79 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     session id: TerminalSessionID,
     wasPinnedToBottom: Bool
   ) {
+    guard surfaces[id] != nil else { return }
+    pendingOutputRenders[id] = PendingOutputRender(
+      snapshot: snapshot,
+      bridge: bridge,
+      wasPinnedToBottom: wasPinnedToBottom
+    )
+    scheduleOutputRender(session: id)
+  }
+
+  private func scheduleOutputRender(session id: TerminalSessionID) {
+    outputRenderTasks[id]?.cancel()
+    outputRenderTasks[id] = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: Self.outputRenderCoalescingDelayNanoseconds)
+      guard !Task.isCancelled else { return }
+      self?.flushPendingOutputRenderAndFrame(session: id)
+    }
+  }
+
+  private func cancelPendingOutputRender(session id: TerminalSessionID) {
+    outputRenderTasks[id]?.cancel()
+    outputRenderTasks[id] = nil
+    pendingOutputRenders[id] = nil
+  }
+
+  private func flushPendingOutputRenderAndFrame(session id: TerminalSessionID) {
+    guard flushPendingOutputRender(session: id) else { return }
+    surfaces[id]?.liveRenderer.flushPendingFrame()
     guard var surface = surfaces[id] else { return }
+    handleLiveRendererFailureIfNeeded(session: id, surface: &surface)
+    surfaces[id] = surface
+  }
+
+  @discardableResult
+  private func flushPendingOutputRender(session id: TerminalSessionID) -> Bool {
+    outputRenderTasks[id]?.cancel()
+    outputRenderTasks[id] = nil
+    guard let pending = pendingOutputRenders.removeValue(forKey: id),
+      var surface = surfaces[id]
+    else {
+      return false
+    }
+    renderOutput(
+      pending.snapshot,
+      bridge: pending.bridge,
+      surface: &surface,
+      session: id,
+      wasPinnedToBottom: pending.wasPinnedToBottom
+    )
+    surfaces[id] = surface
+    return true
+  }
+
+  private func renderOutput(
+    _ snapshot: ResizeRenderSnapshot,
+    bridge: GhosttyVTBridge,
+    surface: inout SurfaceState,
+    session id: TerminalSessionID,
+    wasPinnedToBottom: Bool
+  ) {
     surface.bridge = bridge
     surface.scrollbar = snapshot.scrollbar
     if surface.containerView.isShowingLiveGrid,
       (surface.gridView.isViewingHistory || surface.gridView.isDraggingSelection)
     {
-      surfaces[id] = surface
       return
     }
     if !wasPinnedToBottom, surface.containerView.isShowingLiveGrid {
-      surfaces[id] = surface
       return
     }
     if wasPinnedToBottom {
       surface.liveRenderer.resetPixelScroll(suppressMomentum: false)
     }
     render(snapshot, surface: &surface, session: id)
-    surfaces[id] = surface
   }
 
   public func finishQueuedViewportScroll(
