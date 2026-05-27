@@ -45,6 +45,22 @@ struct AppSettingsTests {
     #expect(settings.terminalRendererOptions.smoothPixelScrollingEnabled == false)
   }
 
+  @Test func decodesLegacyMetalLiveRendererSettingAsAuto() throws {
+    let legacy = """
+      {
+        "rendererMode": "metalLive",
+        "defaultShell": "/bin/zsh",
+        "fontFamily": "Menlo",
+        "fontSize": 14,
+        "themeName": "dark"
+      }
+      """.data(using: .utf8)!
+
+    let settings = try JSONDecoder().decode(AppSettings.self, from: legacy)
+
+    #expect(settings.rendererMode == .auto)
+  }
+
   @Test func settingsStoreMigratesHiddenPixelScrollFlagToEnabled() throws {
     let suiteName = "proghostty.settings.test.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
