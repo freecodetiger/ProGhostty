@@ -1,9 +1,34 @@
+import Foundation
 import Testing
 
 @testable import ProGhosttyCore
 
 @Suite("Terminal resize coordinator")
 struct TerminalResizeCoordinatorTests {
+  @MainActor @Test func resizeSchedulerKeepsLatestRequestDuringCoalescingWindow() async throws {
+    let session = TerminalSessionID()
+    var delivered: [ResizeRequest] = []
+    let scheduler = TerminalResizeScheduler<ResizeRequest>(coalescingDelayNanoseconds: 8_000_000) { _, request in
+      delivered.append(request)
+    }
+
+    scheduler.schedule(
+      request: ResizeRequest(rows: 24, cols: 80),
+      session: session
+    )
+    scheduler.schedule(
+      request: ResizeRequest(rows: 30, cols: 100),
+      session: session
+    )
+
+    let deadline = Date().addingTimeInterval(1)
+    while Date() < deadline, delivered.isEmpty {
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    #expect(delivered == [ResizeRequest(rows: 30, cols: 100)])
+  }
+
   @Test func normalScreenDefersGridChangesDuringLiveResize() {
     var coordinator = TerminalResizeCommitCoordinator()
     let grid = TerminalGridSize(rows: 36, cols: 104)
@@ -93,4 +118,9 @@ struct TerminalResizeCoordinatorTests {
 
     #expect(decision == .commit(grid))
   }
+}
+
+private struct ResizeRequest: Equatable, Sendable {
+  var rows: Int
+  var cols: Int
 }

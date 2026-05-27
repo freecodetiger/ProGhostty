@@ -415,6 +415,11 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   }
 
   public func markResizePending() {
+    if pendingRenderFrame != nil {
+      diagnosticsState.droppedFrames += 1
+    }
+    pendingRenderFrame = nil
+    pendingRenderGeneration = 0
     diagnosticsState.pendingResize = true
   }
 

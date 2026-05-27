@@ -754,6 +754,21 @@ struct TerminalRendererBackendTests {
     #expect(diagnostics.lastResizeTotalDuration == 0.3)
   }
 
+  @MainActor @Test func metalDirectRendererBackendDropsPendingFrameWhenResizeBegins() {
+    let backend = MetalDirectRendererBackend()
+
+    backend.render(TerminalRenderFrame(frame: frame(rows: ["old"], cols: 4, cursorX: 0, cursorY: 0), generation: 10))
+    backend.flushPendingFrame()
+    backend.render(TerminalRenderFrame(frame: frame(rows: ["stale"], cols: 4, cursorX: 0, cursorY: 0), generation: 11))
+    backend.markResizePending()
+    backend.flushPendingFrame()
+
+    let diagnostics = backend.diagnostics
+    #expect(diagnostics.metalDirectLatestPresentedGeneration == 10)
+    #expect(diagnostics.droppedFrames >= 1)
+    #expect(diagnostics.pendingResize)
+  }
+
   @MainActor @Test func metalDirectRendererBackendKeepsLatestResizeStageGeneration() {
     let backend = MetalDirectRendererBackend()
 

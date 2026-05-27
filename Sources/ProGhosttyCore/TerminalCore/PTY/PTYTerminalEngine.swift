@@ -284,6 +284,16 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
 
 @MainActor
 public final class PTYTerminalSessionManager: TerminalSessionManager {
+  private struct PendingResizeJob {
+    var rows: Int
+    var cols: Int
+    var generation: UInt64
+    var bridge: GhosttyVTBridge
+    var fileDescriptor: Int32
+    var pid: pid_t
+    var vtQueue: DispatchQueue
+  }
+
   private struct SessionState {
     var config: TerminalSessionConfig
     var pid: pid_t
@@ -302,6 +312,9 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   private var reapTimers: [pid_t: DispatchSourceTimer] = [:]
   private let continuation: AsyncStream<TerminalEvent>.Continuation
   public let events: AsyncStream<TerminalEvent>
+  private lazy var resizeScheduler: TerminalResizeScheduler<PendingResizeJob> = TerminalResizeScheduler { [weak self] session, job in
+    self?.performScheduledResize(session: session, job: job)
+  }
 
   public init(surfaceRegistry: PTYTerminalSurfaceRegistry) {
     self.surfaceRegistry = surfaceRegistry
@@ -348,6 +361,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     guard let state = sessions.removeValue(forKey: id) else { return }
     state.readSource.cancel()
     state.waitTimer.cancel()
+    resizeScheduler.cancel(session: id)
     surfaceRegistry.removeSurface(session: id)
     sendHangup(to: state.pid)
     scheduleReap(pid: state.pid)
@@ -367,38 +381,18 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     let pid = state.pid
     sessions[id] = state
     surfaceRegistry.markResizePending(session: id)
-    vtQueue.async { [weak self] in
-      let totalStart = Date()
-      let wasPinnedToBottom = GhosttyVTQueueWork.viewportIsPinnedToBottom(bridge)
-      let vtStart = Date()
-      bridge.resize(cols: cols, rows: rows)
-      PTYLaunch.resize(fileDescriptor: fd, rows: rows, cols: cols)
-      _ = Darwin.kill(pid, SIGWINCH)
-      let vtDuration = Date().timeIntervalSince(vtStart)
-
-      let snapshotStart = Date()
-      if wasPinnedToBottom {
-        GhosttyVTQueueWork.scrollToBottom(bridge)
-      }
-      let snapshot = ResizeRenderSnapshot.capture(from: bridge)
-      let snapshotDuration = Date().timeIntervalSince(snapshotStart)
-      let diagnostics = TerminalResizeDiagnostics(
-        totalDuration: Date().timeIntervalSince(totalStart),
-        vtDuration: vtDuration,
-        snapshotDuration: snapshotDuration
-      )
-
-      Task { @MainActor [weak self] in
-        self?.finishResize(
-          session: id,
-          generation: generation,
-          wasPinnedToBottom: wasPinnedToBottom,
-          bridge: bridge,
-          snapshot: snapshot,
-          diagnostics: diagnostics
-        )
-      }
-    }
+    resizeScheduler.schedule(
+      request: PendingResizeJob(
+        rows: rows,
+        cols: cols,
+        generation: generation,
+        bridge: bridge,
+        fileDescriptor: fd,
+        pid: pid,
+        vtQueue: vtQueue
+      ),
+      session: id
+    )
   }
 
   public func writeInput(_ data: Data, to id: TerminalSessionID) {
@@ -643,6 +637,47 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     )
     surfaceRegistry.render(snapshot, bridge: bridge, session: id)
     surfaceRegistry.applyResizeDiagnostics(diagnostics, session: id)
+  }
+
+  private func performScheduledResize(session id: TerminalSessionID, job: PendingResizeJob) {
+    job.vtQueue.async { [weak self] in
+      let totalStart = Date()
+      let wasPinnedToBottom = GhosttyVTQueueWork.viewportIsPinnedToBottom(job.bridge)
+      let vtStart = Date()
+      job.bridge.resize(cols: job.cols, rows: job.rows)
+      PTYLaunch.resize(fileDescriptor: job.fileDescriptor, rows: job.rows, cols: job.cols)
+      _ = Darwin.kill(job.pid, SIGWINCH)
+      let vtDuration = Date().timeIntervalSince(vtStart)
+
+      let snapshotStart = Date()
+      if wasPinnedToBottom {
+        GhosttyVTQueueWork.scrollToBottom(job.bridge)
+      }
+      let snapshot = ResizeRenderSnapshot.capture(from: job.bridge)
+      let snapshotDuration = Date().timeIntervalSince(snapshotStart)
+      let diagnostics = TerminalResizeDiagnostics(
+        totalDuration: Date().timeIntervalSince(totalStart),
+        vtDuration: vtDuration,
+        snapshotDuration: snapshotDuration
+      )
+
+      Task { @MainActor [weak self] in
+        guard let self,
+          let current = self.sessions[id],
+          current.resizeGeneration == job.generation
+        else {
+          return
+        }
+        self.finishResize(
+          session: id,
+          generation: job.generation,
+          wasPinnedToBottom: wasPinnedToBottom,
+          bridge: job.bridge,
+          snapshot: snapshot,
+          diagnostics: diagnostics
+        )
+      }
+    }
   }
 
   nonisolated static func processWorkingDirectory(pid: pid_t) -> String? {
