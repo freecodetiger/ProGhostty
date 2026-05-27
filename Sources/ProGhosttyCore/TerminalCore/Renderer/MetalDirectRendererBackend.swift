@@ -737,10 +737,9 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     options: TerminalRendererOptions,
     to diagnostics: inout TerminalRendererDiagnostics
   ) {
-    let selection = TerminalRendererBackendSelection.resolve(
+    let selection = TerminalRendererPolicy.resolve(
       mode: options.mode,
       hasFrame: true,
-      isMetalLiveAvailable: true,
       isMetalDirectAvailable: true
     )
     diagnostics.backend = .metalDirect

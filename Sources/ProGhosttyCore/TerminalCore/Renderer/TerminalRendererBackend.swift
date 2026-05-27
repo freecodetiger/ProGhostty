@@ -4,7 +4,6 @@ import Foundation
 public enum TerminalRendererMode: String, CaseIterable, Codable, Sendable, Identifiable {
   case auto
   case metalDirect
-  case metalLive
   case ghosttyVTCellGrid
   case ghosttyVTTextFallback
 
@@ -85,7 +84,6 @@ public extension AppSettings {
 
 public enum TerminalRendererBackendKind: String, Sendable {
   case metalDirect = "MetalDirect"
-  case metalLive = "MetalLive"
   case ghosttyVTCellGrid = "GhosttyVTCellGrid"
   case ghosttyVTTextFallback = "GhosttyVTTextFallback"
 }
@@ -104,86 +102,13 @@ public struct TerminalRendererBackendSelection: Equatable, Sendable {
   public static func resolve(
     mode: TerminalRendererMode,
     hasFrame: Bool,
-    isMetalLiveAvailable: Bool = false,
     isMetalDirectAvailable: Bool = false
   ) -> TerminalRendererBackendSelection {
-    switch mode {
-    case .ghosttyVTTextFallback:
-      return TerminalRendererBackendSelection(
-        presentation: .textFallback,
-        activeBackend: .ghosttyVTTextFallback,
-        requestedBackend: nil,
-        fallbackReason: nil
-      )
-    case .metalDirect:
-      guard hasFrame else {
-        return TerminalRendererBackendSelection(
-          presentation: .textFallback,
-          activeBackend: .ghosttyVTTextFallback,
-          requestedBackend: .metalDirect,
-          fallbackReason: nil
-        )
-      }
-      return TerminalRendererBackendSelection(
-        presentation: .liveCellGrid,
-        activeBackend: isMetalDirectAvailable ? .metalDirect : .ghosttyVTCellGrid,
-        requestedBackend: .metalDirect,
-        fallbackReason: isMetalDirectAvailable ? nil : TerminalRendererDiagnostics.metalDirectUnavailableFallbackReason
-      )
-    case .metalLive:
-      guard hasFrame else {
-        return TerminalRendererBackendSelection(
-          presentation: .textFallback,
-          activeBackend: .ghosttyVTTextFallback,
-          requestedBackend: .metalLive,
-          fallbackReason: nil
-        )
-      }
-      return TerminalRendererBackendSelection(
-        presentation: .liveCellGrid,
-        activeBackend: isMetalLiveAvailable ? .metalLive : .ghosttyVTCellGrid,
-        requestedBackend: .metalLive,
-        fallbackReason: isMetalLiveAvailable ? nil : TerminalRendererDiagnostics.metalLiveUnavailableFallbackReason
-      )
-    case .ghosttyVTCellGrid:
-      return TerminalRendererBackendSelection(
-        presentation: hasFrame ? .liveCellGrid : .textFallback,
-        activeBackend: hasFrame ? .ghosttyVTCellGrid : .ghosttyVTTextFallback,
-        requestedBackend: nil,
-        fallbackReason: nil
-      )
-    case .auto:
-      guard hasFrame else {
-        return TerminalRendererBackendSelection(
-          presentation: .textFallback,
-          activeBackend: .ghosttyVTTextFallback,
-          requestedBackend: nil,
-          fallbackReason: nil
-        )
-      }
-      if isMetalDirectAvailable {
-        return TerminalRendererBackendSelection(
-          presentation: .liveCellGrid,
-          activeBackend: .metalDirect,
-          requestedBackend: nil,
-          fallbackReason: nil
-        )
-      }
-      if isMetalLiveAvailable {
-        return TerminalRendererBackendSelection(
-          presentation: .liveCellGrid,
-          activeBackend: .metalLive,
-          requestedBackend: nil,
-          fallbackReason: nil
-        )
-      }
-      return TerminalRendererBackendSelection(
-        presentation: .liveCellGrid,
-        activeBackend: .ghosttyVTCellGrid,
-        requestedBackend: nil,
-        fallbackReason: nil
-      )
-    }
+    TerminalRendererPolicy.resolve(
+      mode: mode,
+      hasFrame: hasFrame,
+      isMetalDirectAvailable: isMetalDirectAvailable
+    )
   }
 }
 
@@ -300,7 +225,6 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
   public static let invalidCellHeightReason = "invalid cell height"
   public static let metalDirectUnavailableFallbackReason = "Metal direct renderer unavailable; using AppKit cell grid"
   public static let metalDirectRenderFailedFallbackReason = "Metal direct renderer failed during presentation; keeping AppKit cell grid state"
-  public static let metalLiveUnavailableFallbackReason = "Metal live renderer unavailable; using AppKit cell grid"
 
   public var backend: TerminalRendererBackendKind
   public var requestedBackend: TerminalRendererBackendKind?

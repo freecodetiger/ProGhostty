@@ -333,10 +333,10 @@ public final class GhosttyVTCellGridRendererBackend: TerminalLiveRendererBackend
     options: TerminalRendererOptions,
     to diagnostics: inout TerminalRendererDiagnostics
   ) {
-    let selection = TerminalRendererBackendSelection.resolve(
+    let selection = TerminalRendererPolicy.resolve(
       mode: options.mode,
       hasFrame: true,
-      isMetalLiveAvailable: false
+      isMetalDirectAvailable: false
     )
     diagnostics.backend = .ghosttyVTCellGrid
     diagnostics.requestedBackend = selection.requestedBackend

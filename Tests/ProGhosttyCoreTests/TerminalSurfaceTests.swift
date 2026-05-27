@@ -556,26 +556,9 @@ struct TerminalSurfaceTests {
     #expect(diagnostics.visibleRowCount == 2)
   }
 
-  @MainActor @Test func metalLiveRendererModeFallsBackToLiveCellGridWhenUnavailable() throws {
-    let registry = PTYTerminalSurfaceRegistry(isMetalLiveAvailable: false)
-    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalLive))
-    let session = TerminalSessionID()
-    registry.createSurface(session: session)
-    let bridge = try GhosttyVTBridge(cols: 12, rows: 2, maxScrollback: 100)
-
-    bridge.write(Data("prompt".utf8))
-    registry.render(bridge, session: session)
-    registry.flushPendingRenderers()
-
-    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
-    #expect(diagnostics.backend == .ghosttyVTCellGrid)
-    #expect(diagnostics.requestedBackend == .metalLive)
-    #expect(diagnostics.backendFallbackReason == TerminalRendererDiagnostics.metalLiveUnavailableFallbackReason)
-  }
-
-  @MainActor @Test func metalLiveRendererModeUsesMetalBackendWhenAvailable() throws {
-    let registry = PTYTerminalSurfaceRegistry(isMetalLiveAvailable: true)
-    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalLive))
+  @MainActor @Test func autoRendererFallsBackToCellGridWhenDirectMetalUnavailable() throws {
+    let registry = PTYTerminalSurfaceRegistry(isMetalDirectAvailable: false)
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .auto))
     let session = TerminalSessionID()
     registry.createSurface(session: session)
     let bridge = try GhosttyVTBridge(cols: 12, rows: 2, maxScrollback: 100)
@@ -586,11 +569,8 @@ struct TerminalSurfaceTests {
 
     let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
     let diagnostics = try #require(registry.rendererDiagnostics(for: session))
-
-    #expect(surfaceView.liveGridView is MetalLiveRendererView)
-    #expect(diagnostics.backend == .metalLive)
-    #expect(diagnostics.requestedBackend == .metalLive)
-    #expect(diagnostics.backendFallbackReason == nil)
+    #expect(surfaceView.liveGridView is MetalDirectRendererView == false)
+    #expect(diagnostics.backend == .ghosttyVTCellGrid)
   }
 
   @MainActor @Test func metalDirectRendererModeUsesDirectBackendWhenAvailable() throws {
@@ -661,31 +641,6 @@ struct TerminalSurfaceTests {
     #expect(diagnostics.backend == .ghosttyVTCellGrid)
     #expect(diagnostics.requestedBackend == .metalDirect)
     #expect(diagnostics.backendFallbackReason == TerminalRendererDiagnostics.metalDirectRenderFailedFallbackReason)
-  }
-
-  @MainActor @Test func metalLiveRendererPreservesOverscanPixelRemainder() throws {
-    let registry = PTYTerminalSurfaceRegistry(isMetalLiveAvailable: true)
-    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalLive))
-    let session = TerminalSessionID()
-    registry.createSurface(session: session)
-    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
-
-    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
-    registry.render(bridge, session: session)
-    registry.flushPendingRenderers()
-    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
-    let bottomText = surfaceView.liveGridView.renderedText
-
-    surfaceView.liveGridView.testScrollWheelDeltaY(5)
-    registry.flushPendingRenderers()
-
-    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
-    #expect(surfaceView.liveGridView is MetalLiveRendererView)
-    #expect(surfaceView.liveGridView.renderedText == bottomText)
-    #expect(surfaceView.liveGridView.viewport == TerminalViewport(startRow: 0, visualOffsetY: 5))
-    #expect(diagnostics.backend == .metalLive)
-    #expect(diagnostics.pixelRemainderY == 5)
-    #expect(diagnostics.pixelSmoothScroll == .experimental)
   }
 
   @MainActor @Test func ptySurfaceUsesBarCursorOverlayWithoutPaintingBlankCellBackground() throws {

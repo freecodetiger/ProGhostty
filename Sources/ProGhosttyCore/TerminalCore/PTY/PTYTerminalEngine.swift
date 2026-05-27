@@ -709,18 +709,15 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   private var linkTargetHandler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?
   private var viewportScrollHandler: (@MainActor (TerminalSessionID, Int) -> Bool)?
   private var rendererOptions = TerminalRendererOptions()
-  private let isMetalLiveAvailable: Bool
   private let isMetalDirectAvailable: Bool
   private let makeDirectRenderer: (TerminalRendererOptions) -> any TerminalLiveRendererBackend
 
   public init(
-    isMetalLiveAvailable: Bool = MetalLiveRendererBackend.isRuntimeAvailable,
     isMetalDirectAvailable: Bool = MetalDirectRendererBackend.isRuntimeAvailable,
     makeDirectRenderer: @escaping (TerminalRendererOptions) -> any TerminalLiveRendererBackend = { options in
       MetalDirectRendererBackend(options: options)
     }
   ) {
-    self.isMetalLiveAvailable = isMetalLiveAvailable
     self.isMetalDirectAvailable = isMetalDirectAvailable
     self.makeDirectRenderer = makeDirectRenderer
   }
@@ -765,10 +762,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   }
 
   private func makeLiveRenderer() -> any TerminalLiveRendererBackend {
-    let selection = TerminalRendererBackendSelection.resolve(
+    let selection = TerminalRendererPolicy.resolve(
       mode: rendererOptions.mode,
       hasFrame: true,
-      isMetalLiveAvailable: isMetalLiveAvailable,
       isMetalDirectAvailable: isMetalDirectAvailable
     )
     switch selection.activeBackend {
@@ -778,8 +774,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
         return directRenderer
       }
       return GhosttyVTCellGridRendererBackend(options: rendererOptions)
-    case .metalLive:
-      return MetalLiveRendererBackend(options: rendererOptions)
     case .ghosttyVTCellGrid, .ghosttyVTTextFallback:
       return GhosttyVTCellGridRendererBackend(options: rendererOptions)
     }
@@ -1305,10 +1299,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   }
 
   private func rendererSelection(for frame: GhosttyTerminalFrame?) -> TerminalRendererBackendSelection {
-    TerminalRendererBackendSelection.resolve(
+    TerminalRendererPolicy.resolve(
       mode: rendererOptions.mode,
       hasFrame: frame != nil,
-      isMetalLiveAvailable: isMetalLiveAvailable,
       isMetalDirectAvailable: isMetalDirectAvailable
     )
   }

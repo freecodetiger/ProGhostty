@@ -51,77 +51,80 @@ struct TerminalRendererBackendTests {
     #expect(backend.diagnostics.overscanBottomRows == 1)
   }
 
-  @MainActor @Test func cellGridBackendReportsMetalLiveFallbackWhenRequested() {
-    let backend = GhosttyVTCellGridRendererBackend(
-      options: TerminalRendererOptions(mode: .metalLive)
-    )
-
-    #expect(backend.diagnostics.backend == .ghosttyVTCellGrid)
-    #expect(backend.diagnostics.requestedBackend == .metalLive)
-    #expect(backend.diagnostics.backendFallbackReason == TerminalRendererDiagnostics.metalLiveUnavailableFallbackReason)
-  }
-
-  @Test func rendererBackendSelectionResolvesUnavailableMetalToLiveCellGridFallback() {
-    let selection = TerminalRendererBackendSelection.resolve(
-      mode: .metalLive,
-      hasFrame: true,
-      isMetalLiveAvailable: false
-    )
-
-    #expect(selection.presentation == .liveCellGrid)
-    #expect(selection.activeBackend == .ghosttyVTCellGrid)
-    #expect(selection.requestedBackend == .metalLive)
-    #expect(selection.fallbackReason == TerminalRendererDiagnostics.metalLiveUnavailableFallbackReason)
-  }
-
   @Test func rendererBackendSelectionUsesTextFallbackWhenNoFrameExists() {
     let selection = TerminalRendererBackendSelection.resolve(
-      mode: .metalLive,
-      hasFrame: false,
-      isMetalLiveAvailable: false
+      mode: .metalDirect,
+      hasFrame: false
     )
 
     #expect(selection.presentation == .textFallback)
     #expect(selection.activeBackend == .ghosttyVTTextFallback)
-    #expect(selection.requestedBackend == .metalLive)
+    #expect(selection.requestedBackend == .metalDirect)
   }
 
   @Test func rendererBackendSelectionResolvesAutoToBestAvailableBackend() {
     let directSelection = TerminalRendererBackendSelection.resolve(
       mode: .auto,
       hasFrame: true,
-      isMetalLiveAvailable: true,
       isMetalDirectAvailable: true
-    )
-    let liveSelection = TerminalRendererBackendSelection.resolve(
-      mode: .auto,
-      hasFrame: true,
-      isMetalLiveAvailable: true,
-      isMetalDirectAvailable: false
     )
     let cellGridSelection = TerminalRendererBackendSelection.resolve(
       mode: .auto,
       hasFrame: true,
-      isMetalLiveAvailable: false,
       isMetalDirectAvailable: false
     )
 
     #expect(directSelection.activeBackend == .metalDirect)
     #expect(directSelection.requestedBackend == nil)
     #expect(directSelection.fallbackReason == nil)
-    #expect(liveSelection.activeBackend == .metalLive)
-    #expect(liveSelection.requestedBackend == nil)
-    #expect(liveSelection.fallbackReason == nil)
     #expect(cellGridSelection.activeBackend == .ghosttyVTCellGrid)
     #expect(cellGridSelection.requestedBackend == nil)
     #expect(cellGridSelection.fallbackReason == nil)
+  }
+
+  @Test func rendererPolicyResolvesAutoToDirectMetalWhenAvailable() {
+    let selection = TerminalRendererPolicy.resolve(
+      mode: .auto,
+      hasFrame: true,
+      isMetalDirectAvailable: true
+    )
+
+    #expect(selection.presentation == .liveCellGrid)
+    #expect(selection.activeBackend == .metalDirect)
+    #expect(selection.requestedBackend == nil)
+    #expect(selection.fallbackReason == nil)
+  }
+
+  @Test func rendererPolicyFallsBackToCellGridWhenDirectMetalIsUnavailable() {
+    let selection = TerminalRendererPolicy.resolve(
+      mode: .auto,
+      hasFrame: true,
+      isMetalDirectAvailable: false
+    )
+
+    #expect(selection.presentation == .liveCellGrid)
+    #expect(selection.activeBackend == .ghosttyVTCellGrid)
+    #expect(selection.requestedBackend == nil)
+    #expect(selection.fallbackReason == nil)
+  }
+
+  @Test func rendererPolicyResolvesDirectMetalRequestToCellGridFallback() {
+    let selection = TerminalRendererPolicy.resolve(
+      mode: .metalDirect,
+      hasFrame: true,
+      isMetalDirectAvailable: false
+    )
+
+    #expect(selection.presentation == .liveCellGrid)
+    #expect(selection.activeBackend == .ghosttyVTCellGrid)
+    #expect(selection.requestedBackend == .metalDirect)
+    #expect(selection.fallbackReason == TerminalRendererDiagnostics.metalDirectUnavailableFallbackReason)
   }
 
   @Test func rendererBackendSelectionResolvesDirectMetalWhenAvailable() {
     let selection = TerminalRendererBackendSelection.resolve(
       mode: .metalDirect,
       hasFrame: true,
-      isMetalLiveAvailable: true,
       isMetalDirectAvailable: true
     )
 
@@ -135,7 +138,6 @@ struct TerminalRendererBackendTests {
     let selection = TerminalRendererBackendSelection.resolve(
       mode: .metalDirect,
       hasFrame: true,
-      isMetalLiveAvailable: true,
       isMetalDirectAvailable: false
     )
 
@@ -143,39 +145,6 @@ struct TerminalRendererBackendTests {
     #expect(selection.activeBackend == .ghosttyVTCellGrid)
     #expect(selection.requestedBackend == .metalDirect)
     #expect(selection.fallbackReason == TerminalRendererDiagnostics.metalDirectUnavailableFallbackReason)
-  }
-
-  @Test func metalLiveFrameEncoderPreservesPresentationAndFocus() {
-    let scrollFrame = scrollFrame(
-      viewportRows: ["two", "three"],
-      overscanTop: ["one"],
-      overscanBottom: ["four"],
-      cols: 8
-    )
-
-    let encoded = MetalLiveFrameEncoder.encode(
-      TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: true)
-    )
-
-    #expect(encoded.presentation == .scrollFrame)
-    #expect(encoded.isFocused == true)
-    #expect(encoded.rows == 4)
-    #expect(encoded.cols == 8)
-    #expect(encoded.overscanTopRows == 1)
-    #expect(encoded.overscanBottomRows == 1)
-  }
-
-  @MainActor @Test func metalLiveRendererBackendCoalescesAndDropsPendingFrames() {
-    let backend = MetalLiveRendererBackend()
-
-    backend.render(TerminalRenderFrame(frame: frame(rows: ["one"], cols: 8, cursorX: 0, cursorY: 0)))
-    backend.render(TerminalRenderFrame(frame: frame(rows: ["two"], cols: 8, cursorX: 0, cursorY: 0)))
-    backend.flushPendingFrame()
-
-    #expect(backend.diagnostics.backend == .metalLive)
-    #expect(backend.diagnostics.coalescedFrames == 1)
-    #expect(backend.diagnostics.droppedFrames == 1)
-    #expect(backend.gridView is MetalLiveRendererView)
   }
 
   @MainActor @Test func metalDirectRendererBackendReportsDirectBackendAndDoesNotUseBitmapCapture() {
