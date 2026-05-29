@@ -1455,6 +1455,48 @@ struct TerminalSurfaceTests {
     #expect(gridView.currentMarkedTextString == nil)
   }
 
+  @MainActor @Test func ptyGridMarkedTextKeepsAnchorStableAcrossTransientRender() {
+    let gridView = PTYGridView()
+    let initialFrame = frameWithText(rows: ["            "], cols: 12, cursorX: 6, cursorY: 0)
+    let transientFrame = frameWithText(rows: ["            "], cols: 12, cursorX: 0, cursorY: 0)
+    gridView.render(initialFrame, isFocused: true)
+
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    gridView.render(transientFrame, isFocused: true)
+
+    #expect(gridView.currentMarkedTextOverlay?.col == 6)
+    #expect(gridView.cursorCellRect == nil)
+  }
+
+  @MainActor @Test func ptyGridEnglishTypingRecoversCursorAfterImeExit() throws {
+    var writes: [Data] = []
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["      "], cols: 6, cursorX: 2, cursorY: 0)
+    gridView.inputHandler = { writes.append($0) }
+    gridView.render(frame, isFocused: true)
+
+    gridView.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    gridView.unmarkText()
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      characters: "a",
+      charactersIgnoringModifiers: "a",
+      isARepeat: false,
+      keyCode: 0
+    ))
+
+    gridView.keyDown(with: event)
+
+    #expect(writes == [Data("a".utf8)])
+    #expect(gridView.cursorCellRect != nil)
+    #expect(gridView.isIMECompositionCursorSuppressed == false)
+  }
+
   @MainActor @Test func ptyGridCursorCellRectIncludesPixelScrollOffsetDuringScrollFrame() {
     let gridView = PTYGridView()
     var frame = frameWithText(rows: ["visible text"], cols: 24, cursorX: 0, cursorY: 0)
