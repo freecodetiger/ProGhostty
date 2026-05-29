@@ -884,11 +884,48 @@ struct TerminalRendererBackendTests {
     let glyph = MetalDirectRenderEngine.cursorGlyphLayout(
       renderFrame: TerminalRenderFrame(frame: snapshot, isFocused: true),
       plan: plan,
-      contentInset: CGSize(width: 14, height: 12)
+      contentInset: CGSize(width: 14, height: 12),
+      inputPresentation: TerminalInputPresentationSnapshot(
+        cursorRect: nil,
+        markedTextOverlay: nil,
+        markedTextString: nil,
+        cursorSuppressed: false
+      )
     )
 
     #expect(glyph?.scalar == "b")
     #expect(glyph?.rect.minX == CGFloat(14 * 2 + 1 * 8 * 2))
+  }
+
+  @MainActor @Test func metalDirectBlockCursorGlyphLayoutIsSuppressedDuringImeComposition() {
+    var snapshot = frame(rows: ["abc"], cols: 3, cursorX: 1, cursorY: 0)
+    snapshot.cursorShape = .block
+    let plan = MetalTerminalRenderPlan(
+      presentation: .frame,
+      viewportRows: 1,
+      cols: 3,
+      overscanTopRows: 0,
+      overscanBottomRows: 0,
+      pixelRemainderY: 0,
+      dirtyRows: [],
+      cellSize: CGSize(width: 8, height: 16),
+      backingScale: 2,
+      isFocused: true
+    )
+
+    let glyph = MetalDirectRenderEngine.cursorGlyphLayout(
+      renderFrame: TerminalRenderFrame(frame: snapshot, isFocused: true),
+      plan: plan,
+      contentInset: CGSize(width: 14, height: 12),
+      inputPresentation: TerminalInputPresentationSnapshot(
+        cursorRect: PTYGridView.textGlyphRect(row: 0, col: 1, cellSize: CGSize(width: 8, height: 16), inset: CGSize(width: 14, height: 12)),
+        markedTextOverlay: nil,
+        markedTextString: nil,
+        cursorSuppressed: true
+      )
+    )
+
+    #expect(glyph == nil)
   }
 
   @Test func metalOverlayBufferBuildsCursorAndSelectionPrimitives() {
@@ -1050,6 +1087,79 @@ struct TerminalRendererBackendTests {
 
     #expect(!overlays.contains(where: { $0.kind == .cursor }))
     #expect(overlays.contains(where: { $0.kind == .markedText }))
+  }
+
+  @MainActor @Test func metalOverlayBufferSuppressesCursorFromInputPresentationSnapshot() {
+    let plan = MetalTerminalRenderPlan(
+      presentation: .frame,
+      viewportRows: 1,
+      cols: 12,
+      overscanTopRows: 0,
+      overscanBottomRows: 0,
+      pixelRemainderY: 0,
+      dirtyRows: [0],
+      cellSize: CGSize(width: 8, height: 16),
+      backingScale: 2,
+      isFocused: true
+    )
+    let renderFrame = TerminalRenderFrame(
+      frame: frame(rows: ["            "], cols: 12, cursorX: 2, cursorY: 0),
+      isFocused: true
+    )
+
+    let overlays = MetalOverlayBuffer.makeOverlays(
+      renderFrame: renderFrame,
+      plan: plan,
+      inputPresentation: TerminalInputPresentationSnapshot(
+        cursorRect: PTYGridView.textGlyphRect(
+          row: 0,
+          col: 2,
+          cellSize: CGSize(width: 8, height: 16),
+          inset: CGSize(width: 14, height: 12)
+        ),
+        markedTextOverlay: nil,
+        markedTextString: nil,
+        cursorSuppressed: true
+      )
+    )
+
+    #expect(!overlays.contains(where: { $0.kind == .cursor }))
+  }
+
+  @MainActor @Test func metalOverlayBufferUsesMarkedTextFromInputPresentationSnapshot() {
+    let plan = MetalTerminalRenderPlan(
+      presentation: .frame,
+      viewportRows: 1,
+      cols: 12,
+      overscanTopRows: 0,
+      overscanBottomRows: 0,
+      pixelRemainderY: 0,
+      dirtyRows: [0],
+      cellSize: CGSize(width: 8, height: 16),
+      backingScale: 2,
+      isFocused: true
+    )
+    let renderFrame = TerminalRenderFrame(
+      frame: frame(rows: ["            "], cols: 12, cursorX: 0, cursorY: 0),
+      isFocused: true
+    )
+
+    let overlays = MetalOverlayBuffer.makeOverlays(
+      renderFrame: renderFrame,
+      plan: plan,
+      inputPresentation: TerminalInputPresentationSnapshot(
+        cursorRect: nil,
+        markedTextOverlay: MetalMarkedTextOverlay(row: 0, col: 2, width: 44),
+        markedTextString: "zhong",
+        cursorSuppressed: true
+      )
+    )
+
+    let markedText = overlays.first(where: { $0.kind == .markedText })
+    let expectedMinX = CGFloat(14 * 2 + 2 * 8 * 2)
+    #expect(markedText?.rect.minX == expectedMinX)
+    #expect(markedText?.rect.width == CGFloat(44 * 2))
+    #expect(!overlays.contains(where: { $0.kind == .cursor }))
   }
 
   @MainActor @Test func metalDirectMarkedTextGlyphLayoutDrawsCompositionStringAtOverlayOrigin() {

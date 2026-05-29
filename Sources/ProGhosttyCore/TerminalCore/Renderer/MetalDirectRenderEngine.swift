@@ -225,6 +225,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       width: view.terminalContentInset.width * pixelScale,
       height: view.terminalContentInset.height * pixelScale
     )
+    let inputPresentation = view.currentInputPresentationSnapshot
     let sceneTranslationY = drawTranslationY(
       topOverscanRows: renderFrame.scrollFrame?.overscanTop.count ?? 0,
       pixelRemainderY: 0,
@@ -283,7 +284,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       selectionRowsOffset: 0,
       linkHoverRows: [],
       linkHoverCellRanges: view.currentLinkHoverCellRanges,
-      markedTextOverlay: view.currentMarkedTextOverlay,
+      inputPresentation: inputPresentation,
       markedTextRowsOffset: renderFrame.scrollFrame?.overscanTop.count ?? 0,
       pixelRemainderY: 0
     )
@@ -296,7 +297,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       selectionRowsOffset: 0,
       linkHoverRows: [],
       linkHoverCellRanges: view.currentLinkHoverCellRanges,
-      markedTextOverlay: view.currentMarkedTextOverlay,
+      inputPresentation: inputPresentation,
       markedTextRowsOffset: renderFrame.scrollFrame?.overscanTop.count ?? 0,
       pixelRemainderY: plan.pixelRemainderY
     )
@@ -330,8 +331,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     )
     let drawableOverlayVertices = buildOverlayVertices(overlays: drawableTransientOverlays)
     let markedTextGlyphLayout = Self.markedTextGlyphLayout(
-      text: view.currentMarkedTextString ?? "",
-      overlay: view.currentMarkedTextOverlay,
+      text: inputPresentation.markedTextString ?? "",
+      overlay: inputPresentation.markedTextOverlay,
       renderFrame: renderFrame,
       plan: plan,
       contentInset: view.terminalContentInset
@@ -346,7 +347,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       layout: Self.cursorGlyphLayout(
         renderFrame: renderFrame,
         plan: plan,
-        contentInset: view.terminalContentInset
+        contentInset: view.terminalContentInset,
+        inputPresentation: inputPresentation
       ),
       palette: palette,
       glyphAtlas: glyphAtlas
@@ -677,7 +679,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
   static func cursorGlyphLayout(
     renderFrame: TerminalRenderFrame,
     plan: MetalTerminalRenderPlan,
-    contentInset: CGSize
+    contentInset: CGSize,
+    inputPresentation: TerminalInputPresentationSnapshot
   ) -> MetalCursorGlyphLayout? {
     let frame: GhosttyTerminalFrame
     if let scrollFrame = renderFrame.scrollFrame {
@@ -692,6 +695,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       frame = renderFrame.frame
     }
     guard renderFrame.isFocused,
+      !inputPresentation.cursorSuppressed,
       frame.cursorVisible,
       frame.cursorShape == .block,
       frame.cursorY >= 0,
