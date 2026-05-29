@@ -92,8 +92,8 @@ public final class TerminalInputStateMachine {
       handleKeyDown(isCompositionMethod: isCompositionMethod)
     case .setMarkedText(let string, _):
       beginOrUpdateComposition(markedText: string)
-    case .insertText:
-      finishComposition()
+    case .insertText(let string):
+      finishComposition(committedText: string)
     case .unmarkText:
       finishComposition()
     case .render(let snapshot):
@@ -126,7 +126,11 @@ public final class TerminalInputStateMachine {
     cursorSuppressed = true
   }
 
-  private func finishComposition() {
+  private func finishComposition(committedText: String? = nil) {
+    if let committedText, let anchorRect = phase.anchorRect ?? preferredAnchorRect() {
+      lastCommittedCursorRect = advance(anchorRect: anchorRect, committedText: committedText)
+      lastStableCursorRect = nil
+    }
     phase = .idle
     markedTextString = nil
     cursorSuppressed = false
@@ -160,6 +164,12 @@ public final class TerminalInputStateMachine {
     lastStableCursorRect ?? lastCommittedCursorRect ?? latestRenderSnapshot?.cursorRect
   }
 
+  private func advance(anchorRect: NSRect, committedText: String) -> NSRect {
+    let columns = committedText.terminalEstimatedColumnCount
+    guard columns > 0 else { return anchorRect }
+    return anchorRect.offsetBy(dx: CGFloat(columns) * anchorRect.width, dy: 0)
+  }
+
   private func presentationSnapshot() -> TerminalInputPresentationSnapshot {
     TerminalInputPresentationSnapshot(
       cursorRect: phase.anchorRect ?? lastCommittedCursorRect ?? lastStableCursorRect,
@@ -167,5 +177,14 @@ public final class TerminalInputStateMachine {
       markedTextString: markedTextString,
       cursorSuppressed: cursorSuppressed
     )
+  }
+}
+
+private extension String {
+  var terminalEstimatedColumnCount: Int {
+    guard !isEmpty else { return 0 }
+    return reduce(0) { partialResult, character in
+      partialResult + (character.unicodeScalars.allSatisfy(\.isASCII) ? 1 : 2)
+    }
   }
 }

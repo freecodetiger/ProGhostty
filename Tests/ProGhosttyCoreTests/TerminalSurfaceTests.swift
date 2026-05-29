@@ -1397,6 +1397,69 @@ struct TerminalSurfaceTests {
     #expect(gridView.hasMarkedText())
   }
 
+  @MainActor @Test func ptyGridMarkedTextKeyDownBackspaceStaysInImePipeline() throws {
+    var writes: [Data] = []
+    let gridView = PTYGridView()
+    gridView.inputHandler = { writes.append($0) }
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      characters: String(UnicodeScalar(NSBackspaceCharacter)!),
+      charactersIgnoringModifiers: String(UnicodeScalar(NSBackspaceCharacter)!),
+      isARepeat: false,
+      keyCode: 51
+    ))
+
+    gridView.keyDown(with: event)
+
+    #expect(writes.isEmpty)
+    #expect(gridView.hasMarkedText())
+  }
+
+  @MainActor @Test func ptyGridMarkedTextControlInputStaysInImePipeline() throws {
+    var writes: Data?
+    let gridView = PTYGridView()
+    gridView.inputHandler = { writes = $0 }
+    gridView.render(frameWithText(rows: ["      "], cols: 6, cursorX: 2, cursorY: 0), isFocused: true)
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [.control],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      characters: "\u{3}",
+      charactersIgnoringModifiers: "c",
+      isARepeat: false,
+      keyCode: 8
+    ))
+
+    gridView.keyDown(with: event)
+
+    #expect(writes == nil)
+    #expect(gridView.currentMarkedTextOverlay != nil)
+    #expect(gridView.currentMarkedTextString == "zhong")
+    #expect(gridView.isIMECompositionCursorSuppressed)
+  }
+
+  @MainActor @Test func ptyGridCommittedImeTextAdvancesNextCompositionAnchor() {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["            "], cols: 12, cursorX: 6, cursorY: 0)
+    gridView.render(frame, isFocused: true)
+
+    gridView.setMarkedText("nihao", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    gridView.insertText("你好", replacementRange: NSRange(location: NSNotFound, length: 0))
+    gridView.setMarkedText("ma", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    #expect(gridView.currentMarkedTextOverlay?.col == 10)
+  }
+
   @MainActor @Test func ptyGridDrawsMarkedTextAtCursorBeforeCommit() throws {
     let backend = GhosttyVTCellGridRendererBackend()
     let gridView = backend.gridView

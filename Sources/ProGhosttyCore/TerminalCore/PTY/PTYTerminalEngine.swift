@@ -1348,18 +1348,22 @@ public class PTYGridView: NSView {
 
   public override func keyDown(with event: NSEvent) {
     activationHandler?()
-    applyInputPresentation(
-      inputStateMachine.handle(.keyDown(isCompositionMethod: TerminalInputMethodState.isCurrentInputSourceCompositionMethod()))
-    )
     if hasMarkedText(), !event.modifierFlags.contains(.command) {
       interpretKeyEvents([event])
       return
     }
-    if let data = terminalControlInputData(for: event) {
-      inputHandler?(data)
-    } else {
-      interpretKeyEvents([event])
+    if let directInputData = terminalControlInputData(for: event) {
+      applyInputPresentation(inputStateMachine.handle(.unmarkText))
+      inputHandler?(directInputData)
+      return
     }
+    let isCompositionMethod = TerminalInputMethodState.isCurrentInputSourceCompositionMethod()
+    if isCompositionMethod {
+      applyInputPresentation(inputStateMachine.handle(.keyDown(isCompositionMethod: true)))
+    } else {
+      applyInputPresentation(inputStateMachine.handle(.keyDown(isCompositionMethod: false)))
+    }
+    interpretKeyEvents([event])
   }
 
   public override func doCommand(by selector: Selector) {
