@@ -1078,7 +1078,7 @@ public class PTYGridView: NSView {
       drawRow(row, frame: drawFrame, dirtyRect: contentDirtyRect)
     }
     drawCursor(viewportFrame, rowOffset: topOverscanRows, dirtyRect: contentDirtyRect)
-    drawMarkedText(viewportFrame, rowOffset: topOverscanRows, dirtyRect: contentDirtyRect)
+    drawMarkedText(viewportFrame, translationY: translationY, dirtyRect: contentDirtyRect)
     NSGraphicsContext.current?.restoreGraphicsState()
   }
 
@@ -1725,9 +1725,10 @@ public class PTYGridView: NSView {
     drawText(String(cell.scalar), in: rect, attributes: textAttributes(for: cell, foreground: colors.foreground))
   }
 
-  private func drawMarkedText(_ frame: GhosttyTerminalFrame, rowOffset: Int = 0, dirtyRect: NSRect) {
+  private func drawMarkedText(_ frame: GhosttyTerminalFrame, translationY: CGFloat, dirtyRect: NSRect) {
     guard hasMarkedText(), !markedText.string.isEmpty else { return }
     guard let anchorRect = resolvedInputPresentation().cursorRect else { return }
+    let drawingAnchorRect = anchorRect.offsetBy(dx: 0, dy: -translationY)
     let terminalRect = Self.terminalContentClipRect(
       cols: frame.cols,
       rows: frame.rows,
@@ -1738,9 +1739,9 @@ public class PTYGridView: NSView {
     let attributes = markedTextAttributes()
     let textSize = text.size(withAttributes: attributes)
     let rect = NSRect(
-      x: anchorRect.minX,
-      y: anchorRect.minY,
-      width: min(max(cellSize.width, ceil(textSize.width) + 4), max(0, terminalRect.maxX - anchorRect.minX)),
+      x: drawingAnchorRect.minX,
+      y: drawingAnchorRect.minY,
+      width: min(max(cellSize.width, ceil(textSize.width) + 4), max(0, terminalRect.maxX - drawingAnchorRect.minX)),
       height: cellSize.height
     )
     guard rect.width > 0, dirtyRect.intersects(rect) else { return }
