@@ -868,6 +868,10 @@ public class PTYGridView: NSView {
     resolvedInputPresentation().cursorSuppressed
   }
 
+  public var currentInputPresentationSnapshot: TerminalInputPresentationSnapshot {
+    resolvedInputPresentation()
+  }
+
   public var terminalCellSize: CGSize {
     cellSize
   }
@@ -2044,7 +2048,12 @@ public class PTYGridView: NSView {
   }
 
   private func applyInputPresentation(_ snapshot: TerminalInputPresentationSnapshot) {
-    currentInputPresentation = resolvedInputPresentation(from: snapshot)
+    let resolved = resolvedInputPresentation(from: snapshot)
+    currentInputPresentation = resolved
+    if !resolved.cursorSuppressed && resolved.markedTextString == nil {
+      markedText = NSAttributedString(string: "")
+      markedTextRange = NSRange(location: NSNotFound, length: 0)
+    }
   }
 
   private func resolvedInputPresentation() -> TerminalInputPresentationSnapshot {
@@ -2065,7 +2074,7 @@ public class PTYGridView: NSView {
   private func resolvedInputPresentation(
     from snapshot: TerminalInputPresentationSnapshot
   ) -> TerminalInputPresentationSnapshot {
-    let text = snapshot.markedTextString ?? (hasMarkedText() ? markedText.string : nil)
+    let text = snapshot.markedTextString ?? (snapshot.cursorSuppressed && hasMarkedText() ? markedText.string : nil)
     return TerminalInputPresentationSnapshot(
       cursorRect: snapshot.cursorRect ?? renderedCursorRect(),
       markedTextOverlay: markedTextOverlay(anchorRect: snapshot.cursorRect, text: text),
@@ -2248,7 +2257,18 @@ extension PTYGridView: @preconcurrency NSTextInputClient {
   }
 
   public func characterIndex(for point: NSPoint) -> Int {
-    0
+    let presentation = resolvedInputPresentation()
+    guard let anchorRect = presentation.cursorRect, let frame = frameSnapshot, frame.cols > 0 else { return 0 }
+    let viewPoint: NSPoint
+    if let window {
+      viewPoint = convert(window.convertPoint(fromScreen: point), from: nil)
+    } else {
+      viewPoint = point
+    }
+    let relativeRow = max(0, Int(floor((viewPoint.y - anchorRect.minY) / cellSize.height)))
+    let relativeCol = max(0, Int(floor((viewPoint.x - anchorRect.minX) / cellSize.width)))
+    let maxIndex = max(0, (presentation.markedTextString?.count ?? 0) - 1)
+    return min(maxIndex, relativeRow * frame.cols + relativeCol)
   }
 
   private func committedText(from string: Any) -> String? {

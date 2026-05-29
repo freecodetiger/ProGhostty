@@ -1497,6 +1497,32 @@ struct TerminalSurfaceTests {
     #expect(gridView.isIMECompositionCursorSuppressed == false)
   }
 
+  @MainActor @Test func ptyGridFocusLossClearsMarkedTextState() {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["      "], cols: 6, cursorX: 2, cursorY: 0)
+    gridView.render(frame, isFocused: true)
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    gridView.setFocused(false)
+
+    #expect(gridView.currentMarkedTextOverlay == nil)
+    #expect(gridView.currentMarkedTextString == nil)
+    #expect(gridView.cursorCellRect != nil)
+    #expect(gridView.isIMECompositionCursorSuppressed == false)
+    #expect(gridView.hasMarkedText() == false)
+  }
+
+  @MainActor @Test func ptyGridCharacterIndexTracksCompositionAnchor() {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["      "], cols: 6, cursorX: 2, cursorY: 0)
+    gridView.render(frame, isFocused: true)
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    let point = NSPoint(x: CGFloat(14 + 2 * 8 + 3 * 8 + 1), y: CGFloat(12 + 1))
+
+    #expect(gridView.characterIndex(for: point) == 3)
+  }
+
   @MainActor @Test func ptyGridCursorCellRectIncludesPixelScrollOffsetDuringScrollFrame() {
     let gridView = PTYGridView()
     var frame = frameWithText(rows: ["visible text"], cols: 24, cursorX: 0, cursorY: 0)
