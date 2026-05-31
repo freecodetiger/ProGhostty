@@ -156,6 +156,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
   private var cachedTextures: [Int: CachedTexture] = [:]
   private var offscreenTexture: MTLTexture?
   private let completionBox = MetalDirectFrameCompletionBox()
+  private var previousTransientOverlayRevision = 0
 
   private(set) var drawPassCount = 0
   private(set) var pipelineReady = false
@@ -247,7 +248,9 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       return false
     }
     let texture = offscreen.texture
-    let mustRebuildScene = drawPassCount == 0 || offscreen.didResize
+    let transientOverlayChanged = plan.transientOverlayRevision != 0
+      && plan.transientOverlayRevision != previousTransientOverlayRevision
+    let mustRebuildScene = drawPassCount == 0 || offscreen.didResize || transientOverlayChanged
     let renderRowRuns = mustRebuildScene && drawFrame.rows > 0
       ? [0..<drawFrame.rows]
       : plannedRenderRowRuns
@@ -278,12 +281,14 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       renderFrame: renderFrame,
       plan: plan,
       palette: palette,
+      markedTextActive: view.isComposingMarkedText,
       selectedRows: view.currentSelectionRowSet,
       selectedCellRanges: view.currentSelectionCellRanges,
       selectionRowsOffset: 0,
       linkHoverRows: [],
       linkHoverCellRanges: view.currentLinkHoverCellRanges,
       markedTextOverlay: view.currentMarkedTextOverlay,
+      imeCompositionCursorOverlay: view.currentIMECompositionCursorOverlay,
       markedTextRowsOffset: renderFrame.scrollFrame?.overscanTop.count ?? 0,
       pixelRemainderY: 0
     )
@@ -291,12 +296,14 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       renderFrame: renderFrame,
       plan: plan,
       palette: palette,
+      markedTextActive: view.isComposingMarkedText,
       selectedRows: view.currentSelectionRowSet,
       selectedCellRanges: view.currentSelectionCellRanges,
       selectionRowsOffset: 0,
       linkHoverRows: [],
       linkHoverCellRanges: view.currentLinkHoverCellRanges,
       markedTextOverlay: view.currentMarkedTextOverlay,
+      imeCompositionCursorOverlay: view.currentIMECompositionCursorOverlay,
       markedTextRowsOffset: renderFrame.scrollFrame?.overscanTop.count ?? 0,
       pixelRemainderY: plan.pixelRemainderY
     )
@@ -346,7 +353,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       layout: Self.cursorGlyphLayout(
         renderFrame: renderFrame,
         plan: plan,
-        contentInset: view.terminalContentInset
+        contentInset: view.terminalContentInset,
+        markedTextActive: view.isComposingMarkedText
       ),
       palette: palette,
       glyphAtlas: glyphAtlas
@@ -548,6 +556,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       }
     }
 
+    previousTransientOverlayRevision = plan.transientOverlayRevision
+
     let generation = completionBox.submit(renderFrame.generation)
     if shouldWait {
       commandBuffer.commit()
@@ -677,8 +687,10 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
   static func cursorGlyphLayout(
     renderFrame: TerminalRenderFrame,
     plan: MetalTerminalRenderPlan,
-    contentInset: CGSize
+    contentInset: CGSize,
+    markedTextActive: Bool
   ) -> MetalCursorGlyphLayout? {
+    guard !markedTextActive else { return nil }
     let frame: GhosttyTerminalFrame
     if let scrollFrame = renderFrame.scrollFrame {
       var expandedFrame = scrollFrame.viewport
@@ -749,6 +761,9 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     let originX = inset.width + CGFloat(max(0, overlay.col)) * cellSize.width
     let originY = inset.height + CGFloat(max(0, row)) * cellSize.height + translationY
     let maxX = originX + max(0, overlay.width * pixelScale)
+    PTYRenderDebugLog.write(
+      "markedTextGlyphLayout overlay=(row:\(overlay.row), col:\(overlay.col), width:\(overlay.width)) rowOffset=\(rowOffset) origin=(\(originX),\(originY)) maxX=\(maxX) text=\"\(text)\""
+    )
 
     var glyphs: [MetalMarkedTextGlyphLayout] = []
     glyphs.reserveCapacity(text.count)
@@ -774,6 +789,22 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       y: cellRect.minY + entry.drawOffset.y,
       width: entry.drawSize.width,
       height: entry.drawSize.height
+    )
+  }
+
+  static func glyphCellRect(
+    row: Int,
+    col: Int,
+    cell: GhosttyTerminalFrame.Cell,
+    cellSize: CGSize,
+    inset: CGSize,
+    translationY: CGFloat
+  ) -> CGRect {
+    CGRect(
+      x: inset.width + CGFloat(col) * cellSize.width,
+      y: inset.height + CGFloat(row) * cellSize.height + translationY,
+      width: cell.width == .wide ? cellSize.width * 2 : cellSize.width,
+      height: cellSize.height
     )
   }
 
@@ -1000,13 +1031,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
         let index = rowStart + col
         guard col >= 0, col < frame.cols, index < rowEnd else { continue }
         let cell = frame.cells[index]
-        guard cell.scalar != " " else { continue }
+        guard cell.scalar != " ", cell.width != .spacerTail, cell.width != .spacerHead else { continue }
         let colors = TerminalColorResolver.resolvedColors(for: cell, palette: palette, isFocused: isFocused)
-        let rect = CGRect(
-          x: inset.width + CGFloat(col) * cellSize.width,
-          y: inset.height + CGFloat(row) * cellSize.height + translationY,
-          width: cellSize.width,
-          height: cellSize.height
+        let rect = Self.glyphCellRect(
+          row: row,
+          col: col,
+          cell: cell,
+          cellSize: cellSize,
+          inset: inset,
+          translationY: translationY
         )
         let entry = glyphAtlas.entry(for: String(cell.scalar), style: MetalGlyphStyle(cell))
         guard texture(for: entry, glyphAtlas: glyphAtlas) != nil else {
@@ -1039,7 +1072,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
         let index = rowStart + col
         guard col >= 0, col < frame.cols, index < rowEnd else { continue }
         let cell = frame.cells[index]
-        guard cell.scalar != " " else { continue }
+        guard cell.scalar != " ", cell.width != .spacerTail, cell.width != .spacerHead else { continue }
         let entry = glyphAtlas.entry(for: String(cell.scalar), style: MetalGlyphStyle(cell))
         guard let texture = texture(for: entry, glyphAtlas: glyphAtlas) else { continue }
         slices.append(GlyphTextureSlice(texture: texture, vertexStart: vertexStart, vertexCount: 6))

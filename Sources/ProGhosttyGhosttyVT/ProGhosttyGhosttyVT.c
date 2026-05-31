@@ -177,6 +177,7 @@ static ProGhosttyVTCell blank_cell(GhosttyRenderStateColors *colors) {
   cell.faint = false;
   cell.underline = false;
   cell.inverse = false;
+  cell.wide = GHOSTTY_CELL_WIDE_NARROW;
   cell.hyperlink_uri = NULL;
   cell.hyperlink_uri_len = 0;
   return cell;
@@ -222,6 +223,16 @@ static void apply_hyperlink(ProGhosttyVTCell *cell, const GhosttyGridRef *ref) {
   uri[written] = 0;
   cell->hyperlink_uri = uri;
   cell->hyperlink_uri_len = written;
+}
+
+static void apply_wide(ProGhosttyVTCell *cell, GhosttyCell raw) {
+  if (cell == NULL) {
+    return;
+  }
+  GhosttyCellWide wide = GHOSTTY_CELL_WIDE_NARROW;
+  if (ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, &wide) == GHOSTTY_SUCCESS) {
+    cell->wide = (uint8_t)wide;
+  }
 }
 
 static void apply_style(ProGhosttyVTCell *cell, GhosttyRenderStateRowCells cells, GhosttyRenderStateColors *colors) {
@@ -294,6 +305,7 @@ static ProGhosttyVTCell cell_from_grid_ref(GhosttyGridRef *ref, GhosttyRenderSta
   if (ghostty_grid_ref_cell(ref, &raw) != GHOSTTY_SUCCESS) {
     return out;
   }
+  apply_wide(&out, raw);
 
   uint32_t codepoints[8] = {0};
   size_t grapheme_len = 0;
@@ -469,6 +481,10 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
 
       ProGhosttyVTCell *cell = &cells_out[(size_t)y * cols + x];
       GhosttyCell raw = 0;
+      bool has_raw = ghostty_render_state_row_cells_get(row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw) == GHOSTTY_SUCCESS;
+      if (has_raw) {
+        apply_wide(cell, raw);
+      }
       uint32_t grapheme_len = 0;
       ghostty_render_state_row_cells_get(
         row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN, &grapheme_len);
@@ -480,7 +496,7 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
       }
       apply_style(cell, row_cells, &colors);
 
-      if (ghostty_render_state_row_cells_get(row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw) == GHOSTTY_SUCCESS) {
+      if (has_raw) {
         bool has_hyperlink = false;
         if (ghostty_cell_get(raw, GHOSTTY_CELL_DATA_HAS_HYPERLINK, &has_hyperlink) == GHOSTTY_SUCCESS && has_hyperlink) {
           GhosttyPoint point = {

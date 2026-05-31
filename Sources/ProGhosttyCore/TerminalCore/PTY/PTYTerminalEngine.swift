@@ -815,9 +815,11 @@ public class PTYGridView: NSView {
   private(set) public var viewport = TerminalViewport() {
     didSet {
       guard oldValue != viewport else { return }
+      currentInputPresentation = nil
       viewportDidChangeHandler?()
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
+      invalidateIMECharacterCoordinates()
     }
   }
   private(set) public var lastDrawDuration: TimeInterval = 0
@@ -838,6 +840,12 @@ public class PTYGridView: NSView {
   private var mouseTrackingArea: NSTrackingArea?
   private var markedText = NSAttributedString(string: "")
   private var markedTextRange = NSRange(location: NSNotFound, length: 0)
+  private var markedTextSelectionRange = NSRange(location: NSNotFound, length: 0)
+  private var markedTextCompositionActive = false
+  private var markedTextRevision = 0
+  private var inputRenderGeneration = 0
+  private var inputStateMachine = TerminalInputStateMachine()
+  private var currentInputPresentation: TerminalInputPresentationSnapshot?
 
   public override var acceptsFirstResponder: Bool { true }
   public override var isFlipped: Bool { true }
@@ -855,7 +863,25 @@ public class PTYGridView: NSView {
   }
 
   public var cursorCellRect: NSRect? {
-    renderedCursorRect()
+    let presentation = resolvedInputPresentation()
+    guard !presentation.cursorSuppressed else { return nil }
+    return presentation.cursorRect
+  }
+
+  public var isIMECompositionCursorSuppressed: Bool {
+    resolvedInputPresentation().cursorSuppressed
+  }
+
+  public var currentInputPresentationSnapshot: TerminalInputPresentationSnapshot {
+    resolvedInputPresentation()
+  }
+
+  public var isComposingMarkedText: Bool {
+    markedTextCompositionActive
+  }
+
+  public var markedTextStateRevision: Int {
+    markedTextRevision
   }
 
   public var terminalCellSize: CGSize {
@@ -906,8 +932,10 @@ public class PTYGridView: NSView {
     font = Self.font(family: family, size: size, weight: .regular)
     boldFont = Self.font(family: family, size: size, weight: .semibold)
     cellSize = Self.cellSize(for: font)
+    currentInputPresentation = nil
     needsDisplay = true
     window?.invalidateCursorRects(for: self)
+    invalidateIMECharacterCoordinates()
   }
 
   public func applyRendererOptions(_ options: TerminalRendererOptions) {
@@ -958,6 +986,7 @@ public class PTYGridView: NSView {
   public func setFocused(_ isFocused: Bool) {
     isFocusedTerminalStorage = isFocused
     needsDisplay = true
+    applyInputPresentation(inputStateMachine.handle(.focusChanged(isFocused)))
   }
 
   public func render(_ frame: GhosttyTerminalFrame, isFocused: Bool) {
@@ -973,6 +1002,8 @@ public class PTYGridView: NSView {
       needsDisplay = true
     }
     window?.invalidateCursorRects(for: self)
+    invalidateIMECharacterCoordinates()
+    ingestInputRenderSnapshot()
   }
 
   public func render(_ frame: GhosttyTerminalFrame, isFocused: Bool, dirty: CellGridDirtyResult) {
@@ -982,6 +1013,7 @@ public class PTYGridView: NSView {
     if viewport.visualOffsetY != 0 {
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
+      invalidateIMECharacterCoordinates()
       return
     }
     switch dirty.mode {
@@ -995,6 +1027,8 @@ public class PTYGridView: NSView {
       }
     }
     window?.invalidateCursorRects(for: self)
+    invalidateIMECharacterCoordinates()
+    ingestInputRenderSnapshot()
   }
 
   public func render(_ scrollFrame: GhosttyTerminalScrollFrame, isFocused: Bool, dirty: CellGridDirtyResult) {
@@ -1005,6 +1039,7 @@ public class PTYGridView: NSView {
     if viewport.visualOffsetY != 0 {
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
+      invalidateIMECharacterCoordinates()
       return
     }
     if let previous, previous.rows == scrollFrame.viewport.rows, previous.cols == scrollFrame.viewport.cols {
@@ -1027,6 +1062,8 @@ public class PTYGridView: NSView {
       needsDisplay = true
     }
     window?.invalidateCursorRects(for: self)
+    invalidateIMECharacterCoordinates()
+    ingestInputRenderSnapshot()
   }
 
   public override func draw(_ dirtyRect: NSRect) {
@@ -1328,19 +1365,21 @@ public class PTYGridView: NSView {
 
   public override func keyDown(with event: NSEvent) {
     activationHandler?()
-    if hasMarkedText(), !event.modifierFlags.contains(.command) {
+    if isComposingMarkedText, !event.modifierFlags.contains(.command) {
       interpretKeyEvents([event])
       return
     }
     if let data = terminalControlInputData(for: event) {
+      applyInputPresentation(inputStateMachine.handle(.unmarkText))
       inputHandler?(data)
-    } else {
-      interpretKeyEvents([event])
+      return
     }
+    applyInputPresentation(inputStateMachine.handle(.keyDown(isCompositionMethod: false)))
+    interpretKeyEvents([event])
   }
 
   public override func doCommand(by selector: Selector) {
-    if hasMarkedText() {
+    if isComposingMarkedText {
       return
     }
     switch selector {
@@ -1586,25 +1625,18 @@ public class PTYGridView: NSView {
   }
 
   public var currentMarkedTextOverlay: GridMarkedTextOverlay? {
-    guard hasMarkedText(), !markedText.string.isEmpty, let frame = frameSnapshot else { return nil }
-    let terminalRect = Self.terminalContentClipRect(
-      cols: frame.cols,
-      rows: frame.rows,
-      cellSize: cellSize,
-      inset: contentInset
-    )
-    let textWidth = ceil((markedText.string as NSString).size(withAttributes: markedTextAttributes()).width) + 4
-    let width = min(
-      max(cellSize.width, textWidth),
-      max(0, terminalRect.maxX - (renderedCursorRect()?.minX ?? rectForCell(row: frame.cursorY, col: frame.cursorX).minX))
-    )
-    guard width > 0 else { return nil }
-    return GridMarkedTextOverlay(row: frame.cursorY, col: frame.cursorX, width: width)
+    resolvedInputPresentation().markedTextOverlay
   }
 
   public var currentMarkedTextString: String? {
-    guard hasMarkedText(), !markedText.string.isEmpty else { return nil }
-    return markedText.string
+    resolvedInputPresentation().markedTextString
+  }
+
+  public var currentIMECompositionCursorOverlay: GridMarkedTextOverlay? {
+    guard isComposingMarkedText, let cursorRect = resolvedInputPresentation().cursorRect, let frame = frameSnapshot else {
+      return nil
+    }
+    return gridOverlay(anchorRect: cursorRect, width: cellSize.width, frame: frame)
   }
 
   private func selectionDirtyRects() -> [NSRect] {
@@ -1717,8 +1749,9 @@ public class PTYGridView: NSView {
   }
 
   private func drawMarkedText(_ frame: GhosttyTerminalFrame, rowOffset: Int = 0, dirtyRect: NSRect) {
-    guard hasMarkedText(), !markedText.string.isEmpty else { return }
-    let originCell = rectForCell(row: frame.cursorY + rowOffset, col: frame.cursorX)
+    guard isComposingMarkedText, !markedText.string.isEmpty else { return }
+    let anchorRect = resolvedInputPresentation().cursorRect ?? renderedCursorRect() ?? rectForCell(row: frame.cursorY, col: frame.cursorX)
+    let originCell = anchorRect
     let terminalRect = Self.terminalContentClipRect(
       cols: frame.cols,
       rows: frame.rows,
@@ -1735,6 +1768,9 @@ public class PTYGridView: NSView {
       height: cellSize.height
     )
     guard rect.width > 0, dirtyRect.intersects(rect) else { return }
+    PTYRenderDebugLog.write(
+      "drawMarkedText cursor=(\(frame.cursorX),\(frame.cursorY)) rowOffset=\(rowOffset) rect=\(NSStringFromRect(rect)) dirty=\(NSStringFromRect(dirtyRect)) text=\"\(markedText.string)\""
+    )
     palette.cursorBackground.withAlphaComponent(0.12).setFill()
     NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
     text.draw(
@@ -1751,9 +1787,50 @@ public class PTYGridView: NSView {
     ]
   }
 
+  private func markedTextCaretRect(for range: NSRange) -> NSRect? {
+    guard isComposingMarkedText, !markedText.string.isEmpty, let frame = frameSnapshot else { return nil }
+    let originCell = resolvedInputPresentation().cursorRect ?? renderedCursorRect() ?? rectForCell(row: frame.cursorY, col: frame.cursorX)
+    let terminalRect = Self.terminalContentClipRect(
+      cols: frame.cols,
+      rows: frame.rows,
+      cellSize: cellSize,
+      inset: contentInset
+    )
+    let location = clampedMarkedTextLocation(range.location)
+    let caretX = min(originCell.minX + markedTextWidth(upTo: location), terminalRect.maxX)
+    let selectionWidth = min(
+      markedTextWidth(in: clampedMarkedTextRange(location: location, length: range.length)),
+      max(0, terminalRect.maxX - caretX)
+    )
+    return NSRect(x: caretX, y: originCell.minY, width: selectionWidth, height: originCell.height)
+  }
+
+  private func markedTextWidth(upTo length: Int) -> CGFloat {
+    markedTextWidth(in: NSRange(location: 0, length: min(max(0, length), markedText.length)))
+  }
+
+  private func markedTextWidth(in range: NSRange) -> CGFloat {
+    guard range.length > 0 else { return 0 }
+    let text = (markedText.string as NSString).substring(with: range) as NSString
+    return ceil(text.size(withAttributes: markedTextAttributes()).width)
+  }
+
+  private func clampedMarkedTextLocation(_ location: Int) -> Int {
+    if location == NSNotFound {
+      return markedTextSelectionRange.location == NSNotFound ? 0 : clampedMarkedTextLocation(markedTextSelectionRange.location)
+    }
+    return min(max(0, location), markedText.length)
+  }
+
+  private func clampedMarkedTextRange(location: Int, length: Int) -> NSRange {
+    let lower = clampedMarkedTextLocation(location)
+    let upper = min(max(lower, lower + max(0, length)), markedText.length)
+    return NSRange(location: lower, length: upper - lower)
+  }
+
   private func markedTextDirtyRect() -> NSRect? {
-    guard hasMarkedText(), let frame = frameSnapshot else { return nil }
-    let originCell = renderedCursorRect() ?? rectForCell(row: frame.cursorY, col: frame.cursorX)
+    guard isComposingMarkedText, let frame = frameSnapshot else { return nil }
+    let originCell = resolvedInputPresentation().cursorRect ?? renderedCursorRect() ?? rectForCell(row: frame.cursorY, col: frame.cursorX)
     let terminalRect = Self.terminalContentClipRect(
       cols: frame.cols,
       rows: frame.rows,
@@ -1769,7 +1846,7 @@ public class PTYGridView: NSView {
   }
 
   private func drawCursor(_ frame: GhosttyTerminalFrame, rowOffset: Int = 0, dirtyRect: NSRect) {
-    guard !hasMarkedText() else { return }
+    guard !isIMECompositionCursorSuppressed else { return }
     guard isFocusedTerminalStorage, frame.cursorVisible else { return }
     let rect = rectForCell(row: frame.cursorY + rowOffset, col: frame.cursorX)
     guard dirtyRect.intersects(rect) else { return }
@@ -1808,6 +1885,93 @@ public class PTYGridView: NSView {
     NSString(string: text).draw(
       at: NSPoint(x: rect.minX, y: rect.minY + baselineOffset),
       withAttributes: attributes
+    )
+  }
+
+  private func invalidateIMECharacterCoordinates() {
+    inputContext?.invalidateCharacterCoordinates()
+  }
+
+  private func ingestInputRenderSnapshot() {
+    inputRenderGeneration &+= 1
+    applyInputPresentation(
+      inputStateMachine.ingestRenderSnapshot(
+        TerminalInputRenderSnapshot(
+          generation: inputRenderGeneration,
+          cursorRect: inputCursorRect(),
+          isFocused: isFocusedTerminalStorage,
+          hasMarkedText: hasMarkedText()
+        )
+      )
+    )
+  }
+
+  private func applyInputPresentation(_ snapshot: TerminalInputPresentationSnapshot) {
+    let resolved = resolvedInputPresentation(from: snapshot)
+    currentInputPresentation = resolved
+    markedTextCompositionActive = resolved.cursorSuppressed
+    if !resolved.cursorSuppressed && resolved.markedTextString == nil {
+      markedText = NSAttributedString(string: "")
+      markedTextRange = NSRange(location: NSNotFound, length: 0)
+      markedTextSelectionRange = NSRange(location: NSNotFound, length: 0)
+    }
+  }
+
+  private func resolvedInputPresentation() -> TerminalInputPresentationSnapshot {
+    if let currentInputPresentation {
+      return currentInputPresentation
+    }
+    let snapshot = inputStateMachine.ingestRenderSnapshot(
+      TerminalInputRenderSnapshot(
+        generation: inputRenderGeneration,
+        cursorRect: inputCursorRect(),
+        isFocused: isFocusedTerminalStorage,
+        hasMarkedText: hasMarkedText()
+      )
+    )
+    let resolved = resolvedInputPresentation(from: snapshot)
+    currentInputPresentation = resolved
+    return resolved
+  }
+
+  private func resolvedInputPresentation(
+    from snapshot: TerminalInputPresentationSnapshot
+  ) -> TerminalInputPresentationSnapshot {
+    let text = snapshot.markedTextString ?? ((snapshot.cursorSuppressed && hasMarkedText() && !markedText.string.isEmpty) ? markedText.string : nil)
+    let cursorRect = snapshot.cursorRect ?? inputCursorRect()
+    let overlay: GridMarkedTextOverlay?
+    if let text, !text.isEmpty, let cursorRect, let frame = frameSnapshot {
+      let textWidth = ceil((text as NSString).size(withAttributes: markedTextAttributes()).width) + 4
+      overlay = gridOverlay(anchorRect: cursorRect, width: max(cellSize.width, textWidth), frame: frame)
+    } else {
+      overlay = nil
+    }
+    return TerminalInputPresentationSnapshot(
+      cursorRect: cursorRect,
+      markedTextOverlay: overlay,
+      markedTextString: text?.isEmpty == false ? text : nil,
+      cursorSuppressed: snapshot.cursorSuppressed
+    )
+  }
+
+  private func gridOverlay(anchorRect: NSRect, width requestedWidth: CGFloat, frame: GhosttyTerminalFrame) -> GridMarkedTextOverlay? {
+    let terminalRect = Self.terminalContentClipRect(
+      cols: frame.cols,
+      rows: frame.rows,
+      cellSize: cellSize,
+      inset: contentInset
+    )
+    let width = min(
+      max(cellSize.width, requestedWidth),
+      max(0, terminalRect.maxX - anchorRect.minX)
+    )
+    guard width > 0 else { return nil }
+    let row = Int(round((anchorRect.minY - contentInset.height) / cellSize.height))
+    let col = Int(round((anchorRect.minX - contentInset.width) / cellSize.width))
+    return GridMarkedTextOverlay(
+      row: min(max(0, row), max(0, frame.rows - 1)),
+      col: min(max(0, col), max(0, frame.cols - 1)),
+      width: width
     )
   }
 
@@ -2028,6 +2192,61 @@ public class PTYGridView: NSView {
     return geometry.rectForCell(row: geometry.frame.cursorY, col: geometry.frame.cursorX)
   }
 
+  private func inputCursorRect() -> NSRect? {
+    inferredPromptCursorRect() ?? renderedCursorRect()
+  }
+
+  private func inferredPromptCursorRect() -> NSRect? {
+    guard
+      let viewportFrame = frameSnapshot,
+      viewportFrame.cursorX == 0,
+      viewportFrame.cursorY == 0,
+      let geometry = renderedGeometry(),
+      let coordinate = inferredPromptCursorCoordinate(in: geometry)
+    else {
+      return nil
+    }
+    let rect = geometry.rectForCell(row: coordinate.row, col: coordinate.col)
+    PTYRenderDebugLog.write(
+      "inputCursor inferredPromptCursor=(\(coordinate.col),\(coordinate.row)) rect=\(NSStringFromRect(rect)) frameCursor=(\(viewportFrame.cursorX),\(viewportFrame.cursorY))"
+    )
+    return rect
+  }
+
+  private func inferredPromptCursorCoordinate(in geometry: RenderedGridGeometry) -> GridCoordinate? {
+    var fallback: GridCoordinate?
+    for row in 0..<geometry.frame.rows {
+      guard geometry.clipRect.intersects(geometry.rowRect(row)) else { continue }
+      let rowStart = row * geometry.frame.cols
+      let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
+      guard rowStart < rowEnd else { continue }
+      let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
+      guard let promptCol = promptMarkerColumn(in: cells) else { continue }
+      for col in (promptCol + 1)..<cells.count where isVisualInputCursorCell(cells[col]) {
+        return GridCoordinate(row: row, col: col)
+      }
+      if let lastTextCol = cells.indices.last(where: { $0 > promptCol && cells[$0].scalar != " " }) {
+        fallback = GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
+      }
+    }
+    return fallback
+  }
+
+  private func promptMarkerColumn(in cells: [GhosttyTerminalFrame.Cell]) -> Int? {
+    cells.indices.first { index in
+      switch cells[index].scalar {
+      case "›", "❯", ">", "$", "#":
+        true
+      default:
+        false
+      }
+    }
+  }
+
+  private func isVisualInputCursorCell(_ cell: GhosttyTerminalFrame.Cell) -> Bool {
+    cell.scalar == " " && (cell.inverse || !cell.usesDefaultBackground)
+  }
+
   private func clippedCursorRect(_ rect: NSRect, to clipRect: NSRect) -> NSRect? {
     let clipped = rect.intersection(clipRect)
     guard clipped.width > 0, clipped.height > 0 else { return nil }
@@ -2114,6 +2333,7 @@ extension PTYGridView: @preconcurrency NSTextInputClient {
     if let oldRect {
       setNeedsDisplay(oldRect)
     }
+    applyInputPresentation(inputStateMachine.handle(.insertText(committedText(from: string) ?? "")))
     transientOverlayDidChangeHandler?()
     guard let text = committedText(from: string), !text.isEmpty else { return }
     inputHandler?(Data(text.utf8))
@@ -2121,35 +2341,67 @@ extension PTYGridView: @preconcurrency NSTextInputClient {
 
   public func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
     let oldRect = markedTextDirtyRect()
+    let nextMarkedText: NSAttributedString
     if let attributed = string as? NSAttributedString {
-      markedText = attributed
+      nextMarkedText = attributed
     } else if let text = string as? String {
-      markedText = NSAttributedString(string: text)
+      nextMarkedText = NSAttributedString(string: text)
     } else {
-      markedText = NSAttributedString(string: "")
+      nextMarkedText = NSAttributedString(string: "")
     }
+    guard nextMarkedText.length > 0 else {
+      PTYRenderDebugLog.write(
+        "setMarkedText empty -> unmark oldRect=\(oldRect.map(NSStringFromRect) ?? "nil") frameCursor=\(frameSnapshot.map { "(\($0.cursorX),\($0.cursorY))" } ?? "nil")"
+      )
+      unmarkText()
+      return
+    }
+    if !isComposingMarkedText {
+      applyInputPresentation(inputStateMachine.handle(.keyDown(isCompositionMethod: true)))
+    }
+    markedTextCompositionActive = true
+    markedTextRevision &+= 1
+    markedText = nextMarkedText
     markedTextRange = markedText.length > 0 ? NSRange(location: 0, length: markedText.length) : NSRange(location: NSNotFound, length: 0)
+    let selectedLocation = selectedRange.location == NSNotFound ? 0 : selectedRange.location
+    markedTextSelectionRange = clampedMarkedTextRange(location: selectedLocation, length: selectedRange.length)
+    PTYRenderDebugLog.write(
+      "setMarkedText text=\"\(markedText.string)\" selected=\(NSStringFromRange(selectedRange)) stored=\(NSStringFromRange(markedTextSelectionRange)) oldRect=\(oldRect.map(NSStringFromRect) ?? "nil") frameCursor=\(frameSnapshot.map { "(\($0.cursorX),\($0.cursorY))" } ?? "nil")"
+    )
     if let oldRect {
       setNeedsDisplay(oldRect)
     }
     if let newRect = markedTextDirtyRect() {
       setNeedsDisplay(newRect)
     }
+    applyInputPresentation(inputStateMachine.handle(.setMarkedText(markedText.string, selectedRange: selectedRange)))
+    invalidateIMECharacterCoordinates()
     transientOverlayDidChangeHandler?()
   }
 
   public func unmarkText() {
     let oldRect = markedTextDirtyRect()
+    PTYRenderDebugLog.write(
+      "unmarkText oldRect=\(oldRect.map(NSStringFromRect) ?? "nil") selection=\(NSStringFromRange(markedTextSelectionRange))"
+    )
     markedText = NSAttributedString(string: "")
     markedTextRange = NSRange(location: NSNotFound, length: 0)
+    markedTextSelectionRange = NSRange(location: NSNotFound, length: 0)
+    markedTextCompositionActive = false
+    markedTextRevision &+= 1
     if let oldRect {
       setNeedsDisplay(oldRect)
     }
+    applyInputPresentation(inputStateMachine.handle(.unmarkText))
+    invalidateIMECharacterCoordinates()
     transientOverlayDidChangeHandler?()
   }
 
   public func selectedRange() -> NSRange {
-    NSRange(location: 0, length: 0)
+    if isComposingMarkedText, markedTextSelectionRange.location != NSNotFound {
+      return markedTextSelectionRange
+    }
+    return NSRange(location: 0, length: 0)
   }
 
   public func markedRange() -> NSRange {
@@ -2171,13 +2423,27 @@ extension PTYGridView: @preconcurrency NSTextInputClient {
 
   public func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
     actualRange?.pointee = selectedRange()
-    guard let window, let cursorCellRect else { return .zero }
-    let screenRect = convert(cursorCellRect, to: nil)
+    guard let window, let rect = markedTextCaretRect(for: range) ?? cursorCellRect else { return .zero }
+    let screenRect = convert(rect, to: nil)
+    PTYRenderDebugLog.write(
+      "firstRect range=\(NSStringFromRange(range)) actual=\(NSStringFromRange(actualRange?.pointee ?? NSRange(location: NSNotFound, length: 0))) viewRect=\(NSStringFromRect(rect)) screenRect=\(NSStringFromRect(screenRect))"
+    )
     return window.convertToScreen(screenRect)
   }
 
   public func characterIndex(for point: NSPoint) -> Int {
-    0
+    let presentation = resolvedInputPresentation()
+    guard let anchorRect = presentation.cursorRect ?? renderedCursorRect(), let frame = frameSnapshot, frame.cols > 0 else { return 0 }
+    let viewPoint: NSPoint
+    if let window {
+      viewPoint = convert(window.convertPoint(fromScreen: point), from: nil)
+    } else {
+      viewPoint = point
+    }
+    let relativeRow = max(0, Int(floor((viewPoint.y - anchorRect.minY) / cellSize.height)))
+    let relativeCol = max(0, Int(floor((viewPoint.x - anchorRect.minX) / cellSize.width)))
+    let maxIndex = max(0, (presentation.markedTextString?.count ?? 0) - 1)
+    return min(maxIndex, relativeRow * frame.cols + relativeCol)
   }
 
   private func committedText(from string: Any) -> String? {

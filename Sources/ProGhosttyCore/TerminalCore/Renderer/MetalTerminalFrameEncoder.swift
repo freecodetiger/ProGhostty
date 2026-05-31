@@ -13,6 +13,7 @@ public struct MetalTerminalRenderPlan: Equatable, Sendable {
   public let cellSize: CGSize
   public let backingScale: CGFloat
   public let isFocused: Bool
+  public let transientOverlayRevision: Int
 
   public init(
     presentation: TerminalRenderFramePresentation,
@@ -25,7 +26,8 @@ public struct MetalTerminalRenderPlan: Equatable, Sendable {
     dirtyCellRanges: [MetalCellDirtyRange] = [],
     cellSize: CGSize,
     backingScale: CGFloat,
-    isFocused: Bool
+    isFocused: Bool,
+    transientOverlayRevision: Int = 0
   ) {
     self.presentation = presentation
     self.viewportRows = viewportRows
@@ -38,6 +40,7 @@ public struct MetalTerminalRenderPlan: Equatable, Sendable {
     self.cellSize = cellSize
     self.backingScale = backingScale
     self.isFocused = isFocused
+    self.transientOverlayRevision = transientOverlayRevision
   }
 }
 
@@ -48,7 +51,8 @@ public enum MetalTerminalFrameEncoder {
     dirtyRows: Set<Int>,
     dirtyCellRanges: [MetalCellDirtyRange] = [],
     cellSize: CGSize,
-    backingScale: CGFloat
+    backingScale: CGFloat,
+    transientOverlayRevision: Int = 0
   ) -> MetalTerminalRenderPlan {
     let frame = renderFrame.frame
     return MetalTerminalRenderPlan(
@@ -62,7 +66,8 @@ public enum MetalTerminalFrameEncoder {
       dirtyCellRanges: dirtyCellRanges,
       cellSize: cellSize,
       backingScale: backingScale,
-      isFocused: renderFrame.isFocused
+      isFocused: renderFrame.isFocused,
+      transientOverlayRevision: transientOverlayRevision
     )
   }
 }

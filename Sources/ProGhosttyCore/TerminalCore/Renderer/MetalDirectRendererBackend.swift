@@ -94,6 +94,7 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   private var previousIsFocused: Bool?
   private var previousOverscanTopRows = 0
   private var previousViewportRows = 0
+  private var previousTransientOverlayRevision = 0
   private var pendingRenderFrame: TerminalRenderFrame?
   private var lastPresentedRenderFrame: TerminalRenderFrame?
   private var stagedResizeRenderFrame: TerminalRenderFrame?
@@ -492,14 +493,18 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
 
   private func updateDiagnostics(from renderFrame: TerminalRenderFrame) {
     let frame = renderFrame.frame
-    let dirty = dirtyRows(for: renderFrame)
+    let dirty = dirtyRows(
+      for: renderFrame,
+      transientOverlayRevision: directView.markedTextStateRevision
+    )
     let plan = MetalTerminalFrameEncoder.encode(
       renderFrame,
       pixelRemainderY: directView.viewport.visualOffsetY,
       dirtyRows: dirty.rows,
       dirtyCellRanges: dirty.cellRanges,
       cellSize: directView.terminalCellSize,
-      backingScale: directView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+      backingScale: directView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1,
+      transientOverlayRevision: directView.markedTextStateRevision
     )
     glyphAtlas.applyBackingScale(plan.backingScale)
     if lastGlyphBackingScale != plan.backingScale {
@@ -592,10 +597,17 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     previousViewportRows = frame.rows
   }
 
-  private func dirtyRows(for renderFrame: TerminalRenderFrame) -> CellGridDirtyResult {
+  private func dirtyRows(
+    for renderFrame: TerminalRenderFrame,
+    transientOverlayRevision: Int
+  ) -> CellGridDirtyResult {
     let frame = renderFrame.frame
     let gridUpdate = instanceBuffer.updateGridSize(rows: frame.rows, cols: frame.cols)
     guard gridUpdate == .unchanged, let previousFrame else {
+      return CellGridDirtyTracker.fullDirtyResult(for: frame)
+    }
+    if transientOverlayRevision != 0, transientOverlayRevision != previousTransientOverlayRevision {
+      previousTransientOverlayRevision = transientOverlayRevision
       return CellGridDirtyTracker.fullDirtyResult(for: frame)
     }
     let diff = CellGridDirtyTracker.diff(
@@ -609,12 +621,15 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
       return CellGridDirtyTracker.fullDirtyResult(for: frame)
     }
     guard previousFrame.cursorShape != .block, frame.cursorShape != .block else {
+      previousTransientOverlayRevision = transientOverlayRevision
       return diff
     }
-    return CellGridDirtyTracker.diffIgnoringCursorOnlyChanges(
+    let result = CellGridDirtyTracker.diffIgnoringCursorOnlyChanges(
       previous: previousFrame,
       next: frame
     )
+    previousTransientOverlayRevision = transientOverlayRevision
+    return result
   }
 
   private func scrollFrameNeedsFullSceneRebuild(_ renderFrame: TerminalRenderFrame) -> Bool {

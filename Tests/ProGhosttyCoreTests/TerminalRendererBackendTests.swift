@@ -840,6 +840,111 @@ struct TerminalRendererBackendTests {
     #expect(engine.lastSelectionCellRanges.contains(GridSelectionCellRange(row: 1, cols: 0..<3)))
   }
 
+  @MainActor @Test func metalDirectRenderEngineForcesFullRebuildWhenImeMarkedTextChanges() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let engine = try MetalDirectRenderEngine(device: device)
+    let view = MetalDirectRendererView(device: device)
+    let glyphAtlas = MetalGlyphAtlas(
+      fontFamily: FontManager.defaultMonospacedFontName(),
+      fontSize: 14,
+      backingScale: 1
+    )
+    let frame = frame(rows: ["abcdef"], cols: 6, cursorX: 2, cursorY: 0)
+    let renderFrame = TerminalRenderFrame(frame: frame, isFocused: true)
+    let cellSize = view.terminalCellSize
+    let backingScale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+    let plan = MetalTerminalFrameEncoder.encode(
+      renderFrame,
+      pixelRemainderY: 0,
+      dirtyRows: [],
+      dirtyCellRanges: [],
+      cellSize: cellSize,
+      backingScale: backingScale,
+      transientOverlayRevision: 0
+    )
+
+    view.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: view.terminalContentInset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: view.terminalContentInset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    view.bounds = view.frame
+    view.render(frame, isFocused: true)
+
+    #expect(engine.render(
+      renderFrame: renderFrame,
+      plan: plan,
+      view: view,
+      palette: .dark,
+      glyphAtlas: glyphAtlas
+    ))
+    #expect(engine.lastRenderPassLoadPolicy == .clear)
+    #expect(engine.lastRenderedRowCount == frame.rows)
+
+    let idlePlan = MetalTerminalFrameEncoder.encode(
+      renderFrame,
+      pixelRemainderY: 0,
+      dirtyRows: [],
+      dirtyCellRanges: [],
+      cellSize: cellSize,
+      backingScale: backingScale,
+      transientOverlayRevision: 0
+    )
+
+    #expect(engine.render(
+      renderFrame: renderFrame,
+      plan: idlePlan,
+      view: view,
+      palette: .dark,
+      glyphAtlas: glyphAtlas
+    ))
+    #expect(engine.lastRenderPassLoadPolicy == .load)
+    #expect(engine.lastRenderedRowCount == 0)
+
+    view.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    let markedPlan = MetalTerminalFrameEncoder.encode(
+      renderFrame,
+      pixelRemainderY: 0,
+      dirtyRows: [],
+      dirtyCellRanges: [],
+      cellSize: cellSize,
+      backingScale: backingScale,
+      transientOverlayRevision: view.markedTextStateRevision
+    )
+
+    #expect(engine.render(
+      renderFrame: renderFrame,
+      plan: markedPlan,
+      view: view,
+      palette: .dark,
+      glyphAtlas: glyphAtlas
+    ))
+    #expect(engine.lastRenderPassLoadPolicy == .clear)
+    #expect(engine.lastRenderedRowCount == frame.rows)
+
+    view.unmarkText()
+    let clearedPlan = MetalTerminalFrameEncoder.encode(
+      renderFrame,
+      pixelRemainderY: 0,
+      dirtyRows: [],
+      dirtyCellRanges: [],
+      cellSize: cellSize,
+      backingScale: backingScale,
+      transientOverlayRevision: view.markedTextStateRevision
+    )
+
+    #expect(engine.render(
+      renderFrame: renderFrame,
+      plan: clearedPlan,
+      view: view,
+      palette: .dark,
+      glyphAtlas: glyphAtlas
+    ))
+    #expect(engine.lastRenderPassLoadPolicy == .clear)
+    #expect(engine.lastRenderedRowCount == frame.rows)
+  }
+
   @MainActor @Test func metalDirectDrawablePassOwnsTransientOverlays() {
     let overlays = [
       MetalOverlayPrimitive(kind: .cursor, phase: .aboveGlyphs, rect: .zero, color: SIMD4<Float>(1, 1, 1, 1)),
@@ -884,7 +989,8 @@ struct TerminalRendererBackendTests {
     let glyph = MetalDirectRenderEngine.cursorGlyphLayout(
       renderFrame: TerminalRenderFrame(frame: snapshot, isFocused: true),
       plan: plan,
-      contentInset: CGSize(width: 14, height: 12)
+      contentInset: CGSize(width: 14, height: 12),
+      markedTextActive: false
     )
 
     #expect(glyph?.scalar == "b")
@@ -926,6 +1032,65 @@ struct TerminalRendererBackendTests {
     #expect(overlays.contains(where: { $0.kind == .linkHover }))
     #expect(overlays.filter({ $0.kind == .selection }).count == 1)
     #expect(overlays.filter({ $0.kind == .cursor }).count == 1)
+  }
+
+  @Test func metalOverlayBufferSuppressesCursorWhileMarkedTextCompositionIsActive() {
+    let plan = MetalTerminalRenderPlan(
+      presentation: .frame,
+      viewportRows: 1,
+      cols: 4,
+      overscanTopRows: 0,
+      overscanBottomRows: 0,
+      pixelRemainderY: 0,
+      dirtyRows: [0],
+      cellSize: CGSize(width: 8, height: 16),
+      backingScale: 2,
+      isFocused: true
+    )
+    let frame = TerminalRenderFrame(
+      frame: frame(rows: ["abcd"], cols: 4, cursorX: 1, cursorY: 0),
+      isFocused: true
+    )
+
+    let overlays = MetalOverlayBuffer.makeOverlays(
+      renderFrame: frame,
+      plan: plan,
+      markedTextActive: true
+    )
+
+    #expect(!overlays.contains(where: { $0.kind == .cursor }))
+  }
+
+  @Test func metalOverlayBufferCoversIMECompositionCursorCellWhileMarkedTextCompositionIsActive() {
+    let plan = MetalTerminalRenderPlan(
+      presentation: .frame,
+      viewportRows: 1,
+      cols: 4,
+      overscanTopRows: 0,
+      overscanBottomRows: 0,
+      pixelRemainderY: 0,
+      dirtyRows: [0],
+      cellSize: CGSize(width: 8, height: 16),
+      backingScale: 2,
+      isFocused: true
+    )
+    let frame = TerminalRenderFrame(
+      frame: frame(rows: ["abcd"], cols: 4, cursorX: 1, cursorY: 0),
+      isFocused: true
+    )
+
+    let overlays = MetalOverlayBuffer.makeOverlays(
+      renderFrame: frame,
+      plan: plan,
+      palette: .dark,
+      markedTextActive: true,
+      imeCompositionCursorOverlay: MetalMarkedTextOverlay(row: 0, col: 2, width: 8)
+    )
+
+    let cursorCover = overlays.first(where: { $0.kind == .cursor })
+    #expect(cursorCover?.phase == .aboveGlyphs)
+    #expect(cursorCover?.rect.minX == CGFloat(14 * 2 + 2 * 8 * 2))
+    #expect(cursorCover?.rect.width == CGFloat(8 * 2))
   }
 
   @Test func metalOverlayBufferScopesSelectionToCellRanges() {
@@ -1015,6 +1180,7 @@ struct TerminalRendererBackendTests {
     let overlays = MetalOverlayBuffer.makeOverlays(
       renderFrame: renderFrame,
       plan: plan,
+      markedTextActive: true,
       markedTextOverlay: MetalMarkedTextOverlay(row: 0, col: 2, width: 44)
     )
 
@@ -1045,6 +1211,7 @@ struct TerminalRendererBackendTests {
     let overlays = MetalOverlayBuffer.makeOverlays(
       renderFrame: renderFrame,
       plan: plan,
+      markedTextActive: true,
       markedTextOverlay: MetalMarkedTextOverlay(row: 0, col: 2, width: 44)
     )
 
@@ -1271,6 +1438,20 @@ struct TerminalRendererBackendTests {
     #expect(textureRect == CGRect(x: 0, y: 0, width: 1, height: 1))
   }
 
+  @MainActor @Test func metalDirectWideGlyphCellRectSpansTwoTerminalColumns() {
+    let wideCell = cell("界", width: .wide)
+    let rect = MetalDirectRenderEngine.glyphCellRect(
+      row: 2,
+      col: 3,
+      cell: wideCell,
+      cellSize: CGSize(width: 18, height: 34),
+      inset: CGSize(width: 4, height: 6),
+      translationY: 8
+    )
+
+    #expect(rect == CGRect(x: 58, y: 82, width: 36, height: 34))
+  }
+
   @MainActor @Test func metalDirectGlyphTexturesUseCoreGraphicsTopLeftOrigin() {
     let options = MetalDirectRenderEngine.glyphTextureLoaderOptions()
 
@@ -1419,6 +1600,32 @@ struct TerminalRendererBackendTests {
     #expect(result.mode == .dirty)
     #expect(result.rows == [1])
     #expect(result.cellRanges == [CellGridDirtyRange(row: 1, cols: 1..<3)])
+    #expect(result.dirtyCellCount == 2)
+  }
+
+  @Test func cellGridDirtyTrackerExpandsNonASCIICellChangesToAdjacentCells() {
+    let old = frame(rows: ["abcd", "e你gh"], cols: 8, cursorX: 1, cursorY: 0)
+    let new = frame(rows: ["abcd", "e gh"], cols: 8, cursorX: 1, cursorY: 0)
+
+    let result = CellGridDirtyTracker.diff(previous: old, next: new)
+
+    #expect(result.mode == .dirty)
+    #expect(result.rows == [1])
+    #expect(result.cellRanges == [CellGridDirtyRange(row: 1, cols: 0..<3)])
+    #expect(result.dirtyCellCount == 3)
+  }
+
+  @Test func cellGridDirtyTrackerRedrawsNonASCIINeighborWhenAdjacentCellChanges() {
+    let old = frame(rows: ["abcd", "你   "], cols: 8, cursorX: 1, cursorY: 0)
+    var new = old
+    let changedIndex = 1 * old.cols + 1
+    new.cells[changedIndex].inverse = true
+
+    let result = CellGridDirtyTracker.diff(previous: old, next: new)
+
+    #expect(result.mode == .dirty)
+    #expect(result.rows == [1])
+    #expect(result.cellRanges == [CellGridDirtyRange(row: 1, cols: 0..<2)])
     #expect(result.dirtyCellCount == 2)
   }
 
@@ -2263,6 +2470,7 @@ struct TerminalRendererBackendTests {
 
   private func cell(
     _ scalar: UnicodeScalar,
+    width: TerminalCellWidth = .narrow,
     foreground: GhosttyTerminalFrame.RGB = .init(r: 255, g: 255, b: 255),
     background: GhosttyTerminalFrame.RGB = .init(r: 0, g: 0, b: 0),
     bold: Bool = false,
@@ -2275,6 +2483,7 @@ struct TerminalRendererBackendTests {
   ) -> GhosttyTerminalFrame.Cell {
     GhosttyTerminalFrame.Cell(
       scalar: scalar,
+      width: width,
       foreground: foreground,
       background: background,
       bold: bold,

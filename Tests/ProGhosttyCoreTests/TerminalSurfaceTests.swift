@@ -1397,6 +1397,73 @@ struct TerminalSurfaceTests {
     #expect(gridView.hasMarkedText())
   }
 
+  @MainActor @Test func ptyGridMarkedTextTracksIMESelectedRange() {
+    let gridView = PTYGridView()
+
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    #expect(gridView.selectedRange() == NSRange(location: 5, length: 0))
+  }
+
+  @MainActor @Test func ptyGridFirstRectUsesMarkedTextCaretOffset() {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["            "], cols: 12, cursorX: 1, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    let window = NSWindow(contentRect: gridView.frame, styleMask: [.titled], backing: .buffered, defer: false)
+    window.contentView = gridView
+    gridView.render(frame, isFocused: true)
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    let startRect = gridView.firstRect(forCharacterRange: NSRange(location: 0, length: 0), actualRange: nil)
+    let endRect = gridView.firstRect(forCharacterRange: NSRange(location: 5, length: 0), actualRange: nil)
+
+    #expect(endRect.minX > startRect.minX)
+  }
+
+  @MainActor @Test func ptyGridInvalidatesIMECharacterCoordinatesForMarkedTextChanges() {
+    let gridView = InputCoordinateTrackingGridView()
+    let frame = frameWithText(rows: ["      "], cols: 6, cursorX: 0, cursorY: 0)
+
+    gridView.render(frame, isFocused: true)
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    gridView.unmarkText()
+
+    #expect(gridView.trackingInputContext.invalidationCount == 3)
+  }
+
+  @MainActor @Test func ptyGridEmptyMarkedTextRestoresBackspaceToPTY() throws {
+    var writes: [Data] = []
+    let gridView = PTYGridView()
+    gridView.inputHandler = { writes.append($0) }
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    gridView.setMarkedText("", selectedRange: NSRange(location: 0, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    let event = try #require(NSEvent.keyEvent(
+      with: .keyDown,
+      location: .zero,
+      modifierFlags: [],
+      timestamp: 0,
+      windowNumber: 0,
+      context: nil,
+      characters: "\u{8}",
+      charactersIgnoringModifiers: "\u{8}",
+      isARepeat: false,
+      keyCode: 51
+    ))
+
+    gridView.keyDown(with: event)
+
+    #expect(writes == [Data([0x7F])])
+    #expect(!gridView.isComposingMarkedText)
+  }
+
   @MainActor @Test func ptyGridDrawsMarkedTextAtCursorBeforeCommit() throws {
     let backend = GhosttyVTCellGridRendererBackend()
     let gridView = backend.gridView
@@ -1453,6 +1520,27 @@ struct TerminalSurfaceTests {
 
     #expect(gridView.currentMarkedTextOverlay == nil)
     #expect(gridView.currentMarkedTextString == nil)
+  }
+
+  @MainActor @Test func ptyGridInfersMarkedTextAnchorFromVisualPromptCursorWhenVtCursorIsHome() throws {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: [
+      "Claude Code",
+      "------------",
+      "› hello     "
+    ], cols: 12, cursorX: 0, cursorY: 0)
+    let promptCursorIndex = 2 * frame.cols + 7
+    frame.cells[promptCursorIndex].scalar = " "
+    frame.cells[promptCursorIndex].inverse = true
+    frame.cells[promptCursorIndex].usesDefaultBackground = false
+
+    gridView.render(frame, isFocused: true)
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    let overlay = try #require(gridView.currentMarkedTextOverlay)
+    #expect(overlay.row == 2)
+    #expect(overlay.col == 7)
+    #expect(gridView.cursorCellRect == nil)
   }
 
   @MainActor @Test func ptyGridCursorCellRectIncludesPixelScrollOffsetDuringScrollFrame() {
@@ -1563,6 +1651,41 @@ struct TerminalSurfaceTests {
 
     #expect(composingPixels > 0)
     #expect(composingCursorFillPixels < cursorFillPixels)
+  }
+
+  @MainActor @Test func ptyGridEmptyMarkedTextRestoresCursorWithoutExplicitUnmarkText() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["x     "], cols: 6, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+
+    let cursorImage = try #require(bitmapImage(drawing: gridView))
+    let cellRect = bitmapRect(PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset), imageHeight: cursorImage.pixelsHigh)
+    let cursorFillPixels = similarPixelCount(
+      to: TerminalSurfacePalette.dark.cursorBackground,
+      in: cellRect,
+      image: cursorImage
+    )
+
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+    gridView.setMarkedText("", selectedRange: NSRange(location: 0, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    let emptyImage = try #require(bitmapImage(drawing: gridView))
+    let emptyCursorFillPixels = similarPixelCount(
+      to: TerminalSurfacePalette.dark.cursorBackground,
+      in: bitmapRect(PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset), imageHeight: emptyImage.pixelsHigh),
+      image: emptyImage
+    )
+
+    #expect(emptyCursorFillPixels >= cursorFillPixels)
+    #expect(!gridView.isComposingMarkedText)
   }
 
   @MainActor @Test func ptyGridCommandClickOpensVisibleURL() throws {
@@ -2253,6 +2376,36 @@ struct TerminalSurfaceTests {
   private enum SurfaceLookupError: Error {
     case notFound(String)
   }
+}
+
+private final class InputCoordinateTrackingGridView: PTYGridView {
+  let trackingInputContext = TrackingTextInputContext(client: DummyTextInputClient())
+
+  override var inputContext: NSTextInputContext? {
+    trackingInputContext
+  }
+}
+
+private final class TrackingTextInputContext: NSTextInputContext {
+  private(set) var invalidationCount = 0
+
+  override func invalidateCharacterCoordinates() {
+    invalidationCount += 1
+  }
+}
+
+private final class DummyTextInputClient: NSObject, NSTextInputClient {
+  func insertText(_ string: Any, replacementRange: NSRange) {}
+  func doCommand(by selector: Selector) {}
+  func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {}
+  func unmarkText() {}
+  func selectedRange() -> NSRange { NSRange(location: 0, length: 0) }
+  func markedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
+  func hasMarkedText() -> Bool { false }
+  func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? { nil }
+  func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+  func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect { .zero }
+  func characterIndex(for point: NSPoint) -> Int { 0 }
 }
 
 @MainActor

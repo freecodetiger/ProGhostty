@@ -36,12 +36,14 @@ public enum MetalOverlayBuffer {
     renderFrame: TerminalRenderFrame,
     plan: MetalTerminalRenderPlan,
     palette: TerminalSurfacePalette = .dark,
+    markedTextActive: Bool = false,
     selectedRows: Set<Int> = [],
     selectedCellRanges: [MetalSelectionCellRange] = [],
     selectionRowsOffset: Int = 0,
     linkHoverRows: Set<Int> = [],
     linkHoverCellRanges: [MetalLinkHoverCellRange] = [],
     markedTextOverlay: MetalMarkedTextOverlay? = nil,
+    imeCompositionCursorOverlay: MetalMarkedTextOverlay? = nil,
     markedTextRowsOffset: Int = 0,
     contentInset: CGSize = CGSize(width: 14, height: 12),
     pixelRemainderY: CGFloat? = nil
@@ -62,7 +64,7 @@ public enum MetalOverlayBuffer {
     let cursorCol = frame.cursorX
     var overlays: [MetalOverlayPrimitive] = []
 
-    if frame.cursorVisible && renderFrame.isFocused && markedTextOverlay == nil {
+    if frame.cursorVisible && renderFrame.isFocused && !markedTextActive {
       let cursorRect = cellRect(
         row: cursorRow,
         col: cursorCol,
@@ -137,6 +139,24 @@ public enum MetalOverlayBuffer {
           ),
         ])
       }
+    }
+
+    if markedTextActive, let imeCompositionCursorOverlay {
+      let cursorRect = cellRect(
+        row: imeCompositionCursorOverlay.row + markedTextRowsOffset,
+        col: imeCompositionCursorOverlay.col,
+        cellSize: cellSize,
+        inset: inset,
+        translationY: translationY
+      )
+      overlays.append(
+        MetalOverlayPrimitive(
+          kind: .cursor,
+          phase: .aboveGlyphs,
+          rect: cursorRect,
+          color: palette.background.metalRGBA
+        )
+      )
     }
 
     let resolvedSelectionRanges = selectedCellRanges.isEmpty

@@ -196,6 +196,7 @@ public enum CellGridDirtyTracker {
     guard start < end else { return 0 }
     for cell in frame.cells[start..<end] {
       hasher.combine(cell.scalar.value)
+      hasher.combine(cell.width.rawValue)
       hasher.combine(cell.foreground)
       hasher.combine(cell.background)
       hasher.combine(cell.bold)
@@ -226,26 +227,76 @@ public enum CellGridDirtyTracker {
     }
     let cols = min(previous.cols, next.cols)
     var ranges: [CellGridDirtyRange] = []
-    var runStart: Int?
+    var dirtyCols = Set<Int>()
     for col in 0..<cols {
       let previousIndex = row * previous.cols + col
       let nextIndex = row * next.cols + col
       let changed = previousIndex >= previous.cells.count
         || nextIndex >= next.cells.count
         || previous.cells[previousIndex] != next.cells[nextIndex]
-      if changed {
-        if runStart == nil {
-          runStart = col
-        }
-      } else if let start = runStart {
-        ranges.append(CellGridDirtyRange(row: row, cols: start..<col))
-        runStart = nil
-      }
+      guard changed else { continue }
+      dirtyCols.insert(col)
+      expandDirtyColumnsAroundNonASCII(
+        changedCol: col,
+        cols: cols,
+        previous: previous,
+        next: next,
+        row: row,
+        dirtyCols: &dirtyCols
+      )
     }
-    if let start = runStart {
-      ranges.append(CellGridDirtyRange(row: row, cols: start..<cols))
+    var runStart: Int?
+    var previousCol: Int?
+    for col in dirtyCols.sorted() {
+      if runStart == nil {
+        runStart = col
+      } else if let previousCol, col != previousCol + 1 {
+        ranges.append(CellGridDirtyRange(row: row, cols: runStart!..<(previousCol + 1)))
+        runStart = col
+      }
+      previousCol = col
+    }
+    if let start = runStart, let previousCol {
+      ranges.append(CellGridDirtyRange(row: row, cols: start..<(previousCol + 1)))
     }
     return ranges
+  }
+
+  private static func needsAdjacentGlyphInvalidation(_ cell: GhosttyTerminalFrame.Cell) -> Bool {
+    cell.width != .narrow || (cell.scalar != " " && !cell.scalar.isASCII)
+  }
+
+  private static func expandDirtyColumnsAroundNonASCII(
+    changedCol: Int,
+    cols: Int,
+    previous: GhosttyTerminalFrame,
+    next: GhosttyTerminalFrame,
+    row: Int,
+    dirtyCols: inout Set<Int>
+  ) {
+    for candidate in max(0, changedCol - 1)...min(cols - 1, changedCol + 1) {
+      guard
+        cellNeedsAdjacentGlyphInvalidation(previous, row: row, col: candidate)
+          || cellNeedsAdjacentGlyphInvalidation(next, row: row, col: candidate)
+      else {
+        continue
+      }
+      dirtyCols.insert(max(0, candidate - 1))
+      dirtyCols.insert(candidate)
+      dirtyCols.insert(min(cols - 1, candidate + 1))
+    }
+  }
+
+  private static func cellNeedsAdjacentGlyphInvalidation(
+    _ frame: GhosttyTerminalFrame,
+    row: Int,
+    col: Int
+  ) -> Bool {
+    let index = row * frame.cols + col
+    guard col >= 0, col < frame.cols, index >= 0, index < frame.cells.count else {
+      return false
+    }
+    return needsAdjacentGlyphInvalidation(frame.cells[index])
   }
 
   private static func isCursorOnlyDirty(

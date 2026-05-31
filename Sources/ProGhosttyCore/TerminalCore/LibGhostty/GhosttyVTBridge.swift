@@ -12,9 +12,21 @@ public enum TerminalCursorShape: UInt8, Sendable {
   }
 }
 
+public enum TerminalCellWidth: UInt8, Sendable {
+  case narrow = 0
+  case wide = 1
+  case spacerTail = 2
+  case spacerHead = 3
+
+  init(ghosttyRawValue: UInt8) {
+    self = TerminalCellWidth(rawValue: ghosttyRawValue) ?? .narrow
+  }
+}
+
 public struct GhosttyTerminalFrame: Sendable, Equatable {
   public struct Cell: Sendable, Equatable {
     public var scalar: UnicodeScalar
+    public var width: TerminalCellWidth
     public var foreground: RGB
     public var background: RGB
     public var bold: Bool
@@ -28,6 +40,7 @@ public struct GhosttyTerminalFrame: Sendable, Equatable {
 
     public init(
       scalar: UnicodeScalar,
+      width: TerminalCellWidth = .narrow,
       foreground: RGB,
       background: RGB,
       bold: Bool,
@@ -40,6 +53,7 @@ public struct GhosttyTerminalFrame: Sendable, Equatable {
       hyperlink: String? = nil
     ) {
       self.scalar = scalar
+      self.width = width
       self.foreground = foreground
       self.background = background
       self.bold = bold
@@ -331,6 +345,7 @@ public final class GhosttyVTBridge {
     }
     return GhosttyTerminalFrame.Cell(
       scalar: scalar,
+      width: TerminalCellWidth(ghosttyRawValue: rawCell.wide),
       foreground: GhosttyTerminalFrame.RGB(r: rawCell.fg_r, g: rawCell.fg_g, b: rawCell.fg_b),
       background: GhosttyTerminalFrame.RGB(r: rawCell.bg_r, g: rawCell.bg_g, b: rawCell.bg_b),
       bold: rawCell.bold,
