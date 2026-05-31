@@ -106,6 +106,17 @@ struct GhosttyVTBridgeTests {
     #expect(try bridge.frame().cursorShape == .block)
   }
 
+  @Test func renderFramePreservesWideCellMetadataForCJKText() throws {
+    let bridge = try GhosttyVTBridge(cols: 10, rows: 2)
+    bridge.write(Data("界".utf8))
+
+    let frame = try bridge.frame()
+
+    #expect(frame.cells[0].scalar == "界")
+    #expect(frame.cells[0].width == .wide)
+    #expect(frame.cells[1].width == .spacerTail)
+  }
+
   @Test func renderFrameReportsAlternateScreenState() throws {
     let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
 

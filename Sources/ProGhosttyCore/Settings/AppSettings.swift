@@ -80,7 +80,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    rendererMode = try container.decodeIfPresent(TerminalRendererMode.self, forKey: .rendererMode) ?? Self.defaults.rendererMode
+    let rawRendererMode = try container.decodeIfPresent(String.self, forKey: .rendererMode)
+    rendererMode = TerminalRendererMode(rawValue: rawRendererMode ?? "") ?? Self.defaults.rendererMode
     smoothPixelScrollingEnabled = try container.decodeIfPresent(Bool.self, forKey: .smoothPixelScrollingEnabled) ?? Self.defaults.smoothPixelScrollingEnabled
     dirtyRowRenderingEnabled = try container.decodeIfPresent(Bool.self, forKey: .dirtyRowRenderingEnabled) ?? Self.defaults.dirtyRowRenderingEnabled
     forceFullRedrawEnabled = try container.decodeIfPresent(Bool.self, forKey: .forceFullRedrawEnabled) ?? Self.defaults.forceFullRedrawEnabled

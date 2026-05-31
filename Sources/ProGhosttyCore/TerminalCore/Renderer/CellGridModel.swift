@@ -97,10 +97,26 @@ public struct CellGridModel: Sendable {
 public struct CellGridDirtyResult: Equatable, Sendable {
   public var mode: TerminalRedrawMode
   public var rows: Set<Int>
+  public var cellRanges: [CellGridDirtyRange]
 
-  public init(mode: TerminalRedrawMode, rows: Set<Int>) {
+  public init(mode: TerminalRedrawMode, rows: Set<Int>, cellRanges: [CellGridDirtyRange] = []) {
     self.mode = mode
     self.rows = rows
+    self.cellRanges = cellRanges
+  }
+
+  public var dirtyCellCount: Int {
+    cellRanges.reduce(0) { $0 + $1.cols.count }
+  }
+}
+
+public struct CellGridDirtyRange: Equatable, Sendable {
+  public let row: Int
+  public let cols: Range<Int>
+
+  public init(row: Int, cols: Range<Int>) {
+    self.row = row
+    self.cols = cols
   }
 }
 
@@ -119,9 +135,11 @@ public enum CellGridDirtyTracker {
     }
 
     var rows = Set<Int>()
+    var cellRanges: [CellGridDirtyRange] = []
     let visibleRowCount = min(previous.rows, next.rows)
     for row in 0..<visibleRowCount where rowHash(previous, row: row) != rowHash(next, row: row) {
       rows.insert(row)
+      cellRanges.append(contentsOf: dirtyCellRanges(previous: previous, next: next, row: row))
     }
 
     if cursorChanged(previous, next) {
@@ -131,11 +149,44 @@ public enum CellGridDirtyTracker {
     rows.formUnion(previousSelectionRows)
     rows.formUnion(nextSelectionRows)
 
-    return CellGridDirtyResult(mode: rows.isEmpty ? .clean : .dirty, rows: rows)
+    return CellGridDirtyResult(
+      mode: rows.isEmpty ? .clean : .dirty,
+      rows: rows,
+      cellRanges: cellRanges
+    )
+  }
+
+  public static func diffIgnoringCursorOnlyChanges(
+    previous: GhosttyTerminalFrame?,
+    next: GhosttyTerminalFrame,
+    previousSelectionRows: Set<Int> = [],
+    nextSelectionRows: Set<Int> = []
+  ) -> CellGridDirtyResult {
+    let result = diff(
+      previous: previous,
+      next: next,
+      previousSelectionRows: previousSelectionRows,
+      nextSelectionRows: nextSelectionRows
+    )
+    guard
+      result.mode == .dirty,
+      let previous,
+      previousSelectionRows.isEmpty,
+      nextSelectionRows.isEmpty,
+      isCursorOnlyDirty(previous: previous, next: next, dirtyRows: result.rows)
+    else {
+      return result
+    }
+    return CellGridDirtyResult(mode: .clean, rows: [])
   }
 
   public static func fullDirtyResult(for frame: GhosttyTerminalFrame) -> CellGridDirtyResult {
-    CellGridDirtyResult(mode: .full, rows: Set(0..<max(0, frame.rows)))
+    let rows = Set(0..<max(0, frame.rows))
+    return CellGridDirtyResult(
+      mode: .full,
+      rows: rows,
+      cellRanges: rows.sorted().map { CellGridDirtyRange(row: $0, cols: 0..<max(0, frame.cols)) }
+    )
   }
 
   private static func rowHash(_ frame: GhosttyTerminalFrame, row: Int) -> Int {
@@ -145,6 +196,7 @@ public enum CellGridDirtyTracker {
     guard start < end else { return 0 }
     for cell in frame.cells[start..<end] {
       hasher.combine(cell.scalar.value)
+      hasher.combine(cell.width.rawValue)
       hasher.combine(cell.foreground)
       hasher.combine(cell.background)
       hasher.combine(cell.bold)
@@ -163,6 +215,104 @@ public enum CellGridDirtyTracker {
       || previous.cursorY != next.cursorY
       || previous.cursorVisible != next.cursorVisible
       || previous.cursorShape != next.cursorShape
+  }
+
+  private static func dirtyCellRanges(
+    previous: GhosttyTerminalFrame,
+    next: GhosttyTerminalFrame,
+    row: Int
+  ) -> [CellGridDirtyRange] {
+    guard row >= 0, row < min(previous.rows, next.rows), previous.cols > 0, next.cols > 0 else {
+      return []
+    }
+    let cols = min(previous.cols, next.cols)
+    var ranges: [CellGridDirtyRange] = []
+    var dirtyCols = Set<Int>()
+    for col in 0..<cols {
+      let previousIndex = row * previous.cols + col
+      let nextIndex = row * next.cols + col
+      let changed = previousIndex >= previous.cells.count
+        || nextIndex >= next.cells.count
+        || previous.cells[previousIndex] != next.cells[nextIndex]
+      guard changed else { continue }
+      dirtyCols.insert(col)
+      expandDirtyColumnsAroundNonASCII(
+        changedCol: col,
+        cols: cols,
+        previous: previous,
+        next: next,
+        row: row,
+        dirtyCols: &dirtyCols
+      )
+    }
+    var runStart: Int?
+    var previousCol: Int?
+    for col in dirtyCols.sorted() {
+      if runStart == nil {
+        runStart = col
+      } else if let previousCol, col != previousCol + 1 {
+        ranges.append(CellGridDirtyRange(row: row, cols: runStart!..<(previousCol + 1)))
+        runStart = col
+      }
+      previousCol = col
+    }
+    if let start = runStart, let previousCol {
+      ranges.append(CellGridDirtyRange(row: row, cols: start..<(previousCol + 1)))
+    }
+    return ranges
+  }
+
+  private static func needsAdjacentGlyphInvalidation(_ cell: GhosttyTerminalFrame.Cell) -> Bool {
+    cell.width != .narrow || (cell.scalar != " " && !cell.scalar.isASCII)
+  }
+
+  private static func expandDirtyColumnsAroundNonASCII(
+    changedCol: Int,
+    cols: Int,
+    previous: GhosttyTerminalFrame,
+    next: GhosttyTerminalFrame,
+    row: Int,
+    dirtyCols: inout Set<Int>
+  ) {
+    for candidate in max(0, changedCol - 1)...min(cols - 1, changedCol + 1) {
+      guard
+        cellNeedsAdjacentGlyphInvalidation(previous, row: row, col: candidate)
+          || cellNeedsAdjacentGlyphInvalidation(next, row: row, col: candidate)
+      else {
+        continue
+      }
+      dirtyCols.insert(max(0, candidate - 1))
+      dirtyCols.insert(candidate)
+      dirtyCols.insert(min(cols - 1, candidate + 1))
+    }
+  }
+
+  private static func cellNeedsAdjacentGlyphInvalidation(
+    _ frame: GhosttyTerminalFrame,
+    row: Int,
+    col: Int
+  ) -> Bool {
+    let index = row * frame.cols + col
+    guard col >= 0, col < frame.cols, index >= 0, index < frame.cells.count else {
+      return false
+    }
+    return needsAdjacentGlyphInvalidation(frame.cells[index])
+  }
+
+  private static func isCursorOnlyDirty(
+    previous: GhosttyTerminalFrame,
+    next: GhosttyTerminalFrame,
+    dirtyRows: Set<Int>
+  ) -> Bool {
+    guard cursorChanged(previous, next) else { return false }
+    let expectedRows = Set([
+      clampedRow(previous.cursorY, rowCount: previous.rows),
+      clampedRow(next.cursorY, rowCount: next.rows),
+    ])
+    guard dirtyRows == expectedRows else { return false }
+    return dirtyRows.allSatisfy { row in
+      rowHash(previous, row: row) == rowHash(next, row: row)
+    }
   }
 
   private static func clampedRow(_ row: Int, rowCount: Int) -> Int {

@@ -40,6 +40,7 @@ struct AppText {
   var dark: String { text("Dark", "深色") }
   var renderer: String { text("Renderer", "渲染器") }
   var rendererAuto: String { text("Auto", "自动") }
+  var rendererMetalDirect: String { text("Metal direct", "Metal 直接渲染") }
   var rendererCellGrid: String { text("Ghostty VT Cell Grid", "Ghostty VT Cell Grid") }
   var rendererTextFallback: String { text("Text fallback", "文本回退") }
   var dirtyRowRendering: String { text("Dirty row rendering", "脏行增量渲染") }
