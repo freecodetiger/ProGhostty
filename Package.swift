@@ -50,6 +50,10 @@ let package = Package(
       name: "ProGhosttyCoreTests",
       dependencies: ["ProGhosttyCore"]
     ),
+    .testTarget(
+      name: "ProGhosttyAppTests",
+      dependencies: ["ProGhosttyApp"]
+    ),
   ],
   swiftLanguageModes: [.v6]
 )

@@ -511,6 +511,22 @@ struct TerminalRendererBackendTests {
     #expect(diagnostics.metalDirectWaitedForCompletion == true)
   }
 
+  @MainActor @Test func metalDirectRendererBackendFullRedrawsAfterThemeChanges() {
+    let backend = MetalDirectRendererBackend()
+    let snapshot = frame(rows: ["abc", "def"], cols: 4, cursorX: 0, cursorY: 0)
+
+    backend.render(TerminalRenderFrame(frame: snapshot))
+    backend.flushPendingFrame()
+    backend.applyPalette(.light)
+    backend.render(TerminalRenderFrame(frame: snapshot))
+    backend.flushPendingFrame()
+
+    let diagnostics = backend.diagnostics
+    #expect(diagnostics.redrawMode == .full)
+    #expect(diagnostics.dirtyRowCount == 2)
+    #expect(diagnostics.metalDirectDrawnRowCount == 2)
+  }
+
   @MainActor @Test func metalDirectRendererBackendUpdatesCursorWithoutDrawingTextRows() {
     let backend = MetalDirectRendererBackend()
     let initial = frame(rows: ["abc", "def", "ghi"], cols: 4, cursorX: 0, cursorY: 0)

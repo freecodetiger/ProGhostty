@@ -59,6 +59,7 @@ public enum TerminalEvent: Sendable {
   func writePaste(_ text: String, to id: TerminalSessionID)
   func workingDirectory(for id: TerminalSessionID) -> String?
   func controlToken(for id: TerminalSessionID) -> String?
+  func hasForegroundProcess(in id: TerminalSessionID) -> Bool
   var events: AsyncStream<TerminalEvent> { get }
 }
 

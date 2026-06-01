@@ -86,6 +86,10 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
     nil
   }
 
+  public func hasForegroundProcess(in id: TerminalSessionID) -> Bool {
+    false
+  }
+
   public func viewForSession(_ id: TerminalSessionID) -> NSView? {
     guard let textView = sessions[id]?.view else {
       return nil

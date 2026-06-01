@@ -20,6 +20,13 @@ struct AppText {
   var splitRight: String { text("Split Right", "向右分屏") }
   var splitDown: String { text("Split Down", "向下分屏") }
   var closePane: String { text("Close Pane", "关闭分屏") }
+  var closePaneConfirmationTitle: String { text("Close pane?", "关闭分屏？") }
+  var closePaneConfirmationMessage: String {
+    text(
+      "This pane has a running foreground process. Closing it will terminate that process.",
+      "这个分屏中有正在运行的前台进程。关闭分屏会终止该进程。"
+    )
+  }
   var terminal: String { text("Terminal", "终端") }
   var defaultShell: String { text("Default shell", "默认 shell") }
   var workingDirectory: String { text("Working directory", "工作目录") }

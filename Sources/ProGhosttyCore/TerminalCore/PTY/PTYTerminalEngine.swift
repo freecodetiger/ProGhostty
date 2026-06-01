@@ -229,6 +229,10 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
     sessionManager.controlToken(for: id)
   }
 
+  public func hasForegroundProcess(in id: TerminalSessionID) -> Bool {
+    sessionManager.hasForegroundProcess(in: id)
+  }
+
   public func viewForSession(_ id: TerminalSessionID) -> NSView? {
     surfaceRegistry.viewForSession(id)
   }
@@ -469,6 +473,15 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   public func controlToken(for id: TerminalSessionID) -> String? {
     sessions[id]?.controlToken
+  }
+
+  public func hasForegroundProcess(in id: TerminalSessionID) -> Bool {
+    guard let state = sessions[id] else { return false }
+    let foregroundProcessGroup = tcgetpgrp(state.fileDescriptor)
+    guard foregroundProcessGroup > 0 else { return false }
+    let shellProcessGroup = getpgid(state.pid)
+    guard shellProcessGroup > 0 else { return false }
+    return foregroundProcessGroup != shellProcessGroup
   }
 
   nonisolated static func controlEnvironment(
@@ -2214,7 +2227,8 @@ public class PTYGridView: NSView {
   }
 
   private func inferredPromptCursorCoordinate(in geometry: RenderedGridGeometry) -> GridCoordinate? {
-    var fallback: GridCoordinate?
+    var bestVisualCursor: GridCoordinate?
+    var bestTextFallback: GridCoordinate?
     for row in 0..<geometry.frame.rows {
       guard geometry.clipRect.intersects(geometry.rowRect(row)) else { continue }
       let rowStart = row * geometry.frame.cols
@@ -2222,14 +2236,14 @@ public class PTYGridView: NSView {
       guard rowStart < rowEnd else { continue }
       let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
       guard let promptCol = promptMarkerColumn(in: cells) else { continue }
-      for col in (promptCol + 1)..<cells.count where isVisualInputCursorCell(cells[col]) {
-        return GridCoordinate(row: row, col: col)
+      if let cursorCol = cells.indices.last(where: { $0 > promptCol && isVisualInputCursorCell(cells[$0]) }) {
+        bestVisualCursor = GridCoordinate(row: row, col: cursorCol)
       }
       if let lastTextCol = cells.indices.last(where: { $0 > promptCol && cells[$0].scalar != " " }) {
-        fallback = GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
+        bestTextFallback = GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
       }
     }
-    return fallback
+    return bestVisualCursor ?? bestTextFallback
   }
 
   private func promptMarkerColumn(in cells: [GhosttyTerminalFrame.Cell]) -> Int? {

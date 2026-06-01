@@ -64,6 +64,19 @@ struct PaneWorkspaceControllerTests {
     #expect(PaneTreeReducer.listLeaves(in: updated.root) == [opened.pane])
   }
 
+  @Test func paneCloseConfirmationPolicyRequiresConfirmationForForegroundProcess() {
+    let manager = RecordingSessionManager()
+    let session = TerminalSessionID()
+    let pane = TerminalPane(sessionId: session, title: "zsh")
+    manager.foregroundProcessSessions = [session]
+
+    #expect(PaneCloseConfirmationPolicy.requiresConfirmation(for: pane, sessionManager: manager))
+
+    manager.foregroundProcessSessions = []
+
+    #expect(!PaneCloseConfirmationPolicy.requiresConfirmation(for: pane, sessionManager: manager))
+  }
+
   @Test func closeWorkspaceClosesAllSessionsInRequestedWorkspaceOnly() throws {
     let manager = RecordingSessionManager()
     let focusStore = TerminalFocusStore()
@@ -149,6 +162,7 @@ struct PaneWorkspaceControllerTests {
 private final class RecordingSessionManager: TerminalSessionManager {
   var createdConfigs: [TerminalSessionConfig] = []
   var closedSessions: [TerminalSessionID] = []
+  var foregroundProcessSessions: Set<TerminalSessionID> = []
   let events: AsyncStream<TerminalEvent> = AsyncStream { continuation in
     continuation.finish()
   }
@@ -167,4 +181,5 @@ private final class RecordingSessionManager: TerminalSessionManager {
   func writePaste(_ text: String, to id: TerminalSessionID) {}
   func workingDirectory(for id: TerminalSessionID) -> String? { nil }
   func controlToken(for id: TerminalSessionID) -> String? { nil }
+  func hasForegroundProcess(in id: TerminalSessionID) -> Bool { foregroundProcessSessions.contains(id) }
 }

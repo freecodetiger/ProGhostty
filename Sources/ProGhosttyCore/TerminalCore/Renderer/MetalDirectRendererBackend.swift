@@ -104,6 +104,7 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   private var latestPresentedGeneration: Int = 0
   private var nextAssignedRenderGeneration: Int = 0
   private var flushScheduled = false
+  private var pendingFullRedraw = false
 
   private struct StyleStatsCache {
     private(set) var rows: [TerminalCellStyleStats] = []
@@ -330,6 +331,7 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   public func applyPalette(_ palette: TerminalSurfacePalette) {
     self.palette = palette
     directView.applyPalette(palette)
+    requestFullRedraw()
   }
 
   public func applyFont(family: String, size: CGFloat) {
@@ -337,12 +339,14 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     glyphAtlas.applyFont(family: family, size: size)
     engine?.resetTextureCache()
     lastGlyphBackingScale = 0
+    requestFullRedraw()
   }
 
   public func applyOptions(_ options: TerminalRendererOptions) {
     self.options = options
     Self.applyBackendSelectionDiagnostics(options: options, to: &diagnosticsState)
     directView.applyRendererOptions(options)
+    requestFullRedraw()
   }
 
   public func setFocused(_ isFocused: Bool) {
@@ -603,6 +607,11 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   ) -> CellGridDirtyResult {
     let frame = renderFrame.frame
     let gridUpdate = instanceBuffer.updateGridSize(rows: frame.rows, cols: frame.cols)
+    if pendingFullRedraw {
+      pendingFullRedraw = false
+      previousTransientOverlayRevision = transientOverlayRevision
+      return CellGridDirtyTracker.fullDirtyResult(for: frame)
+    }
     guard gridUpdate == .unchanged, let previousFrame else {
       return CellGridDirtyTracker.fullDirtyResult(for: frame)
     }
@@ -630,6 +639,12 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     )
     previousTransientOverlayRevision = transientOverlayRevision
     return result
+  }
+
+  private func requestFullRedraw() {
+    pendingFullRedraw = true
+    diagnosticsState.redrawMode = .full
+    diagnosticsState.dirtyRowCount = previousFrame?.rows ?? 0
   }
 
   private func scrollFrameNeedsFullSceneRebuild(_ renderFrame: TerminalRenderFrame) -> Bool {

@@ -1543,6 +1543,58 @@ struct TerminalSurfaceTests {
     #expect(gridView.cursorCellRect == nil)
   }
 
+  @MainActor @Test func ptyGridInfersMarkedTextAnchorFromLatestVisualPromptCursorWhenVtCursorIsHome() throws {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: [
+      "› old       ",
+      "history     ",
+      "› current   "
+    ], cols: 12, cursorX: 0, cursorY: 0)
+    let staleCursorIndex = 0 * frame.cols + 2
+    frame.cells[staleCursorIndex].scalar = " "
+    frame.cells[staleCursorIndex].inverse = true
+    frame.cells[staleCursorIndex].usesDefaultBackground = false
+    let liveCursorIndex = 2 * frame.cols + 9
+    frame.cells[liveCursorIndex].scalar = " "
+    frame.cells[liveCursorIndex].inverse = true
+    frame.cells[liveCursorIndex].usesDefaultBackground = false
+
+    gridView.render(frame, isFocused: true)
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    let overlay = try #require(gridView.currentMarkedTextOverlay)
+    #expect(overlay.row == 2)
+    #expect(overlay.col == 9)
+    #expect(gridView.currentIMECompositionCursorOverlay?.row == 2)
+    #expect(gridView.currentIMECompositionCursorOverlay?.col == 9)
+    #expect(gridView.cursorCellRect == nil)
+  }
+
+  @MainActor @Test func ptyGridInfersMarkedTextAnchorFromRightmostVisualPromptCursorWhenVtCursorIsHome() throws {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: [
+      "› current   "
+    ], cols: 12, cursorX: 0, cursorY: 0)
+    let promptAdjacentIndex = 0 * frame.cols + 2
+    frame.cells[promptAdjacentIndex].scalar = " "
+    frame.cells[promptAdjacentIndex].inverse = true
+    frame.cells[promptAdjacentIndex].usesDefaultBackground = false
+    let liveCursorIndex = 0 * frame.cols + 9
+    frame.cells[liveCursorIndex].scalar = " "
+    frame.cells[liveCursorIndex].inverse = true
+    frame.cells[liveCursorIndex].usesDefaultBackground = false
+
+    gridView.render(frame, isFocused: true)
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    let overlay = try #require(gridView.currentMarkedTextOverlay)
+    #expect(overlay.row == 0)
+    #expect(overlay.col == 9)
+    #expect(gridView.currentIMECompositionCursorOverlay?.row == 0)
+    #expect(gridView.currentIMECompositionCursorOverlay?.col == 9)
+    #expect(gridView.cursorCellRect == nil)
+  }
+
   @MainActor @Test func ptyGridCursorCellRectIncludesPixelScrollOffsetDuringScrollFrame() {
     let gridView = PTYGridView()
     var frame = frameWithText(rows: ["visible text"], cols: 24, cursorX: 0, cursorY: 0)

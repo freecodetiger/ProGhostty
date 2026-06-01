@@ -25,6 +25,7 @@ public final class LibGhosttyTerminalEngine: TerminalSessionManager, TerminalSur
   public func writePaste(_ text: String, to id: TerminalSessionID) {}
   public func workingDirectory(for id: TerminalSessionID) -> String? { nil }
   public func controlToken(for id: TerminalSessionID) -> String? { nil }
+  public func hasForegroundProcess(in id: TerminalSessionID) -> Bool { false }
   public func viewForSession(_ id: TerminalSessionID) -> NSView? { nil }
   public func selectedText(for id: TerminalSessionID) -> String? { nil }
   public func rendererDiagnostics(for id: TerminalSessionID) -> TerminalRendererDiagnostics? { nil }

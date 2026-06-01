@@ -915,6 +915,7 @@ final class TerminalPaneViewController: NSViewController {
 
   override func viewDidLayout() {
     super.viewDidLayout()
+    layoutSideInputOverlay()
     let size = view.bounds.size
     guard view.window != nil, size.width > 0, size.height > 0 else {
       pendingResizeWorkItem?.cancel()
@@ -1062,18 +1063,9 @@ final class TerminalPaneViewController: NSViewController {
       overlay = existing
     } else {
       overlay = TerminalSideInputOverlayView()
-      overlay.translatesAutoresizingMaskIntoConstraints = false
+      overlay.translatesAutoresizingMaskIntoConstraints = true
+      overlay.autoresizingMask = []
       view.addSubview(overlay)
-      let preferredWidth = overlay.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.72)
-      preferredWidth.priority = .defaultHigh
-      NSLayoutConstraint.activate([
-        overlay.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
-        overlay.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-        preferredWidth,
-        overlay.widthAnchor.constraint(lessThanOrEqualToConstant: 560),
-        overlay.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
-        overlay.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
-      ])
       sideInputOverlay = overlay
     }
 
@@ -1087,6 +1079,7 @@ final class TerminalPaneViewController: NSViewController {
       onCancel: onCancel,
       placeholder: placeholder
     )
+    layoutSideInputOverlay()
     guard pendingFocusRequest == TerminalSideInputFocusRequest(
       paneID: pane.paneId,
       requestID: draft.focusRequestID
@@ -1098,6 +1091,21 @@ final class TerminalPaneViewController: NSViewController {
       overlay.focus()
       onFocusRequestHandled(draft.paneID, draft.focusRequestID)
     }
+  }
+
+  private func layoutSideInputOverlay() {
+    guard let overlay = sideInputOverlay else { return }
+    let horizontalInset: CGFloat = 12
+    let availableWidth = max(0, view.bounds.width - horizontalInset * 2)
+    let requestedWidth = min(560, max(220, view.bounds.width * 0.72))
+    let width = min(availableWidth, requestedWidth)
+    let height = overlay.preferredOverlayHeight
+    overlay.frame = NSRect(
+      x: floor((view.bounds.width - width) / 2),
+      y: max(8, view.bounds.height - height - 8),
+      width: width,
+      height: height
+    )
   }
 
   private func configureDropHandling() {
@@ -1355,7 +1363,7 @@ private final class TerminalPaneHostView: NSView {
   private let scrollView = NSScrollView()
   private let textView = TerminalSideInputTextView()
   private let placeholderField = NSTextField(labelWithString: "")
-  private var heightConstraint: NSLayoutConstraint?
+  private(set) var preferredOverlayHeight: CGFloat = 40
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -1444,11 +1452,7 @@ private final class TerminalPaneHostView: NSView {
     scrollView.documentView = textView
     addSubview(scrollView)
     addSubview(placeholderField)
-    let heightConstraint = heightAnchor.constraint(equalToConstant: 40)
-    self.heightConstraint = heightConstraint
     NSLayoutConstraint.activate([
-      widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
-      heightConstraint,
       scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
       scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
       scrollView.topAnchor.constraint(equalTo: topAnchor),
@@ -1463,7 +1467,8 @@ private final class TerminalPaneHostView: NSView {
 
   private func updateHeight() {
     let lineCount = max(1, textView.string.split(separator: "\n", omittingEmptySubsequences: false).count)
-    heightConstraint?.constant = min(116, max(40, CGFloat(lineCount) * 18 + 22))
+    preferredOverlayHeight = min(116, max(40, CGFloat(lineCount) * 18 + 22))
+    superview?.needsLayout = true
   }
 
   private func updatePlaceholderVisibility() {

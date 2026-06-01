@@ -665,6 +665,14 @@ final class AppModel: ObservableObject {
 
     var runtime = workspaceRuntimes[index]
     let leavesBefore = PaneTreeReducer.listLeaves(in: runtime.layout.root)
+    if
+      let pane = leavesBefore.first(where: { $0.paneId == paneID }),
+      PaneCloseConfirmationPolicy.requiresConfirmation(for: pane, sessionManager: sessionManager),
+      !confirmPaneCloseWithForegroundProcess()
+    {
+      DebugLog.write("closePane cancelled pane=\(paneID) foregroundProcess=true")
+      return
+    }
     DebugLog.write("closePane requested pane=\(paneID) leavesBefore=\(leavesBefore.count)")
     do {
       guard let closed = try paneWorkspaceController.closePane(workspaceID: activeWorkspaceID, paneID: paneID) else {
@@ -1258,6 +1266,18 @@ final class AppModel: ObservableObject {
     )
     alert.alertStyle = .warning
     alert.addButton(withTitle: text.deleteWorkspace)
+    alert.addButton(withTitle: text.cancel)
+    alert.buttons.first?.keyEquivalent = "\r"
+    return alert.runModal() == .alertFirstButtonReturn
+  }
+
+  private func confirmPaneCloseWithForegroundProcess() -> Bool {
+    let text = appText
+    let alert = NSAlert()
+    alert.messageText = text.closePaneConfirmationTitle
+    alert.informativeText = text.closePaneConfirmationMessage
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: text.closePane)
     alert.addButton(withTitle: text.cancel)
     alert.buttons.first?.keyEquivalent = "\r"
     return alert.runModal() == .alertFirstButtonReturn
