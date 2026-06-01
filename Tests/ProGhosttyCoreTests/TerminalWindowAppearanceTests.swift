@@ -94,6 +94,72 @@ struct TerminalWindowAppearanceTests {
     #expect(window.contentView?.superview?.layer?.backgroundColor?.sameRGB(as: background.cgColor) == true)
     #expect(titlebarBackground.layer?.backgroundColor?.sameRGB(as: background.cgColor) == true)
   }
+
+  @MainActor @Test func terminalChromePaintsStandardTitlebarHost() throws {
+    let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 260))
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 420, height: 260),
+      styleMask: [.titled, .closable, .miniaturizable, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = contentView
+    window.styleMask.insert(.fullSizeContentView)
+    let titlebarHost = try #require(window.standardWindowButton(.closeButton)?.superview)
+    titlebarHost.wantsLayer = true
+    titlebarHost.layer?.backgroundColor = NSColor.white.cgColor
+
+    let background = NSColor(calibratedWhite: 0.075, alpha: 1)
+    ProGhosttyWindowAppearance.applyTerminalChrome(
+      to: window,
+      backgroundColor: background,
+      usesDarkAppearance: true
+    )
+
+    #expect(window.appearance?.name == .darkAqua)
+    #expect(titlebarHost.layer?.backgroundColor?.sameRGB(as: background.cgColor) == true)
+  }
+
+  @MainActor @Test func configurationChromePaintsTitlebarAndContentTogether() throws {
+    let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 260))
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 420, height: 260),
+      styleMask: [.titled, .closable, .miniaturizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = contentView
+    let titlebarHost = try #require(window.contentView?.superview)
+    let previous = NSColor(calibratedWhite: 0.12, alpha: 1)
+    titlebarHost.wantsLayer = true
+    titlebarHost.layer?.backgroundColor = previous.cgColor
+
+    let background = NSColor(calibratedWhite: 0.96, alpha: 1)
+    ProGhosttyWindowAppearance.applyConfigurationChrome(
+      to: window,
+      backgroundColor: background,
+      usesDarkAppearance: false
+    )
+
+    #expect(window.appearance?.name == .aqua)
+    #expect(window.titlebarAppearsTransparent)
+    #expect(window.titlebarSeparatorStyle == .none)
+    #expect(window.backgroundColor.sameRGB(as: background))
+    #expect(window.contentView?.layer?.backgroundColor?.sameRGB(as: background.cgColor) == true)
+    #expect(window.contentView?.superview?.layer?.backgroundColor?.sameRGB(as: background.cgColor) == true)
+
+    let dark = NSColor(calibratedWhite: 0.10, alpha: 1)
+    ProGhosttyWindowAppearance.applyConfigurationChrome(
+      to: window,
+      backgroundColor: dark,
+      usesDarkAppearance: true
+    )
+
+    #expect(window.appearance?.name == .darkAqua)
+    #expect(window.backgroundColor.sameRGB(as: dark))
+    #expect(window.contentView?.layer?.backgroundColor?.sameRGB(as: dark.cgColor) == true)
+    #expect(window.contentView?.superview?.layer?.backgroundColor?.sameRGB(as: dark.cgColor) == true)
+  }
 }
 
 private extension NSColor {

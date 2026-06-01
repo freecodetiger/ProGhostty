@@ -5,6 +5,55 @@ import Testing
 
 @Suite("App settings")
 struct AppSettingsTests {
+  @Test func fontOptionsRecommendCommonTerminalFontsBeyondNameSubstringFilter() {
+    let options = FontManager.fontOptions(
+      availableFamilies: ["Fira Code", "Hack", "Iosevka", "Proportional Sans"],
+      currentFamily: "Hack",
+      searchText: "",
+      includeAllFonts: false
+    )
+
+    #expect(options.map(\.familyName) == ["Fira Code", "Hack", "Iosevka"])
+    #expect(options.allSatisfy { $0.isRecommendedForTerminal })
+  }
+
+  @Test func fontOptionsCanSearchAcrossAllInstalledFonts() {
+    let options = FontManager.fontOptions(
+      availableFamilies: ["Fira Code", "Hack", "Proportional Sans"],
+      currentFamily: "Hack",
+      searchText: "sans",
+      includeAllFonts: true
+    )
+
+    #expect(options.map(\.familyName) == ["Proportional Sans"])
+    #expect(options.first?.isRecommendedForTerminal == false)
+  }
+
+  @Test func fontOptionsPreserveCurrentCustomFontWhenMissingFromInstalledList() {
+    let options = FontManager.fontOptions(
+      availableFamilies: ["Fira Code", "Menlo"],
+      currentFamily: "Custom Terminal Font",
+      searchText: "",
+      includeAllFonts: false
+    )
+
+    #expect(options.map(\.familyName).contains("Custom Terminal Font"))
+    #expect(options.first { $0.familyName == "Custom Terminal Font" }?.isInstalled == false)
+  }
+
+  @Test func cjkFallbackOptionsRecommendChineseFontsAndPreserveCustomSelection() {
+    let options = FontManager.cjkFallbackOptions(
+      availableFamilies: ["Fira Code", "PingFang SC", "Sarasa Mono SC", "Proportional Sans"],
+      currentFamily: "Custom CJK Font",
+      searchText: "",
+      includeAllFonts: false
+    )
+
+    #expect(options.map(\.familyName) == ["Custom CJK Font", "PingFang SC", "Sarasa Mono SC"])
+    #expect(options.first { $0.familyName == "Custom CJK Font" }?.isInstalled == false)
+    #expect(options.first { $0.familyName == "PingFang SC" }?.isRecommendedForCJKFallback == true)
+  }
+
   @Test func decodesLegacySettingsWithNewLanguageAndThemeDefaults() throws {
     let legacy = """
       {
@@ -29,6 +78,17 @@ struct AppSettingsTests {
     #expect(settings.smoothPixelScrollingEnabled == true)
     #expect(settings.dirtyRowRenderingEnabled == true)
     #expect(settings.forceFullRedrawEnabled == false)
+    #expect(settings.cjkFallbackFontFamily == nil)
+  }
+
+  @Test func cjkFallbackFontFamilyRoundTripsThroughSettingsJSON() throws {
+    var settings = AppSettings.defaults
+    settings.cjkFallbackFontFamily = "PingFang SC"
+
+    let encoded = try JSONEncoder().encode(settings)
+    let decoded = try JSONDecoder().decode(AppSettings.self, from: encoded)
+
+    #expect(decoded.cjkFallbackFontFamily == "PingFang SC")
   }
 
   @Test func rendererOptionsEnablePixelScrollByDefault() {

@@ -45,6 +45,7 @@ final class AppModel: ObservableObject {
   @Published var settings: AppSettings {
     didSet {
       applyTerminalAppearance()
+      persistSettings()
     }
   }
   @Published var requestedPluginPlanID: String?
@@ -832,8 +833,12 @@ final class AppModel: ObservableObject {
   }
 
   func saveSettings() {
-    try? settingsStore.save(settings)
+    persistSettings()
     showTitlebarToast(appText.settingsSavedToast, style: .success, lifetime: .settingsSaved)
+  }
+
+  private func persistSettings() {
+    try? settingsStore.save(settings)
   }
 
   private func rememberActiveWorkspaceContentSize() {
@@ -1032,7 +1037,11 @@ final class AppModel: ObservableObject {
 
   private func applyTerminalAppearance() {
     surfaceRegistry.applyPalette(terminalPalette)
-    surfaceRegistry.applyFont(family: settings.fontFamily, size: CGFloat(settings.fontSize))
+    surfaceRegistry.applyFont(
+      family: settings.fontFamily,
+      size: CGFloat(settings.fontSize),
+      cjkFallbackFamily: settings.cjkFallbackFontFamily
+    )
     surfaceRegistry.applyRendererOptions(settings.terminalRendererOptions)
     applyFocusedTerminalSurface()
     for window in NSApp.windows
@@ -1054,16 +1063,12 @@ final class AppModel: ObservableObject {
   }
 
   private func applyConfigurationWindowAppearance(to window: NSWindow) {
-    let appearance = NSAppearance(named: usesDarkAppearance ? .darkAqua : .aqua)
-    window.appearance = appearance
-    window.contentView?.appearance = appearance
-    window.contentViewController?.view.appearance = appearance
     let background = settingsThemePalette.windowBackground
-    window.backgroundColor = background
-    window.contentView?.wantsLayer = true
-    window.contentView?.layer?.backgroundColor = background.cgColor
-    window.contentViewController?.view.wantsLayer = true
-    window.contentViewController?.view.layer?.backgroundColor = background.cgColor
+    ProGhosttyWindowAppearance.applyConfigurationChrome(
+      to: window,
+      backgroundColor: background,
+      usesDarkAppearance: usesDarkAppearance
+    )
   }
 
   private func applyFocusedTerminalSurface() {

@@ -5,10 +5,25 @@ import SwiftUI
 struct SettingsView: View {
   @EnvironmentObject private var model: AppModel
   @State private var shortcutRecorderState = ShortcutRecorderState(settings: .defaults)
-  @State private var containingWindow: NSWindow?
+  @State private var fontSearchText = ""
+  @State private var showsAllFonts = false
+  @State private var cjkFontSearchText = ""
+  @State private var showsAllCJKFonts = false
 
   var body: some View {
     let text = model.appText
+    let fontOptions = FontManager.fontOptions(
+      currentFamily: model.settings.fontFamily,
+      searchText: fontSearchText,
+      includeAllFonts: showsAllFonts
+    )
+    let selectedFontOption = FontManager.fontOption(for: model.settings.fontFamily)
+    let cjkFontOptions = FontManager.cjkFallbackOptions(
+      currentFamily: model.settings.cjkFallbackFontFamily,
+      searchText: cjkFontSearchText,
+      includeAllFonts: showsAllCJKFonts
+    )
+    let selectedCJKFontOption = model.settings.cjkFallbackFontFamily.map(FontManager.fontOption(for:))
 
     VStack(spacing: 0) {
       HStack(alignment: .firstTextBaseline) {
@@ -64,38 +79,6 @@ struct SettingsView: View {
               .labelsHidden()
             }
 
-            SettingsRow(text.font) {
-              VStack(alignment: .leading, spacing: 6) {
-                Picker("", selection: $model.settings.fontFamily) {
-                  ForEach(FontManager.monospacedFonts(), id: \.self) { font in
-                    Text(font).tag(font)
-                  }
-                }
-                .labelsHidden()
-                Text(text.installedMonospacedFontsHint)
-                  .font(.system(size: 11))
-                  .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
-              }
-            }
-
-            SettingsRow(text.fontSize) {
-              HStack(spacing: 10) {
-                Slider(value: $model.settings.fontSize, in: 10...28, step: 1)
-                Text("\(Int(model.settings.fontSize))")
-                  .font(.system(size: 12, weight: .medium, design: .monospaced))
-                  .frame(width: 28, alignment: .trailing)
-                  .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
-              }
-            }
-
-            FontPreview(
-              title: text.fontPreview,
-              sample: text.fontPreviewSample,
-              detail: text.fontPreviewDetail,
-              fontFamily: model.settings.fontFamily,
-              fontSize: model.settings.fontSize
-            )
-
             SettingsRow(text.theme) {
               VStack(alignment: .leading, spacing: 8) {
                 Toggle(text.followSystem, isOn: $model.settings.followSystemAppearance)
@@ -110,6 +93,125 @@ struct SettingsView: View {
               }
             }
 
+          }
+
+          SettingsSection(text.font) {
+            VStack(alignment: .leading, spacing: 10) {
+              HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                  Text(text.font)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
+
+                  HStack(alignment: .center, spacing: 8) {
+                    TextField(text.fontSearchPlaceholder, text: $fontSearchText)
+                      .textFieldStyle(.roundedBorder)
+                      .font(.system(size: 12))
+                      .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+
+                    Toggle(text.showAllFonts, isOn: $showsAllFonts)
+                      .toggleStyle(.checkbox)
+                      .font(.system(size: 11))
+                      .fixedSize()
+                  }
+
+                  Picker("", selection: $model.settings.fontFamily) {
+                    ForEach(fontOptions) { option in
+                      Text(fontOptionLabel(option, text: text)).tag(option.familyName)
+                    }
+                  }
+                  .labelsHidden()
+
+                  HStack(spacing: 10) {
+                    Slider(value: $model.settings.fontSize, in: 10...28, step: 1)
+                    Text("\(Int(model.settings.fontSize))")
+                      .font(.system(size: 12, weight: .medium, design: .monospaced))
+                      .frame(width: 28, alignment: .trailing)
+                      .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+                  }
+
+                  HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    TextField(text.customFontName, text: $model.settings.fontFamily)
+                      .textFieldStyle(.roundedBorder)
+                      .font(.system(size: 12, design: .monospaced))
+                      .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+
+                    if let status = fontStatusLabel(selectedFontOption, text: text) {
+                      Text(status)
+                        .font(.system(size: 11))
+                        .foregroundStyle(fontStatusColor(selectedFontOption))
+                        .lineLimit(1)
+                        .fixedSize()
+                    }
+                  }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                Rectangle()
+                  .fill(Color(nsColor: model.configurationSeparatorColor).opacity(0.5))
+                  .frame(width: 1)
+
+                VStack(alignment: .leading, spacing: 8) {
+                  Text(text.cjkFallbackFont)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
+
+                  HStack(alignment: .center, spacing: 8) {
+                    TextField(text.fontSearchPlaceholder, text: $cjkFontSearchText)
+                      .textFieldStyle(.roundedBorder)
+                      .font(.system(size: 12))
+                      .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+
+                    Toggle(text.showAllFonts, isOn: $showsAllCJKFonts)
+                      .toggleStyle(.checkbox)
+                      .font(.system(size: 11))
+                      .fixedSize()
+                  }
+
+                  Picker("", selection: cjkFallbackSelection) {
+                    Text(text.systemCJKFallback).tag("")
+                    ForEach(cjkFontOptions) { option in
+                      Text(cjkFontOptionLabel(option, text: text)).tag(option.familyName)
+                    }
+                  }
+                  .labelsHidden()
+
+                  HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    TextField(text.customCJKFallbackName, text: cjkFallbackSelection)
+                      .textFieldStyle(.roundedBorder)
+                      .font(.system(size: 12, design: .monospaced))
+                      .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+
+                    if let status = cjkFontStatusLabel(selectedCJKFontOption, text: text) {
+                      Text(status)
+                        .font(.system(size: 11))
+                        .foregroundStyle(cjkFontStatusColor(selectedCJKFontOption))
+                        .lineLimit(1)
+                        .fixedSize()
+                    }
+                  }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+              }
+
+              HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(text.installedMonospacedFontsHint)
+                Text(text.cjkFallbackHint)
+              }
+              .font(.system(size: 11))
+              .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
+              .lineLimit(2)
+              .fixedSize(horizontal: false, vertical: true)
+
+              FontPreview(
+                title: text.fontPreview,
+                sample: text.fontPreviewSample,
+                detail: text.fontPreviewDetail,
+                fontFamily: model.settings.fontFamily,
+                cjkFallbackFontFamily: model.settings.cjkFallbackFontFamily,
+                fontSize: model.settings.fontSize
+              )
+            }
           }
 
           SettingsSection(text.shortcuts) {
@@ -186,28 +288,12 @@ struct SettingsView: View {
       }
       .scrollContentBackground(.hidden)
 
-      Divider()
-        .opacity(0.5)
-
-      HStack(spacing: 10) {
-        Spacer()
-        Button(text.save) {
-          let window = containingWindow
-          model.saveSettings()
-          model.closeSettingsWindow(window)
-        }
-        .keyboardShortcut(.defaultAction)
-      }
-      .padding(.horizontal, 24)
-      .padding(.vertical, 14)
-      .background(Color(nsColor: model.configurationBarBackgroundColor).opacity(0.72))
     }
     .frame(minWidth: 560, minHeight: 460)
     .preferredColorScheme(model.configurationColorScheme)
     .environment(\.colorScheme, model.configurationColorScheme)
     .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
     .background(Color(nsColor: model.configurationWindowBackgroundColor))
-    .background(SettingsWindowAccessor(window: $containingWindow))
     .background(SettingsFocusResetHost())
     .background(ShortcutRecorderHost(
       isActive: shortcutRecorderState.recordingAction != nil,
@@ -221,6 +307,60 @@ struct SettingsView: View {
     .onAppear {
       shortcutRecorderState = ShortcutRecorderState(settings: model.settings.keyboardShortcuts)
     }
+  }
+
+  private func fontOptionLabel(_ option: TerminalFontOption, text: AppText) -> String {
+    if !option.isInstalled {
+      return "\(option.familyName) · \(text.fontMissingStatus)"
+    }
+    return option.familyName
+  }
+
+  private var cjkFallbackSelection: Binding<String> {
+    Binding(
+      get: { model.settings.cjkFallbackFontFamily ?? "" },
+      set: {
+        let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        model.settings.cjkFallbackFontFamily = trimmed.isEmpty ? nil : trimmed
+      }
+    )
+  }
+
+  private func cjkFontOptionLabel(_ option: TerminalFontOption, text: AppText) -> String {
+    if !option.isInstalled {
+      return "\(option.familyName) · \(text.fontMissingStatus)"
+    }
+    return option.familyName
+  }
+
+  private func cjkFontStatusLabel(_ option: TerminalFontOption?, text: AppText) -> String? {
+    guard let option else { return nil }
+    if !option.isInstalled {
+      return text.fontMissingStatus
+    }
+    return nil
+  }
+
+  private func cjkFontStatusColor(_ option: TerminalFontOption?) -> Color {
+    guard let option else { return Color(nsColor: model.configurationTertiaryTextColor) }
+    if !option.isInstalled {
+      return .orange
+    }
+    return Color(nsColor: model.configurationTertiaryTextColor)
+  }
+
+  private func fontStatusLabel(_ option: TerminalFontOption, text: AppText) -> String? {
+    if !option.isInstalled {
+      return text.fontMissingStatus
+    }
+    return option.isRecommendedForTerminal ? nil : text.fontInstalledStatus
+  }
+
+  private func fontStatusColor(_ option: TerminalFontOption) -> Color {
+    if !option.isInstalled {
+      return .orange
+    }
+    return Color(nsColor: model.configurationTertiaryTextColor)
   }
 
   private func chooseWorkingDirectory() {
@@ -317,37 +457,6 @@ private struct SettingsFocusResetHost: NSViewRepresentable {
         if let monitor {
           NSEvent.removeMonitor(monitor)
         }
-      }
-    }
-  }
-}
-
-private struct SettingsWindowAccessor: NSViewRepresentable {
-  @Binding var window: NSWindow?
-
-  func makeNSView(context: Context) -> AccessorView {
-    let view = AccessorView()
-    view.onWindowChange = { window = $0 }
-    return view
-  }
-
-  func updateNSView(_ view: AccessorView, context: Context) {
-    view.onWindowChange = { window = $0 }
-    view.publishWindow()
-  }
-
-  final class AccessorView: NSView {
-    var onWindowChange: ((NSWindow?) -> Void)?
-
-    override func viewDidMoveToWindow() {
-      super.viewDidMoveToWindow()
-      publishWindow()
-    }
-
-    func publishWindow() {
-      DispatchQueue.main.async { [weak self] in
-        guard let self else { return }
-        self.onWindowChange?(self.window)
       }
     }
   }
@@ -507,27 +616,28 @@ private struct FontPreview: View {
   let sample: String
   let detail: String
   let fontFamily: String
+  let cjkFallbackFontFamily: String?
   let fontSize: Double
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 5) {
       Text(title)
         .font(.system(size: 12, weight: .semibold))
         .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
 
-      VStack(alignment: .leading, spacing: 5) {
+      VStack(alignment: .leading, spacing: 3) {
         Text(sample)
           .font(.custom(fontFamily, fixedSize: fontSize))
           .lineLimit(1)
           .minimumScaleFactor(0.82)
         Text(detail)
-          .font(.custom(fontFamily, fixedSize: max(10, fontSize - 2)))
+          .font(.custom(cjkFallbackFontFamily ?? fontFamily, fixedSize: max(10, fontSize - 2)))
           .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
           .lineLimit(1)
           .minimumScaleFactor(0.82)
       }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 10)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 7)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(Color(nsColor: model.configurationTextBackgroundColor))
       .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))

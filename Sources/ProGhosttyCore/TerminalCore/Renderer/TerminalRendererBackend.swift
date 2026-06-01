@@ -431,7 +431,7 @@ public protocol TerminalRendererBackend: AnyObject {
   func setInputHandler(_ handler: ((Data) -> Void)?)
   func setActivationHandler(_ handler: (() -> Void)?)
   func applyPalette(_ palette: TerminalSurfacePalette)
-  func applyFont(family: String, size: CGFloat)
+  func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String?)
   func setFocused(_ isFocused: Bool)
   func render(frame: GhosttyTerminalFrame)
   func focus()

@@ -196,8 +196,8 @@ public final class GhosttyVTCellGridRendererBackend: TerminalLiveRendererBackend
     requestFullRedraw()
   }
 
-  public func applyFont(family: String, size: CGFloat) {
-    gridView.applyFont(family: family, size: size)
+  public func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String? = nil) {
+    gridView.applyFont(family: family, size: size, cjkFallbackFamily: cjkFallbackFamily)
     requestFullRedraw()
   }
 

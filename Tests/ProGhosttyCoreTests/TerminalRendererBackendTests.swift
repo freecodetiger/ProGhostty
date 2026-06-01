@@ -1496,6 +1496,27 @@ struct TerminalRendererBackendTests {
     #expect(atlas.entryCount == 1)
   }
 
+  @MainActor @Test func metalGlyphAtlasInvalidatesEntriesWhenCJKFallbackChanges() {
+    let atlas = MetalGlyphAtlas(fontFamily: "Menlo", fontSize: 14, backingScale: 2)
+    let first = atlas.entry(for: "界")
+
+    atlas.applyFont(family: "Menlo", size: 14, cjkFallbackFamily: "PingFang SC")
+    let second = atlas.entry(for: "界")
+
+    #expect(second.generation > first.generation)
+    #expect(atlas.entryCount == 1)
+  }
+
+  @MainActor @Test func metalGlyphAtlasCellSizeIgnoresCJKFallback() {
+    let atlas = MetalGlyphAtlas(fontFamily: "Menlo", fontSize: 14, backingScale: 2)
+    let before = atlas.renderCellSize
+
+    atlas.applyFont(family: "Menlo", size: 14, cjkFallbackFamily: "PingFang SC")
+    let after = atlas.renderCellSize
+
+    #expect(after == before)
+  }
+
   @MainActor @Test func metalGlyphAtlasInvalidatesEntriesWhenBackingScaleChanges() {
     let atlas = MetalGlyphAtlas(fontFamily: "Menlo", fontSize: 14, backingScale: 1)
     let first = atlas.entry(for: "A")

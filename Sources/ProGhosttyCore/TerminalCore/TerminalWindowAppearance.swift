@@ -9,7 +9,10 @@ public enum ProGhosttyWindowAppearance {
     backgroundColor: NSColor,
     usesDarkAppearance: Bool
   ) {
-    window.appearance = NSAppearance(named: usesDarkAppearance ? .darkAqua : .aqua)
+    let appearance = NSAppearance(named: usesDarkAppearance ? .darkAqua : .aqua)
+    window.appearance = appearance
+    window.contentView?.appearance = appearance
+    window.contentViewController?.view.appearance = appearance
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
     window.titlebarSeparatorStyle = .none
@@ -18,12 +21,56 @@ public enum ProGhosttyWindowAppearance {
     window.backgroundColor = backgroundColor
 
     let background = backgroundColor.cgColor
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
     paint(view: window.contentView, background: background)
-    paint(view: window.contentView?.superview, background: background)
+    paint(view: window.contentViewController?.view, background: background)
+    for titlebarHost in titlebarHosts(in: window) {
+      paint(view: titlebarHost, background: background)
 
-    for view in window.contentView?.superview?.descendants(matchingIdentifier: titlebarBackgroundIdentifier) ?? [] {
-      paint(view: view, background: background)
+      for view in titlebarHost.descendants(matchingIdentifier: titlebarBackgroundIdentifier) {
+        paint(view: view, background: background)
+      }
     }
+    CATransaction.commit()
+  }
+
+  public static func applyConfigurationChrome(
+    to window: NSWindow,
+    backgroundColor: NSColor,
+    usesDarkAppearance: Bool
+  ) {
+    let appearance = NSAppearance(named: usesDarkAppearance ? .darkAqua : .aqua)
+    window.appearance = appearance
+    window.contentView?.appearance = appearance
+    window.contentViewController?.view.appearance = appearance
+    window.titlebarAppearsTransparent = true
+    window.titlebarSeparatorStyle = .none
+    window.backgroundColor = backgroundColor
+
+    let background = backgroundColor.cgColor
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    paint(view: window.contentView, background: background)
+    paint(view: window.contentViewController?.view, background: background)
+    for titlebarHost in titlebarHosts(in: window) {
+      paint(view: titlebarHost, background: background)
+    }
+    CATransaction.commit()
+  }
+
+  private static func titlebarHosts(in window: NSWindow) -> [NSView] {
+    var hosts: [NSView] = []
+    func append(_ view: NSView?) {
+      guard let view, !hosts.contains(where: { $0 === view }) else { return }
+      hosts.append(view)
+    }
+
+    append(window.contentView?.superview)
+    append(window.standardWindowButton(.closeButton)?.superview)
+    append(window.standardWindowButton(.miniaturizeButton)?.superview)
+    append(window.standardWindowButton(.zoomButton)?.superview)
+    return hosts
   }
 
   private static func paint(view: NSView?, background: CGColor) {

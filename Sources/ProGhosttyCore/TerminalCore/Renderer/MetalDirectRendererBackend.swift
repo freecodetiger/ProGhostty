@@ -334,9 +334,9 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     requestFullRedraw()
   }
 
-  public func applyFont(family: String, size: CGFloat) {
-    directView.applyFont(family: family, size: size)
-    glyphAtlas.applyFont(family: family, size: size)
+  public func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String? = nil) {
+    directView.applyFont(family: family, size: size, cjkFallbackFamily: cjkFallbackFamily)
+    glyphAtlas.applyFont(family: family, size: size, cjkFallbackFamily: cjkFallbackFamily)
     engine?.resetTextureCache()
     lastGlyphBackingScale = 0
     requestFullRedraw()

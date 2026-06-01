@@ -122,7 +122,7 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
     }
   }
 
-  public func applyFont(family: String, size: CGFloat) {
+  public func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String? = nil) {
     fontFamily = family
     fontSize = size
     for state in sessions.values {

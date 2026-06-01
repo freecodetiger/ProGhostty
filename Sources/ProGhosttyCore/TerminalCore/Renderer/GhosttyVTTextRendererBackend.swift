@@ -7,6 +7,7 @@ public final class GhosttyVTTextRendererBackend: TerminalRendererBackend {
   let textView: PTYTextView
   private var palette: TerminalSurfacePalette
   private var fontFamily: String
+  private var cjkFallbackFamily: String?
   private var fontSize: CGFloat
   private var isFocused = true
   private var diagnosticsState = TerminalRendererDiagnostics(backend: .ghosttyVTTextFallback)
@@ -14,10 +15,12 @@ public final class GhosttyVTTextRendererBackend: TerminalRendererBackend {
   public init(
     palette: TerminalSurfacePalette = .dark,
     fontFamily: String = FontManager.defaultMonospacedFontName(),
+    cjkFallbackFamily: String? = nil,
     fontSize: CGFloat = 14
   ) {
     self.palette = palette
     self.fontFamily = fontFamily
+    self.cjkFallbackFamily = Self.normalizedFontFamily(cjkFallbackFamily)
     self.fontSize = fontSize
     textView = PTYTextView()
     textView.isEditable = false
@@ -76,8 +79,9 @@ public final class GhosttyVTTextRendererBackend: TerminalRendererBackend {
     diagnosticsState.redrawMode = .full
   }
 
-  public func applyFont(family: String, size: CGFloat) {
+  public func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String? = nil) {
     fontFamily = family
+    self.cjkFallbackFamily = Self.normalizedFontFamily(cjkFallbackFamily)
     fontSize = size
     textView.font = terminalFont(weight: .regular)
     textView.window?.invalidateCursorRects(for: textView)
@@ -92,6 +96,7 @@ public final class GhosttyVTTextRendererBackend: TerminalRendererBackend {
   public func render(frame: GhosttyTerminalFrame) {
     let attributed = TerminalAttributedRenderer(
       fontFamily: fontFamily,
+      cjkFallbackFamily: cjkFallbackFamily,
       fontSize: fontSize,
       palette: palette,
       isFocused: isFocused
@@ -209,6 +214,11 @@ public final class GhosttyVTTextRendererBackend: TerminalRendererBackend {
       return named
     }
     return NSFont.monospacedSystemFont(ofSize: fontSize, weight: weight)
+  }
+
+  private static func normalizedFontFamily(_ family: String?) -> String? {
+    let trimmed = family?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
   }
 }
 

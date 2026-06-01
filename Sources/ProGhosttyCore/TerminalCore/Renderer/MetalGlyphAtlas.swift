@@ -53,6 +53,7 @@ public final class MetalGlyphAtlas {
   private struct GlyphKey: Hashable {
     var scalar: String
     var fontFamily: String
+    var cjkFallbackFamily: String?
     var fontSize: CGFloat
     var backingScale: CGFloat
     var style: MetalGlyphStyle
@@ -67,6 +68,7 @@ public final class MetalGlyphAtlas {
   }
 
   private var fontFamily: String
+  private var cjkFallbackFamily: String?
   private var fontSize: CGFloat
   private var backingScale: CGFloat
   private var entries: [GlyphKey: MetalGlyphAtlasEntry] = [:]
@@ -74,8 +76,9 @@ public final class MetalGlyphAtlas {
   private var nextID = 0
   private var generation = 0
 
-  public init(fontFamily: String, fontSize: CGFloat, backingScale: CGFloat) {
+  public init(fontFamily: String, fontSize: CGFloat, backingScale: CGFloat, cjkFallbackFamily: String? = nil) {
     self.fontFamily = fontFamily
+    self.cjkFallbackFamily = Self.normalizedFontFamily(cjkFallbackFamily)
     self.fontSize = fontSize
     self.backingScale = backingScale
   }
@@ -84,9 +87,11 @@ public final class MetalGlyphAtlas {
     entries.count
   }
 
-  public func applyFont(family: String, size: CGFloat) {
-    guard fontFamily != family || fontSize != size else { return }
+  public func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String? = nil) {
+    let normalizedCJKFallback = Self.normalizedFontFamily(cjkFallbackFamily)
+    guard fontFamily != family || fontSize != size || self.cjkFallbackFamily != normalizedCJKFallback else { return }
     fontFamily = family
+    self.cjkFallbackFamily = normalizedCJKFallback
     fontSize = size
     invalidate()
   }
@@ -101,6 +106,7 @@ public final class MetalGlyphAtlas {
     let key = GlyphKey(
       scalar: scalar,
       fontFamily: fontFamily,
+      cjkFallbackFamily: cjkFallbackFamily,
       fontSize: fontSize,
       backingScale: backingScale,
       style: style
@@ -129,6 +135,7 @@ public final class MetalGlyphAtlas {
     let key = GlyphKey(
       scalar: scalar,
       fontFamily: fontFamily,
+      cjkFallbackFamily: cjkFallbackFamily,
       fontSize: fontSize,
       backingScale: backingScale,
       style: style
@@ -140,6 +147,7 @@ public final class MetalGlyphAtlas {
     let key = GlyphKey(
       scalar: scalar,
       fontFamily: fontFamily,
+      cjkFallbackFamily: cjkFallbackFamily,
       fontSize: fontSize,
       backingScale: backingScale,
       style: style
@@ -154,6 +162,7 @@ public final class MetalGlyphAtlas {
     let glyph = Self.renderedGlyph(
       for: key.scalar,
       fontFamily: key.fontFamily,
+      cjkFallbackFamily: key.cjkFallbackFamily,
       fontSize: key.fontSize,
       backingScale: key.backingScale,
       style: key.style
@@ -204,13 +213,21 @@ public final class MetalGlyphAtlas {
   private static func renderedGlyph(
     for scalar: String,
     fontFamily: String,
+    cjkFallbackFamily: String?,
     fontSize: CGFloat,
     backingScale: CGFloat,
     style: MetalGlyphStyle
   ) -> RenderedGlyph? {
+    let renderFontFamily = glyphFontFamily(
+      for: scalar,
+      primaryFamily: fontFamily,
+      cjkFallbackFamily: cjkFallbackFamily,
+      fontSize: fontSize
+    )
     if let glyph = coreTextRenderedGlyph(
       for: scalar,
       fontFamily: fontFamily,
+      renderFontFamily: renderFontFamily,
       fontSize: fontSize,
       backingScale: backingScale,
       style: style
@@ -220,6 +237,7 @@ public final class MetalGlyphAtlas {
     return fallbackRenderedGlyph(
       for: scalar,
       fontFamily: fontFamily,
+      renderFontFamily: renderFontFamily,
       fontSize: fontSize,
       backingScale: backingScale,
       style: style
@@ -229,6 +247,7 @@ public final class MetalGlyphAtlas {
   private static func coreTextRenderedGlyph(
     for scalar: String,
     fontFamily: String,
+    renderFontFamily: String,
     fontSize: CGFloat,
     backingScale: CGFloat,
     style: MetalGlyphStyle
@@ -237,8 +256,8 @@ public final class MetalGlyphAtlas {
     guard nsString.length == 1 || nsString.length == 2 else { return nil }
 
     let scale = max(1, backingScale)
-    let pointFont = font(family: fontFamily, size: fontSize, bold: style.bold)
-    let pixelFont = font(family: fontFamily, size: fontSize * scale, bold: style.bold)
+    let pointFont = font(family: renderFontFamily, size: fontSize, bold: style.bold)
+    let pixelFont = font(family: renderFontFamily, size: fontSize * scale, bold: style.bold)
     let baseCTFont = CTFontCreateWithName(pixelFont.fontName as CFString, fontSize * scale, nil)
     let ctFont = CTFontCreateForString(
       baseCTFont,
@@ -352,11 +371,12 @@ public final class MetalGlyphAtlas {
   private static func fallbackRenderedGlyph(
     for scalar: String,
     fontFamily: String,
+    renderFontFamily: String,
     fontSize: CGFloat,
     backingScale: CGFloat,
     style: MetalGlyphStyle
   ) -> RenderedGlyph? {
-    let font = font(family: fontFamily, size: fontSize, bold: style.bold)
+    let font = font(family: renderFontFamily, size: fontSize, bold: style.bold)
     let logicalSize = logicalCellSize(fontFamily: fontFamily, fontSize: fontSize)
     let pixelSize = pixelSize(for: logicalSize, backingScale: backingScale)
     let width = max(1, Int(pixelSize.width))
@@ -458,5 +478,28 @@ public final class MetalGlyphAtlas {
       return named
     }
     return NSFont.monospacedSystemFont(ofSize: size, weight: bold ? .semibold : .regular)
+  }
+
+  private static func glyphFontFamily(
+    for scalar: String,
+    primaryFamily: String,
+    cjkFallbackFamily: String?,
+    fontSize: CGFloat
+  ) -> String {
+    guard
+      FontManager.containsCJK(scalar),
+      let cjkFallbackFamily,
+      NSFont(name: cjkFallbackFamily, size: fontSize) != nil
+    else {
+      return primaryFamily
+    }
+    return cjkFallbackFamily
+  }
+
+  private static func normalizedFontFamily(_ family: String?) -> String? {
+    guard let trimmed = family?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+      return nil
+    }
+    return trimmed
   }
 }

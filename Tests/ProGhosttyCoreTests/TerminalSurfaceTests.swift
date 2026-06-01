@@ -55,6 +55,20 @@ struct TerminalSurfaceTests {
     #expect(textView.focusRingType == .none)
   }
 
+  @MainActor @Test func ptySurfaceAppliesCurrentPaletteToNewLiveRenderer() {
+    let renderer = PaletteRecordingLiveRendererBackend()
+    let registry = PTYTerminalSurfaceRegistry(
+      isMetalDirectAvailable: true,
+      makeDirectRenderer: { _ in renderer }
+    )
+    let session = TerminalSessionID()
+    registry.applyPalette(.light)
+
+    registry.createSurface(session: session)
+
+    #expect(renderer.appliedPalettes == [.light])
+  }
+
   @MainActor @Test func ptySurfaceAllowsVisibleNativeTextSelection() throws {
     let registry = PTYTerminalSurfaceRegistry()
     let session = TerminalSessionID()
@@ -1023,6 +1037,64 @@ struct TerminalSurfaceTests {
     try await Task.sleep(nanoseconds: 20_000_000)
 
     #expect(deliveredCursorPositions == [GridCoordinate(row: 1, col: 3)])
+  }
+
+  @MainActor @Test func terminalOutputCoordinatorDeliversInteractiveOutputImmediately() async throws {
+    let session = TerminalSessionID()
+    let bridge = try GhosttyVTBridge(cols: 12, rows: 2, maxScrollback: 100)
+    var deliveredCursorPositions: [GridCoordinate] = []
+    let coordinator = TerminalOutputCoordinator(coalescingDelayNanoseconds: 50_000_000) { snapshot, _, _, _ in
+      if let frame = snapshot.frame {
+        deliveredCursorPositions.append(GridCoordinate(row: frame.cursorY, col: frame.cursorX))
+      }
+    }
+
+    bridge.write(Data("one".utf8))
+    let firstSnapshot = ResizeRenderSnapshot.capture(from: bridge)
+    bridge.write(Data("x".utf8))
+    let interactiveSnapshot = ResizeRenderSnapshot.capture(from: bridge)
+
+    coordinator.scheduleRender(
+      snapshot: firstSnapshot,
+      bridge: bridge,
+      session: session,
+      wasPinnedToBottom: true
+    )
+    coordinator.scheduleRender(
+      snapshot: interactiveSnapshot,
+      bridge: bridge,
+      session: session,
+      wasPinnedToBottom: true,
+      delivery: .immediate
+    )
+
+    #expect(deliveredCursorPositions == [GridCoordinate(row: 0, col: 4)])
+
+    try await Task.sleep(nanoseconds: 70_000_000)
+
+    #expect(deliveredCursorPositions == [GridCoordinate(row: 0, col: 4)])
+  }
+
+  @Test func ptySessionManagerTreatsRecentSmallOutputAsInteractiveEcho() {
+    #expect(PTYTerminalSessionManager.isInteractiveEchoOutput(
+      Data("a".utf8),
+      secondsSinceLastInput: 0.01
+    ))
+    #expect(PTYTerminalSessionManager.isInteractiveEchoOutput(
+      Data("中文".utf8),
+      secondsSinceLastInput: 0.01
+    ))
+  }
+
+  @Test func ptySessionManagerDoesNotTreatStaleOrLargeOutputAsInteractiveEcho() {
+    #expect(!PTYTerminalSessionManager.isInteractiveEchoOutput(
+      Data("a".utf8),
+      secondsSinceLastInput: 0.20
+    ))
+    #expect(!PTYTerminalSessionManager.isInteractiveEchoOutput(
+      Data(repeating: 65, count: 128),
+      secondsSinceLastInput: 0.01
+    ))
   }
 
   @Test func scrollAnchorPreservesCursorScreenPositionWhenLiveDocumentHeightChanges() {
@@ -2461,6 +2533,38 @@ private final class DummyTextInputClient: NSObject, NSTextInputClient {
 }
 
 @MainActor
+private final class PaletteRecordingLiveRendererBackend: TerminalLiveRendererBackend {
+  let gridView = PTYGridView()
+  var appliedPalettes: [TerminalSurfacePalette] = []
+  private let diagnosticsState = TerminalRendererDiagnostics(
+    backend: .metalDirect,
+    requestedBackend: .metalDirect,
+    metalDirectPipelineReady: true
+  )
+
+  var view: NSView { gridView }
+  var diagnostics: TerminalRendererDiagnostics { diagnosticsState }
+  var selectedText: String? { nil }
+
+  func setInputHandler(_ handler: ((Data) -> Void)?) {}
+  func setActivationHandler(_ handler: (() -> Void)?) {}
+  func applyPalette(_ palette: TerminalSurfacePalette) { appliedPalettes.append(palette) }
+  func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String?) {}
+  func setFocused(_ isFocused: Bool) {}
+  func render(frame: GhosttyTerminalFrame) {}
+  func focus() {}
+
+  func applyOptions(_ options: TerminalRendererOptions) {}
+  func render(_ renderFrame: TerminalRenderFrame) {}
+  func flushPendingFrame() {}
+  func updateOverscanDiagnostics(topRows: Int, bottomRows: Int) {}
+  func markResizePending() {}
+  func applyResizeDiagnostics(_ diagnostics: TerminalResizeDiagnostics) {}
+  func resetViewportStartRowKeepingVisualOffset() {}
+  func resetPixelScroll(suppressMomentum: Bool) {}
+}
+
+@MainActor
 private final class PipelineFailingDirectRendererBackend: TerminalLiveRendererBackend {
   let gridView = PTYGridView()
   private let diagnosticsState = TerminalRendererDiagnostics(
@@ -2512,7 +2616,7 @@ private final class PipelineFailingDirectRendererBackend: TerminalLiveRendererBa
   func setInputHandler(_ handler: ((Data) -> Void)?) {}
   func setActivationHandler(_ handler: (() -> Void)?) {}
   func applyPalette(_ palette: TerminalSurfacePalette) {}
-  func applyFont(family: String, size: CGFloat) {}
+  func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String?) {}
   func setFocused(_ isFocused: Bool) {}
   func render(frame: GhosttyTerminalFrame) {}
   func focus() {}

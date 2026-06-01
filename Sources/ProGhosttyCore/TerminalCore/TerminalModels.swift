@@ -68,7 +68,7 @@ public enum TerminalEvent: Sendable {
   func selectedText(for id: TerminalSessionID) -> String?
   func rendererDiagnostics(for id: TerminalSessionID) -> TerminalRendererDiagnostics?
   func applyPalette(_ palette: TerminalSurfacePalette)
-  func applyFont(family: String, size: CGFloat)
+  func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String?)
   func applyRendererOptions(_ options: TerminalRendererOptions)
   func setFocusedSession(_ id: TerminalSessionID?)
   func focusSessionView(_ id: TerminalSessionID?)

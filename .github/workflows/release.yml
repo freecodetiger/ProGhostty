@@ -56,7 +56,7 @@ jobs:
             ProGhostty ${{ github.ref_name }} 正式版。
 
             更新内容：
-            - 新增 MetalDirect 渲染路径，提升终端刷新和滚动稳定性。
-            - 修复中文输入法候选位置、组合输入光标隐藏和空 marked text 后光标丢失问题。
-            - 修复 CJK 宽字符绘制、删除残留和局部刷新边界问题。
-            - 改进 Claude Code / Codex 等 TUI 场景下的输入体验。
+            - 优化字体设置，支持自定义主字体和中文 fallback 字体。
+            - 改进终端输入刷新，降低快速输入时的粘滞感。
+            - 修复主题切换、启动和设置窗口打开后的 title bar / 背景同步问题。
+            - 继续改善 Claude Code / Codex 等 TUI 场景下的中文输入体验。

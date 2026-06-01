@@ -39,7 +39,28 @@ struct AppText {
   var english: String { text("English", "英文") }
   var simplifiedChinese: String { text("Simplified Chinese", "简体中文") }
   var font: String { text("Font", "字体") }
-  var installedMonospacedFontsHint: String { text("Installed monospaced fonts appear here.", "已安装的等宽字体会显示在这里。") }
+  var fontSearchPlaceholder: String { text("Search installed fonts", "搜索已安装字体") }
+  var showAllFonts: String { text("Show all installed fonts", "显示全部已安装字体") }
+  var customFontName: String { text("Exact font name", "精确字体名称") }
+  var cjkFallbackFont: String { text("CJK fallback", "中文回退字体") }
+  var systemCJKFallback: String { text("System fallback", "系统回退") }
+  var customCJKFallbackName: String { text("Exact CJK fallback name", "精确中文回退字体名称") }
+  var cjkFallbackSystemStatus: String { text("Using system fallback for CJK glyphs", "使用系统中文回退字体") }
+  var cjkFallbackHint: String {
+    text(
+      "CJK fallback only affects Chinese/Japanese/Korean glyphs. Cell size still follows the primary font.",
+      "中文回退只影响中日韩字符；终端格子的宽高仍由主字体决定。"
+    )
+  }
+  var installedMonospacedFontsHint: String {
+    text(
+      "Filtered to terminal-friendly fonts by default. Show all fonts or type an exact name for more control.",
+      "默认筛选适合终端的字体。也可以显示全部字体，或输入精确字体名称。"
+    )
+  }
+  var fontAvailableStatus: String { text("Installed", "已安装") }
+  var fontInstalledStatus: String { text("Installed, but may not be monospaced", "已安装，但可能不是等宽字体") }
+  var fontMissingStatus: String { text("Not installed; system fallback will be used", "未安装；会使用系统回退字体") }
   var fontSize: String { text("Font size", "字号") }
   var followSystem: String { text("Follow system appearance", "跟随系统外观") }
   var theme: String { text("Theme", "主题") }
@@ -137,8 +158,6 @@ struct AppText {
     )
   }
   var pluginReloadCommandCopied: String { text("Copied", "已复制") }
-  var save: String { text("Save", "保存") }
-  var saved: String { text("Saved.", "已保存。") }
   var defaultsRestored: String { text("Defaults restored.", "已恢复默认设置。") }
   var newWorkspace: String { text("New Workspace", "新建工作区") }
   var newWorkspaceName: String { text("Workspace name", "工作区名称") }
@@ -174,8 +193,8 @@ struct AppText {
   }
   var fontPreviewDetail: String {
     text(
-      "The quick brown fox jumps over 0123456789",
-      "字体预览会随着字体和字号实时变化 0123456789"
+      "ABC abc 0123456789 中文 │  λ 😀",
+      "ABC abc 0123456789 中文 │  λ 😀"
     )
   }
 

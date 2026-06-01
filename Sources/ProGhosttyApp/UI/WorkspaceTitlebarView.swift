@@ -71,6 +71,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     private var subtitleConstraints: [NSLayoutConstraint] = []
     private var titlebarControlsConstraints: [NSLayoutConstraint] = []
     private let notificationObservers = NotificationObserverBag()
+    private var appearanceGeneration = 0
 
     init(onWorkspaceSwitcher: @escaping () -> Void, onToastClick: @escaping () -> Void) {
       self.onWorkspaceSwitcher = onWorkspaceSwitcher
@@ -138,6 +139,12 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     }
 
     func updateWindowAppearance(_ window: NSWindow) {
+      appearanceGeneration += 1
+      applyWindowAppearanceNow(window)
+      scheduleTitlebarStabilization(for: window, generation: appearanceGeneration)
+    }
+
+    private func applyWindowAppearanceNow(_ window: NSWindow) {
       ProGhosttyWindowAppearance.applyTerminalChrome(
         to: window,
         backgroundColor: backgroundColor,
@@ -154,20 +161,26 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       installTitlebarControls(in: window)
       harmonizeTitlebarMaterials(in: window)
       keepTitlebarViewsOrdered(in: window)
+    }
+
+    private func scheduleTitlebarStabilization(for window: NSWindow, generation: Int) {
       DispatchQueue.main.async { [weak self, weak window] in
         guard let self, let window else { return }
-        ProGhosttyWindowAppearance.applyTerminalChrome(
-          to: window,
-          backgroundColor: self.backgroundColor,
-          usesDarkAppearance: self.usesDarkAppearance
-        )
-        self.installTitlebarBackground(in: window)
-        self.installTitlebarControls(in: window)
-        self.harmonizeTitlebarMaterials(in: window)
-        self.keepTitlebarViewsOrdered(in: window)
-        self.updateSubtitle()
-        self.updateToast()
+        self.applyDeferredWindowAppearance(window, generation: generation)
       }
+      for delay in [0.05, 0.20] {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self, weak window] in
+          guard let self, let window else { return }
+          self.applyDeferredWindowAppearance(window, generation: generation)
+        }
+      }
+    }
+
+    private func applyDeferredWindowAppearance(_ window: NSWindow, generation: Int) {
+      guard generation == appearanceGeneration else { return }
+      applyWindowAppearanceNow(window)
+      updateSubtitle()
+      updateToast()
     }
 
     private func updateSubtitle() {

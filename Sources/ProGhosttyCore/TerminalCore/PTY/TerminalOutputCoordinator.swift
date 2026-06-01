@@ -2,6 +2,11 @@ import Foundation
 
 @MainActor
 public final class TerminalOutputCoordinator {
+  public enum Delivery: Sendable {
+    case coalesced
+    case immediate
+  }
+
   public typealias RenderOutputHandler = @MainActor (
     ResizeRenderSnapshot,
     GhosttyVTBridge,
@@ -32,8 +37,17 @@ public final class TerminalOutputCoordinator {
     snapshot: ResizeRenderSnapshot,
     bridge: GhosttyVTBridge,
     session id: TerminalSessionID,
-    wasPinnedToBottom: Bool
+    wasPinnedToBottom: Bool,
+    delivery: Delivery = .coalesced
   ) {
+    if delivery == .immediate {
+      outputRenderTasks[id]?.cancel()
+      outputRenderTasks[id] = nil
+      pendingOutputRenders[id] = nil
+      renderOutputHandler(snapshot, bridge, id, wasPinnedToBottom)
+      return
+    }
+
     pendingOutputRenders[id] = PendingOutputRender(
       snapshot: snapshot,
       bridge: bridge,

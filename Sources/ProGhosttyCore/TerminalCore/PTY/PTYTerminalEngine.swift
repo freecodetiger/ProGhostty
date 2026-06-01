@@ -249,8 +249,8 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
     surfaceRegistry.applyPalette(palette)
   }
 
-  public func applyFont(family: String, size: CGFloat) {
-    surfaceRegistry.applyFont(family: family, size: size)
+  public func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String? = nil) {
+    surfaceRegistry.applyFont(family: family, size: size, cjkFallbackFamily: cjkFallbackFamily)
   }
 
   public func applyRendererOptions(_ options: TerminalRendererOptions) {
@@ -313,12 +313,16 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   private let surfaceRegistry: PTYTerminalSurfaceRegistry
   private var sessions: [TerminalSessionID: SessionState] = [:]
+  private var lastInputUptimeBySession: [TerminalSessionID: TimeInterval] = [:]
   private var reapTimers: [pid_t: DispatchSourceTimer] = [:]
   private let continuation: AsyncStream<TerminalEvent>.Continuation
   public let events: AsyncStream<TerminalEvent>
   private lazy var resizeScheduler: TerminalResizeScheduler<PendingResizeJob> = TerminalResizeScheduler { [weak self] session, job in
     self?.performScheduledResize(session: session, job: job)
   }
+  private nonisolated static let interactiveInputByteLimit = 16
+  private nonisolated static let interactiveEchoOutputByteLimit = 64
+  private nonisolated static let interactiveEchoWindowSeconds: TimeInterval = 0.075
 
   public init(surfaceRegistry: PTYTerminalSurfaceRegistry) {
     self.surfaceRegistry = surfaceRegistry
@@ -363,6 +367,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   public func closeSession(_ id: TerminalSessionID) {
     guard let state = sessions.removeValue(forKey: id) else { return }
+    lastInputUptimeBySession[id] = nil
     state.readSource.cancel()
     state.waitTimer.cancel()
     resizeScheduler.cancel(session: id)
@@ -401,6 +406,9 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   public func writeInput(_ data: Data, to id: TerminalSessionID) {
     guard let state = sessions[id] else { return }
+    if data.count <= Self.interactiveInputByteLimit {
+      lastInputUptimeBySession[id] = ProcessInfo.processInfo.systemUptime
+    }
     let bridge = state.vtBridge
     let vtQueue = state.vtQueue
     let generation = state.resizeGeneration
@@ -594,6 +602,13 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   private func handleOutput(_ data: Data, session id: TerminalSessionID) {
     guard var state = sessions[id] else { return }
+    let secondsSinceLastInput = lastInputUptimeBySession[id].map {
+      ProcessInfo.processInfo.systemUptime - $0
+    }
+    let delivery: TerminalOutputCoordinator.Delivery = Self.isInteractiveEchoOutput(
+      data,
+      secondsSinceLastInput: secondsSinceLastInput
+    ) ? .immediate : .coalesced
     let sequences = state.oscParser.parse(data)
     let bridge = state.vtBridge
     let vtQueue = state.vtQueue
@@ -629,10 +644,21 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
           snapshot,
           bridge: bridge,
           session: id,
-          wasPinnedToBottom: wasPinnedToBottom
+          wasPinnedToBottom: wasPinnedToBottom,
+          delivery: delivery
         )
       }
     }
+  }
+
+  public nonisolated static func isInteractiveEchoOutput(
+    _ data: Data,
+    secondsSinceLastInput: TimeInterval?
+  ) -> Bool {
+    guard let secondsSinceLastInput else { return false }
+    return secondsSinceLastInput <= interactiveEchoWindowSeconds
+      && !data.isEmpty
+      && data.count <= interactiveEchoOutputByteLimit
   }
 
   private func finishResize(
@@ -816,9 +842,12 @@ public class PTYGridView: NSView {
   private var scrollFrameSnapshot: GhosttyTerminalScrollFrame?
   private var palette = TerminalSurfacePalette.dark
   private var fontFamily = FontManager.defaultMonospacedFontName()
+  private var cjkFallbackFamily: String?
   private var fontSize: CGFloat = 14
   private var font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
   private var boldFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .semibold)
+  private var cjkFont: NSFont?
+  private var cjkBoldFont: NSFont?
   private var cellSize = CGSize(width: 8, height: 16)
   private var isFocusedTerminalStorage = true
   private var rendererOptions = TerminalRendererOptions()
@@ -939,11 +968,14 @@ public class PTYGridView: NSView {
     needsDisplay = true
   }
 
-  public func applyFont(family: String, size: CGFloat) {
+  public func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String? = nil) {
     fontFamily = family
+    self.cjkFallbackFamily = Self.normalizedFontFamily(cjkFallbackFamily)
     fontSize = size
     font = Self.font(family: family, size: size, weight: .regular)
     boldFont = Self.font(family: family, size: size, weight: .semibold)
+    cjkFont = self.cjkFallbackFamily.flatMap { Self.installedFont(family: $0, size: size, weight: .regular) }
+    cjkBoldFont = self.cjkFallbackFamily.flatMap { Self.installedFont(family: $0, size: size, weight: .semibold) }
     cellSize = Self.cellSize(for: font)
     currentInputPresentation = nil
     needsDisplay = true
@@ -1719,7 +1751,6 @@ public class PTYGridView: NSView {
       colors.background.setFill()
       rect.fill()
     }
-    let attributes = textAttributes(for: run.style, foreground: colors.foreground)
     for (offset, scalar) in run.text.unicodeScalars.enumerated() {
       guard offset < run.range.count else { break }
       guard scalar != " " else { continue }
@@ -1729,7 +1760,7 @@ public class PTYGridView: NSView {
         cellSize: cellSize,
         inset: contentInset
       )
-      drawText(String(scalar), in: glyphRect, attributes: attributes)
+      drawText(String(scalar), in: glyphRect, attributes: textAttributes(for: run.style, scalar: scalar, foreground: colors.foreground))
     }
   }
 
@@ -1758,7 +1789,7 @@ public class PTYGridView: NSView {
       rect.fill()
     }
     guard cell.scalar != " " else { return }
-    drawText(String(cell.scalar), in: rect, attributes: textAttributes(for: cell, foreground: colors.foreground))
+    drawText(String(cell.scalar), in: rect, attributes: textAttributes(for: cell, scalar: cell.scalar, foreground: colors.foreground))
   }
 
   private func drawMarkedText(_ frame: GhosttyTerminalFrame, rowOffset: Int = 0, dirtyRect: NSRect) {
@@ -1794,7 +1825,7 @@ public class PTYGridView: NSView {
 
   private func markedTextAttributes() -> [NSAttributedString.Key: Any] {
     [
-      .font: font,
+      .font: font(forCJKText: markedText.string, bold: false),
       .foregroundColor: palette.foreground.withAlphaComponent(isFocusedTerminalStorage ? 0.92 : 0.62),
       .underlineStyle: NSUnderlineStyle.single.rawValue,
     ]
@@ -1990,14 +2021,22 @@ public class PTYGridView: NSView {
 
   private func textAttributes(
     for cell: GhosttyTerminalFrame.Cell,
+    scalar: UnicodeScalar,
     foreground: NSColor
   ) -> [NSAttributedString.Key: Any] {
     [
-      .font: cell.bold ? boldFont : font,
+      .font: font(forCJKText: String(scalar), bold: cell.bold),
       .foregroundColor: foreground,
       .underlineStyle: cell.underline ? NSUnderlineStyle.single.rawValue : 0,
       .obliqueness: cell.italic ? 0.18 : 0,
     ]
+  }
+
+  private func font(forCJKText text: String, bold: Bool) -> NSFont {
+    guard FontManager.containsCJK(text) else {
+      return bold ? boldFont : font
+    }
+    return (bold ? cjkBoldFont : cjkFont) ?? (bold ? boldFont : font)
   }
 
   private func rectForCell(row: Int, col: Int) -> NSRect {
@@ -2302,6 +2341,19 @@ public class PTYGridView: NSView {
       return named
     }
     return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+  }
+
+  private static func installedFont(family: String, size: CGFloat, weight: NSFont.Weight) -> NSFont? {
+    guard let named = NSFont(name: family, size: size) else { return nil }
+    if weight == .semibold {
+      return NSFontManager.shared.convert(named, toHaveTrait: .boldFontMask)
+    }
+    return named
+  }
+
+  private static func normalizedFontFamily(_ family: String?) -> String? {
+    let trimmed = family?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
   }
 
   private static func renderedText(from frame: GhosttyTerminalFrame) -> String {

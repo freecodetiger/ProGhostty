@@ -893,7 +893,7 @@ final class TerminalPaneViewController: NSViewController {
   }
 
   func setSelected(_ isSelected: Bool) {
-    applyAppearance(isSelected: isSelected, palette: .dark, dimsWhenInactive: false)
+    applyAppearance(isSelected: isSelected, palette: currentPalette, dimsWhenInactive: false)
   }
 
   func applyAppearance(

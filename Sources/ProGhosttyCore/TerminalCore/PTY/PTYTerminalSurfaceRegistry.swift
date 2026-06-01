@@ -35,6 +35,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   }
   private var palette = TerminalSurfacePalette.dark
   private var fontFamily = FontManager.defaultMonospacedFontName()
+  private var cjkFallbackFamily: String?
   private var fontSize: CGFloat = 14
   private var focusedSessionID: TerminalSessionID?
   private var pendingFocusSessionID: TerminalSessionID?
@@ -62,6 +63,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     let textBackend = GhosttyVTTextRendererBackend(
       palette: palette,
       fontFamily: fontFamily,
+      cjkFallbackFamily: cjkFallbackFamily,
       fontSize: fontSize
     )
     textBackend.setInputHandler { [weak self] data in
@@ -79,6 +81,8 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     let scrollView = textBackend.scrollView
 
     let liveRenderer = makeLiveRenderer()
+    liveRenderer.applyPalette(palette)
+    liveRenderer.applyFont(family: fontFamily, size: fontSize, cjkFallbackFamily: cjkFallbackFamily)
     let gridView = liveRenderer.gridView
     configureLiveGridView(gridView, session: id)
 
@@ -143,7 +147,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     }
     gridView.pasteboard = .general
     gridView.applyPalette(palette)
-    gridView.applyFont(family: fontFamily, size: fontSize)
+    gridView.applyFont(family: fontFamily, size: fontSize, cjkFallbackFamily: cjkFallbackFamily)
     gridView.applyRendererOptions(rendererOptions)
   }
 
@@ -221,14 +225,15 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     }
   }
 
-  public func applyFont(family: String, size: CGFloat) {
+  public func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String? = nil) {
     fontFamily = family
+    self.cjkFallbackFamily = normalizedFontFamily(cjkFallbackFamily)
     fontSize = size
     for (sessionID, surface) in surfaces {
       surface.textView.font = terminalFont(weight: .regular)
-      surface.gridView.applyFont(family: family, size: size)
-      surface.liveRenderer.applyFont(family: family, size: size)
-      surface.textBackend.applyFont(family: family, size: size)
+      surface.gridView.applyFont(family: family, size: size, cjkFallbackFamily: self.cjkFallbackFamily)
+      surface.liveRenderer.applyFont(family: family, size: size, cjkFallbackFamily: self.cjkFallbackFamily)
+      surface.textBackend.applyFont(family: family, size: size, cjkFallbackFamily: self.cjkFallbackFamily)
       if let html = surface.lastHTMLSnapshot,
         let attributed = try? attributedTerminalSnapshot(
           fromHTML: html,
@@ -358,14 +363,16 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     _ snapshot: ResizeRenderSnapshot,
     bridge: GhosttyVTBridge,
     session id: TerminalSessionID,
-    wasPinnedToBottom: Bool
+    wasPinnedToBottom: Bool,
+    delivery: TerminalOutputCoordinator.Delivery = .coalesced
   ) {
     guard surfaces[id] != nil else { return }
     outputCoordinator.scheduleRender(
       snapshot: snapshot,
       bridge: bridge,
       session: id,
-      wasPinnedToBottom: wasPinnedToBottom
+      wasPinnedToBottom: wasPinnedToBottom,
+      delivery: delivery
     )
   }
 
@@ -703,6 +710,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   ) {
     let attributed = TerminalAttributedRenderer(
       fontFamily: fontFamily,
+      cjkFallbackFamily: cjkFallbackFamily,
       fontSize: fontSize,
       palette: palette,
       isFocused: isFocused
@@ -911,6 +919,13 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       return named
     }
     return NSFont.monospacedSystemFont(ofSize: fontSize, weight: weight)
+  }
+
+  private func normalizedFontFamily(_ family: String?) -> String? {
+    guard let trimmed = family?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+      return nil
+    }
+    return trimmed
   }
 
   private static func hexString(for color: NSColor) -> String {
