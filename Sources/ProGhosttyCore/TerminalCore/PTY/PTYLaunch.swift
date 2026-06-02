@@ -86,6 +86,7 @@ public enum PTYLaunch {
     environment["CLICOLOR"] = environment["CLICOLOR"] ?? "1"
     environment["PROGHOSTTY"] = "1"
     environment["PROMPT_EOL_MARK"] = environment["PROMPT_EOL_MARK"] ?? ""
+    normalizeLocale(&environment, explicitKeys: Set(overrides.keys))
     if let ghosttyResourcesDirectory {
       environment["GHOSTTY_RESOURCES_DIR"] = environment["GHOSTTY_RESOURCES_DIR"] ?? ghosttyResourcesDirectory
       environment["GHOSTTY_SHELL_FEATURES"] = environment["GHOSTTY_SHELL_FEATURES"] ?? "cursor:blink,path,title"
@@ -103,6 +104,31 @@ public enum PTYLaunch {
       environment[key] = value
     }
     return environment.map { "\($0.key)=\($0.value)" }.sorted()
+  }
+
+  private static func normalizeLocale(_ environment: inout [String: String], explicitKeys: Set<String>) {
+    if let lcAll = environment["LC_ALL"], isUTF8Locale(lcAll) {
+      return
+    }
+    if explicitKeys.contains("LC_ALL") {
+      return
+    }
+    if !explicitKeys.contains("LC_CTYPE"),
+      !isUTF8Locale(environment["LC_CTYPE"])
+    {
+      environment["LC_CTYPE"] = "en_US.UTF-8"
+    }
+    if !explicitKeys.contains("LANG"),
+      !isUTF8Locale(environment["LANG"])
+    {
+      environment["LANG"] = "en_US.UTF-8"
+    }
+  }
+
+  private static func isUTF8Locale(_ value: String?) -> Bool {
+    guard let value else { return false }
+    return value.range(of: "UTF-8", options: .caseInsensitive) != nil
+      || value.range(of: "UTF8", options: .caseInsensitive) != nil
   }
 
   private static func isZsh(_ shellPath: String?) -> Bool {

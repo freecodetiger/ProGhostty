@@ -321,8 +321,8 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     self?.performScheduledResize(session: session, job: job)
   }
   private nonisolated static let interactiveInputByteLimit = 16
-  private nonisolated static let interactiveEchoOutputByteLimit = 64
-  private nonisolated static let interactiveEchoWindowSeconds: TimeInterval = 0.075
+  private nonisolated static let interactiveEchoOutputByteLimit = 96
+  private nonisolated static let interactiveEchoWindowSeconds: TimeInterval = 0.15
 
   public init(surfaceRegistry: PTYTerminalSurfaceRegistry) {
     self.surfaceRegistry = surfaceRegistry
@@ -409,10 +409,14 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     if data.count <= Self.interactiveInputByteLimit {
       lastInputUptimeBySession[id] = ProcessInfo.processInfo.systemUptime
     }
+    data.withUnsafeBytes { bytes in
+      guard let base = bytes.baseAddress else { return }
+      _ = Darwin.write(state.fileDescriptor, base, bytes.count)
+    }
+    guard surfaceRegistry.prepareForUserInput(session: id) else { return }
     let bridge = state.vtBridge
     let vtQueue = state.vtQueue
     let generation = state.resizeGeneration
-    let fd = state.fileDescriptor
     vtQueue.async { [weak self] in
       GhosttyVTQueueWork.scrollToBottom(bridge)
       let snapshot = ResizeRenderSnapshot.capture(from: bridge)
@@ -420,14 +424,8 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
         guard let self, let current = self.sessions[id], current.resizeGeneration == generation else {
           return
         }
-        if self.surfaceRegistry.prepareForUserInput(session: id) {
-          self.surfaceRegistry.render(snapshot, bridge: bridge, session: id)
-        }
+        self.surfaceRegistry.render(snapshot, bridge: bridge, session: id)
       }
-    }
-    data.withUnsafeBytes { bytes in
-      guard let base = bytes.baseAddress else { return }
-      _ = Darwin.write(fd, base, bytes.count)
     }
   }
 

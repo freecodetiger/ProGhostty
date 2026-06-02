@@ -47,6 +47,53 @@ struct PTYLaunchTests {
     #expect(environment.contains("PROMPT_EOL_MARK="))
   }
 
+  @Test func launchEnvironmentInjectsUtf8LocaleWhenMissing() {
+    let environment = PTYLaunch.launchEnvironment([:], baseEnvironment: [:])
+
+    #expect(environment.contains("LANG=en_US.UTF-8"))
+    #expect(environment.contains("LC_CTYPE=en_US.UTF-8"))
+  }
+
+  @Test func launchEnvironmentPreservesExistingUtf8Locale() {
+    let environment = PTYLaunch.launchEnvironment(
+      [:],
+      baseEnvironment: [
+        "LANG": "zh_CN.UTF-8",
+        "LC_CTYPE": "UTF-8",
+      ]
+    )
+
+    #expect(environment.contains("LANG=zh_CN.UTF-8"))
+    #expect(environment.contains("LC_CTYPE=UTF-8"))
+  }
+
+  @Test func launchEnvironmentDoesNotForceLocaleWhenLcAllIsUtf8() {
+    let environment = PTYLaunch.launchEnvironment(
+      [:],
+      baseEnvironment: ["LC_ALL": "en_US.UTF-8"]
+    )
+
+    #expect(environment.contains("LC_ALL=en_US.UTF-8"))
+    #expect(!environment.contains("LANG=en_US.UTF-8"))
+    #expect(!environment.contains("LC_CTYPE=en_US.UTF-8"))
+  }
+
+  @Test func launchEnvironmentAllowsExplicitLocaleOverrides() {
+    let environment = PTYLaunch.launchEnvironment(
+      [
+        "LANG": "ja_JP.UTF-8",
+        "LC_CTYPE": "zh_CN.UTF-8",
+      ],
+      baseEnvironment: [
+        "LANG": "C",
+        "LC_CTYPE": "C",
+      ]
+    )
+
+    #expect(environment.contains("LANG=ja_JP.UTF-8"))
+    #expect(environment.contains("LC_CTYPE=zh_CN.UTF-8"))
+  }
+
   @Test func launchEnvironmentDoesNotLeakHostNoColorIntoTerminalSessions() {
     let environment = PTYLaunch.launchEnvironment(
       [:],

@@ -482,8 +482,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     let shouldRenderInputSnapshot = surface.gridView.isViewingHistory
       || surface.gridView.viewport != TerminalViewport()
       || !isPinnedToBottom
+    guard shouldRenderInputSnapshot else { return false }
     surface.liveRenderer.resetPixelScroll(suppressMomentum: true)
-    return shouldRenderInputSnapshot
+    return true
   }
 
   private func canScrollViewport(session id: TerminalSessionID, rowDelta: Int) -> Bool {

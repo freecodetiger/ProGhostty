@@ -1084,6 +1084,10 @@ struct TerminalSurfaceTests {
       Data("中文".utf8),
       secondsSinceLastInput: 0.01
     ))
+    #expect(PTYTerminalSessionManager.isInteractiveEchoOutput(
+      Data("\u{1B}[?2004h% 中文".utf8),
+      secondsSinceLastInput: 0.12
+    ))
   }
 
   @Test func ptySessionManagerDoesNotTreatStaleOrLargeOutputAsInteractiveEcho() {
@@ -1093,6 +1097,10 @@ struct TerminalSurfaceTests {
     ))
     #expect(!PTYTerminalSessionManager.isInteractiveEchoOutput(
       Data(repeating: 65, count: 128),
+      secondsSinceLastInput: 0.01
+    ))
+    #expect(!PTYTerminalSessionManager.isInteractiveEchoOutput(
+      Data(repeating: 65, count: 384),
       secondsSinceLastInput: 0.01
     ))
   }

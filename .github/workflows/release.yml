@@ -56,7 +56,7 @@ jobs:
             ProGhostty ${{ github.ref_name }} 正式版。
 
             更新内容：
-            - 优化字体设置，支持自定义主字体和中文 fallback 字体。
-            - 改进终端输入刷新，降低快速输入时的粘滞感。
-            - 修复主题切换、启动和设置窗口打开后的 title bar / 背景同步问题。
-            - 继续改善 Claude Code / Codex 等 TUI 场景下的中文输入体验。
+            - 修复 PTY session 非 UTF-8 locale 导致的中文输入回显乱码。
+            - 优化输入写入与渲染顺序，降低 live bottom 普通按键延迟。
+            - 改进近期 shell echo 的 immediate 渲染判定，提升中文和 prompt repaint 回显响应。
+            - 保留历史区输入时自动回到底部的行为。
