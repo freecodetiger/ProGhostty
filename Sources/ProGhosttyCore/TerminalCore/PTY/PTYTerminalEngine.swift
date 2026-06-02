@@ -2266,17 +2266,28 @@ public class PTYGridView: NSView {
   private func inferredPromptCursorCoordinate(in geometry: RenderedGridGeometry) -> GridCoordinate? {
     var bestVisualCursor: GridCoordinate?
     var bestTextFallback: GridCoordinate?
+    var inputRegionIsActive = false
     for row in 0..<geometry.frame.rows {
       guard geometry.clipRect.intersects(geometry.rowRect(row)) else { continue }
       let rowStart = row * geometry.frame.cols
       let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
       guard rowStart < rowEnd else { continue }
       let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
-      guard let promptCol = promptMarkerColumn(in: cells) else { continue }
-      if let cursorCol = cells.indices.last(where: { $0 > promptCol && isVisualInputCursorCell(cells[$0]) }) {
+      let lowerBound: Int
+      if let promptCol = promptMarkerColumn(in: cells) {
+        inputRegionIsActive = true
+        bestVisualCursor = nil
+        bestTextFallback = nil
+        lowerBound = promptCol + 1
+      } else if inputRegionIsActive {
+        lowerBound = 0
+      } else {
+        continue
+      }
+      if let cursorCol = cells.indices.last(where: { $0 >= lowerBound && isVisualInputCursorCell(cells[$0]) }) {
         bestVisualCursor = GridCoordinate(row: row, col: cursorCol)
       }
-      if let lastTextCol = cells.indices.last(where: { $0 > promptCol && cells[$0].scalar != " " }) {
+      if let lastTextCol = cells.indices.last(where: { $0 >= lowerBound && cells[$0].scalar != " " }) {
         bestTextFallback = GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
       }
     }

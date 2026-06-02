@@ -56,7 +56,6 @@ jobs:
             ProGhostty ${{ github.ref_name }} 正式版。
 
             更新内容：
-            - 修复 PTY session 非 UTF-8 locale 导致的中文输入回显乱码。
-            - 优化输入写入与渲染顺序，降低 live bottom 普通按键延迟。
-            - 改进近期 shell echo 的 immediate 渲染判定，提升中文和 prompt repaint 回显响应。
-            - 保留历史区输入时自动回到底部的行为。
+            - 修复 Claude Code 等 TUI 中输入行软换行后，中文候选窗定位到第一行末尾的问题。
+            - 改进 prompt cursor 推断逻辑，支持最新 prompt 后续 continuation 行的输入法定位。
+            - 保留已有 transient home cursor 防抖处理，避免候选窗跳到终端左上角。

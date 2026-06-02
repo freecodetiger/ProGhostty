@@ -1650,6 +1650,33 @@ struct TerminalSurfaceTests {
     #expect(gridView.cursorCellRect == nil)
   }
 
+  @MainActor @Test func ptyGridInfersMarkedTextAnchorFromPromptContinuationCursorWhenVtCursorIsHome() throws {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: [
+      "› long input",
+      "continues   ",
+      "here        "
+    ], cols: 12, cursorX: 0, cursorY: 0)
+    let firstLineEndIndex = 0 * frame.cols + 11
+    frame.cells[firstLineEndIndex].scalar = " "
+    frame.cells[firstLineEndIndex].inverse = true
+    frame.cells[firstLineEndIndex].usesDefaultBackground = false
+    let continuationCursorIndex = 2 * frame.cols + 4
+    frame.cells[continuationCursorIndex].scalar = " "
+    frame.cells[continuationCursorIndex].inverse = true
+    frame.cells[continuationCursorIndex].usesDefaultBackground = false
+
+    gridView.render(frame, isFocused: true)
+    gridView.setMarkedText("zhong", selectedRange: NSRange(location: 5, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+
+    let overlay = try #require(gridView.currentMarkedTextOverlay)
+    #expect(overlay.row == 2)
+    #expect(overlay.col == 4)
+    #expect(gridView.currentIMECompositionCursorOverlay?.row == 2)
+    #expect(gridView.currentIMECompositionCursorOverlay?.col == 4)
+    #expect(gridView.cursorCellRect == nil)
+  }
+
   @MainActor @Test func ptyGridInfersMarkedTextAnchorFromRightmostVisualPromptCursorWhenVtCursorIsHome() throws {
     let gridView = PTYGridView()
     var frame = frameWithText(rows: [
