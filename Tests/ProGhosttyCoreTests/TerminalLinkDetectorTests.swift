@@ -77,6 +77,71 @@ struct TerminalLinkDetectorTests {
     #expect(hit.text == "Sources/App.swift:42:3")
   }
 
+  @Test func detectsFilePathFromClickedSuffixByLookingLeftAndUp() throws {
+    let frame = frame(rows: ["- main: /Users/zpc/projects/DB/database_r", "eview.html"], cols: 48)
+
+    let hit = try #require(TerminalLinkDetector.hitTest(row: 1, col: 9, in: frame))
+
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "/Users/zpc/projects/DB/database_review.html", line: nil, column: nil)))
+    #expect(hit.text == "/Users/zpc/projects/DB/database_review.html")
+  }
+
+  @Test func suffixPathDetectionDoesNotExpandRightFromClick() throws {
+    let frame = frame(rows: ["- main: /Users/zpc/projects/DB/database_r", "eview.html/evil"], cols: 48)
+
+    let hit = try #require(TerminalLinkDetector.hitTest(row: 1, col: 6, in: frame))
+
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "/Users/zpc/projects/DB/database_review.html", line: nil, column: nil)))
+    #expect(hit.text == "/Users/zpc/projects/DB/database_review.html")
+  }
+
+  @Test func exposesSuffixPathHitForHoverByLookingLeftAndUp() throws {
+    let frame = frame(rows: ["- main: /Users/zpc/projects/DB/database_r", "eview.html/evil"], cols: 48)
+
+    let hit = try #require(TerminalLinkDetector.hits(inRow: 1, frame: frame).first)
+
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "/Users/zpc/projects/DB/database_review.html", line: nil, column: nil)))
+    #expect(hit.range == 0..<10)
+    #expect(hit.text == "/Users/zpc/projects/DB/database_review.html")
+  }
+
+  @Test func suffixPathDetectionAcceptsPathStartingAtTopRow() throws {
+    let frame = frame(rows: ["/Users/zpc/projects/DB/database_r", "eview.html"], cols: 48)
+
+    let hit = try #require(TerminalLinkDetector.hits(inRow: 1, frame: frame).first)
+
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "/Users/zpc/projects/DB/database_review.html", line: nil, column: nil)))
+    #expect(hit.range == 0..<10)
+    #expect(hit.text == "/Users/zpc/projects/DB/database_review.html")
+  }
+
+  @Test func suffixPathDetectionIgnoresLeadingIndentBeforeContinuation() throws {
+    let frame = frame(rows: ["  - main: /Users/zpc/projects/DB/database_r", "  eview.html"], cols: 48)
+
+    let hit = try #require(TerminalLinkDetector.hitTest(row: 1, col: 8, in: frame))
+
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "/Users/zpc/projects/DB/database_review.html", line: nil, column: nil)))
+    #expect(hit.text == "/Users/zpc/projects/DB/database_review.html")
+  }
+
+  @Test func extendsTruncatedPathHitWithSuffixContinuation() throws {
+    let frame = frame(rows: ["/Users/zpc/projects/DB/database_r", "eview.html/evil"], cols: 48)
+
+    let hit = try #require(TerminalLinkDetector.hitTest(row: 0, col: 8, in: frame))
+
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "/Users/zpc/projects/DB/database_review.html", line: nil, column: nil)))
+    #expect(hit.text == "/Users/zpc/projects/DB/database_review.html")
+  }
+
+  @Test func extendsTruncatedPathHitWithIndentedSuffixContinuation() throws {
+    let frame = frame(rows: ["  - main: /Users/zpc/projects/DB/database_r", "  eview.html"], cols: 48)
+
+    let hit = try #require(TerminalLinkDetector.hitTest(row: 0, col: 16, in: frame))
+
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "/Users/zpc/projects/DB/database_review.html", line: nil, column: nil)))
+    #expect(hit.text == "/Users/zpc/projects/DB/database_review.html")
+  }
+
   @Test func ignoresNonOverlappingRowsInWrappedPathCandidateGroup() throws {
     let frame = frame(rows: ["prefix-without-space", "see docs/readme.md"], cols: 20)
 

@@ -2025,6 +2025,21 @@ struct TerminalSurfaceTests {
     ])
   }
 
+  @MainActor @Test func ptyGridExposesCursorRectsForSuffixPathHits() {
+    let frame = frameWithText(
+      rows: ["- main: /Users/zpc/projects/DB/database_r", "eview.html/evil"],
+      cols: 48,
+      cursorX: 0,
+      cursorY: 0
+    )
+    let cellSize = CGSize(width: 8, height: 16)
+    let inset = CGSize(width: 14, height: 12)
+
+    let rects = PTYGridView.urlCursorRects(frame: frame, cellSize: cellSize, inset: inset, linkInteractionActive: true)
+
+    #expect(rects.contains(NSRect(x: 14, y: 12 + 16, width: 10 * 8, height: 16)))
+  }
+
   @MainActor @Test func ptyGridDoesNotExposeURLCursorRectsWithoutCommandLinkMode() {
     let frame = frameWithText(rows: ["open http://localhost:5173 now"], cols: 36, cursorX: 0, cursorY: 0)
     let cellSize = CGSize(width: 8, height: 16)
@@ -2174,6 +2189,62 @@ struct TerminalSurfaceTests {
 
     #expect(rowDeltas == [1])
     #expect(gridView.currentSelectionRowSet == [0, 1])
+  }
+
+  @MainActor @Test func ptyGridSelectionAnchorStaysOnOriginalTextAfterAutoScrollRender() throws {
+    let gridView = PTYGridView()
+    let cols = 24
+    var initialViewport = frameWithText(rows: ["row10 mid", "row11 anchor"], cols: cols, cursorX: 0, cursorY: 0)
+    initialViewport.isAlternateScreen = false
+    var scrolledViewport = frameWithText(rows: ["row09 prev", "row10 mid"], cols: cols, cursorX: 0, cursorY: 0)
+    scrolledViewport.isAlternateScreen = false
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(initialViewport.rows) * cellSize.height
+    )
+    gridView.render(
+      GhosttyTerminalScrollFrame(
+        viewport: initialViewport,
+        overscanTop: [cellRow(text: "row09 prev", cols: cols)],
+        overscanBottom: [cellRow(text: "row12 next", cols: cols)],
+        requestedOverscanTop: 1,
+        requestedOverscanBottom: 1,
+        viewportStartRow: 10
+      ),
+      isFocused: true,
+      dirty: CellGridDirtyResult(mode: .full, rows: [0, 1])
+    )
+    var rowDeltas: [Int] = []
+    gridView.viewportCanScrollHandler = { _ in true }
+    gridView.viewportScrollHandler = { rowDelta in
+      rowDeltas.append(rowDelta)
+      gridView.render(
+        GhosttyTerminalScrollFrame(
+          viewport: scrolledViewport,
+          overscanTop: [cellRow(text: "row08 old", cols: cols)],
+          overscanBottom: [cellRow(text: "row11 anchor", cols: cols)],
+          requestedOverscanTop: 1,
+          requestedOverscanBottom: 1,
+          viewportStartRow: 9
+        ),
+        isFocused: true,
+        dirty: CellGridDirtyResult(mode: .full, rows: [0, 1])
+      )
+      return true
+    }
+    let start = PTYGridView.textGlyphRect(row: 1, col: 11, cellSize: cellSize, inset: inset)
+
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: gridView))
+    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: start.midX, y: inset.height - 8), in: gridView))
+
+    #expect(rowDeltas == [1])
+    #expect(gridView.currentSelectionRowSet == [1, 2, 3])
+    #expect(gridView.selectedText?.contains("row11 anchor") == true)
+    #expect(gridView.selectedText?.contains("row08 old") == false)
   }
 
   @MainActor @Test func ptyGridURLCursorRectsCanFollowPixelScrollOffset() {

@@ -55,7 +55,10 @@ public enum TerminalLinkDetector {
   private static let trailingCharacters = CharacterSet(charactersIn: ".,;!?)]}")
 
   public static func hitTest(row: Int, col: Int, in frame: GhosttyTerminalFrame) -> TerminalLinkHit? {
-    hits(inRow: row, frame: frame).first { $0.contains(row: row, col: col) }
+    if let hit = hits(inRow: row, frame: frame).first(where: { $0.contains(row: row, col: col) }) {
+      return hit
+    }
+    return suffixAnchoredPathHit(row: row, col: col, frame: frame)
   }
 
   public static func hits(inRow row: Int, frame: GhosttyTerminalFrame) -> [TerminalLinkHit] {
@@ -63,10 +66,16 @@ public enum TerminalLinkDetector {
     let urlHits = TerminalURLDetector.hits(inRow: row, frame: frame).map {
       TerminalLinkHit(target: .url($0.url), row: $0.row, range: $0.range, text: $0.text)
     }
-    let pathHits = visiblePathHits(inRow: row, frame: frame).filter { pathHit in
+    let pathHits = visiblePathHits(inRow: row, frame: frame).map { pathHit in
+      extendingPathHitWithSuffixContinuation(pathHit, frame: frame)
+    }.filter { pathHit in
       !urlHits.contains { rangesOverlap($0.range, pathHit.range) }
     }
-    return urlHits + pathHits
+    let suffixPathHits = suffixAnchoredPathHits(inRow: row, frame: frame).filter { suffixHit in
+      !urlHits.contains { rangesOverlap($0.range, suffixHit.range) }
+        && !pathHits.contains { rangesOverlap($0.range, suffixHit.range) }
+    }
+    return urlHits + pathHits + suffixPathHits
   }
 
   private static func visiblePathHits(inRow row: Int, frame: GhosttyTerminalFrame) -> [TerminalLinkHit] {
@@ -138,6 +147,157 @@ public enum TerminalLinkDetector {
         range: (overlap.lowerBound - row.start)..<(overlap.upperBound - row.start),
         text: parsed.visibleText
       )
+    }
+  }
+
+  private static func suffixAnchoredPathHits(inRow row: Int, frame: GhosttyTerminalFrame) -> [TerminalLinkHit] {
+    guard row >= 0, row < frame.rows, frame.cols > 0 else { return [] }
+    var hits: [TerminalLinkHit] = []
+    var seenKeys = Set<String>()
+    for col in 0..<frame.cols {
+      guard let hit = suffixAnchoredPathHit(row: row, col: col, frame: frame) else { continue }
+      let key = "\(hit.row):\(hit.range.lowerBound):\(hit.range.upperBound):\(hit.text)"
+      if seenKeys.insert(key).inserted {
+        hits.append(hit)
+      }
+    }
+    return hits
+  }
+
+  private static func extendingPathHitWithSuffixContinuation(_ hit: TerminalLinkHit, frame: GhosttyTerminalFrame) -> TerminalLinkHit {
+    guard case .filePath(let target) = hit.target,
+      target.line == nil,
+      target.column == nil,
+      hit.row + 1 < frame.rows,
+      pathHitReachesLineEnd(hit, frame: frame),
+      !lastPathComponentHasExtension(target.rawPath)
+    else {
+      return hit
+    }
+
+    guard let continuationHit = suffixAnchoredPathHits(inRow: hit.row + 1, frame: frame).first(where: { continuation in
+      guard case .filePath(let continuationTarget) = continuation.target else { return false }
+      return continuationTarget.rawPath.hasPrefix(target.rawPath)
+    }) else {
+      return hit
+    }
+
+    return TerminalLinkHit(
+      target: continuationHit.target,
+      row: hit.row,
+      range: hit.range,
+      text: continuationHit.text
+    )
+  }
+
+  private static func pathHitReachesLineEnd(_ hit: TerminalLinkHit, frame: GhosttyTerminalFrame) -> Bool {
+    guard let rowText = text(inRow: hit.row, frame: frame) else { return false }
+    let trimmedText = rowText.trimmingCharacters(in: .whitespacesAndNewlines)
+    return hit.range.upperBound >= trimmedText.count
+  }
+
+  private static func lastPathComponentHasExtension(_ path: String) -> Bool {
+    guard let lastComponent = path.split(separator: "/", omittingEmptySubsequences: false).last else {
+      return false
+    }
+    return lastComponent.contains(".")
+  }
+
+  private static func suffixAnchoredPathHit(row: Int, col: Int, frame: GhosttyTerminalFrame) -> TerminalLinkHit? {
+    guard row >= 0, row < frame.rows, col >= 0, col < frame.cols,
+      let rowText = text(inRow: row, frame: frame)
+    else {
+      return nil
+    }
+
+    let characters = Array(rowText)
+    guard col < characters.count, isExtensionAnchorCharacter(characters[col]) else { return nil }
+
+    let clickedPrefix = String(characters.prefix(col + 1))
+    let suffixStart = tokenStart(in: clickedPrefix)
+    let clickedSuffixPrefix = String(clickedPrefix.dropFirst(suffixStart))
+    guard clickedSuffixPrefix.contains(".") else { return nil }
+
+    let suffixEnd = extensionEnd(in: characters, from: col)
+    let suffixFragment = String(characters[suffixStart..<suffixEnd])
+
+    var candidate = suffixFragment
+    let prefixBeforeSuffix = String(characters.prefix(suffixStart))
+    let boundaryIsOnlyLeadingWhitespace = prefixBeforeSuffix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    var reachedTokenBoundary = suffixStart > 0 && !boundaryIsOnlyLeadingWhitespace
+
+    if !reachedTokenBoundary, row > 0 {
+      for previousRow in stride(from: row - 1, through: 0, by: -1) {
+        guard let previousText = text(inRow: previousRow, frame: frame) else { break }
+        let trimmedText = previousText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { break }
+
+        let start = tokenStart(in: trimmedText)
+        let fragment = String(trimmedText.dropFirst(start))
+        guard !fragment.isEmpty else { break }
+
+        candidate = fragment + candidate
+        reachedTokenBoundary = start > 0 || previousRow == 0
+        if reachedTokenBoundary {
+          break
+        }
+      }
+    }
+
+    guard reachedTokenBoundary || row == 0 else { return nil }
+    let trimmed = trimmingTrailingCharacters(from: candidate)
+    guard !trimmed.isEmpty, isCompletePathCandidate(trimmed) else { return nil }
+
+    let parsed = stripLineAndColumn(from: trimmed)
+    return TerminalLinkHit(
+      target: .filePath(TerminalFilePathTarget(rawPath: parsed.path, line: parsed.line, column: parsed.column)),
+      row: row,
+      range: suffixStart..<suffixEnd,
+      text: parsed.visibleText
+    )
+  }
+
+  private static func tokenStart(in text: String) -> Int {
+    var start = 0
+    for (index, character) in text.enumerated() where isTokenDelimiter(character) {
+      start = index + 1
+    }
+    return start
+  }
+
+  private static func isTokenDelimiter(_ character: Character) -> Bool {
+    guard let scalar = character.unicodeScalars.first, character.unicodeScalars.count == 1 else {
+      return false
+    }
+    return CharacterSet.whitespacesAndNewlines.contains(scalar)
+      || "\"'<>({[".unicodeScalars.contains(scalar)
+  }
+
+  private static func extensionEnd(in characters: [Character], from col: Int) -> Int {
+    var end = col + 1
+    while end < characters.count, isExtensionCharacter(characters[end]) {
+      end += 1
+    }
+    return end
+  }
+
+  private static func isExtensionAnchorCharacter(_ character: Character) -> Bool {
+    character == "." || isExtensionCharacter(character)
+  }
+
+  private static func isExtensionCharacter(_ character: Character) -> Bool {
+    guard let scalar = character.unicodeScalars.first, character.unicodeScalars.count == 1 else {
+      return false
+    }
+    return CharacterSet.alphanumerics.contains(scalar)
+  }
+
+  private static func isCompletePathCandidate(_ text: String) -> Bool {
+    guard let regex = try? NSRegularExpression(pattern: pathPattern) else { return false }
+    let nsText = text as NSString
+    let fullRange = NSRange(location: 0, length: nsText.length)
+    return regex.matches(in: text, options: [], range: fullRange).contains { match in
+      match.range(at: 1).location == 0 && match.range(at: 1).length == nsText.length
     }
   }
 

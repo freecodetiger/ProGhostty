@@ -711,6 +711,7 @@ final class AppModel: ObservableObject {
   }
 
   private func openTerminalLinkTarget(_ target: TerminalLinkTarget, from sourceSession: TerminalSessionID) {
+    DebugLog.write("openTerminalLinkTarget session=\(sourceSession) target=\(target)")
     switch target {
     case .url(let url):
       _ = NSWorkspace.shared.open(url)

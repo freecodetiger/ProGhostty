@@ -143,6 +143,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       self?.linkHoverHandler?(id, isHovering)
     }
     gridView.openLinkTargetHandler = { [weak self] target in
+      PTYRenderDebugLog.write("surface link-target session=\(id) target=\(target)")
       self?.linkTargetHandler?(id, target)
     }
     gridView.pasteboard = .general
@@ -333,6 +334,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     linkTargetHandler = handler
     for (id, surface) in surfaces {
       surface.gridView.openLinkTargetHandler = { [weak self] target in
+        PTYRenderDebugLog.write("surface link-target session=\(id) target=\(target)")
         self?.linkTargetHandler?(id, target)
       }
     }
