@@ -821,6 +821,40 @@ struct TerminalRendererBackendTests {
     #expect(diagnostics.metalDirectStaleCompletionCount == 2)
   }
 
+  @MainActor @Test func metalDirectRendererBackendReportsFullRedrawReasonAndExpandedFrameCellCount() {
+    let backend = MetalDirectRendererBackend()
+
+    backend.render(TerminalRenderFrame(frame: frame(rows: ["ab", "cd"], cols: 4, cursorX: 0, cursorY: 0)))
+    backend.flushPendingFrame()
+
+    let diagnostics = backend.diagnostics
+    #expect(diagnostics.metalDirectFullRedrawReason == "grid-size-changed")
+    #expect(diagnostics.metalDirectExpandedFrameCellCount == 8)
+    #expect(diagnostics.debugSummary.contains("metalDirectFullRedrawReason=\"grid-size-changed\""))
+    #expect(diagnostics.debugSummary.contains("metalDirectExpandedFrameCells=8"))
+  }
+
+  @MainActor @Test func metalDirectRendererBackendReportsTextureCacheAndGPUWaitDiagnosticsFromEngine() {
+    let engine = MutableMetalDirectRenderingEngine()
+    engine.lastGlyphTextureHitCount = 9
+    engine.lastGlyphTextureMissCount = 3
+    engine.lastGPUWaitReason = "full-redraw"
+    let backend = MetalDirectRendererBackend(options: TerminalRendererOptions()) { _ in engine }
+
+    backend.render(TerminalRenderFrame(frame: frame(rows: ["ab"], cols: 4, cursorX: 0, cursorY: 0)))
+    backend.flushPendingFrame()
+
+    let diagnostics = backend.diagnostics
+    #expect(diagnostics.metalDirectGlyphTextureHitCount == 9)
+    #expect(diagnostics.metalDirectGlyphTextureMissCount == 3)
+    #expect(diagnostics.metalDirectTextureCacheHitRate == 0.75)
+    #expect(diagnostics.metalDirectGPUWaitReason == "full-redraw")
+    #expect(diagnostics.debugSummary.contains("metalDirectGlyphTextureHits=9"))
+    #expect(diagnostics.debugSummary.contains("metalDirectGlyphTextureMisses=3"))
+    #expect(diagnostics.debugSummary.contains("metalDirectTextureHitRate=0.750"))
+    #expect(diagnostics.debugSummary.contains("metalDirectGPUWaitReason=\"full-redraw\""))
+  }
+
   @MainActor @Test func metalDirectRendererBackendReportsFallbackReasonWhenRenderFails() {
     let backend = MetalDirectRendererBackend(options: TerminalRendererOptions()) { _ in
       FailingMetalDirectRenderingEngine()
@@ -1206,6 +1240,48 @@ struct TerminalRendererBackendTests {
     #expect(markedText?.rect.width == CGFloat(44 * 2))
   }
 
+  @Test func metalOverlayBufferUsesResolvedCursorOverlayForTransientHomeCursor() {
+    let plan = MetalTerminalRenderPlan(
+      presentation: .frame,
+      viewportRows: 12,
+      cols: 12,
+      overscanTopRows: 0,
+      overscanBottomRows: 0,
+      pixelRemainderY: 0,
+      dirtyRows: [0, 9],
+      cellSize: CGSize(width: 8, height: 16),
+      backingScale: 2,
+      isFocused: true
+    )
+    let renderFrame = TerminalRenderFrame(
+      frame: frame(rows: [
+        "history 1",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "> /res",
+        "/resume",
+        "",
+      ], cols: 12, cursorX: 0, cursorY: 0),
+      isFocused: true
+    )
+
+    let overlays = MetalOverlayBuffer.makeOverlays(
+      renderFrame: renderFrame,
+      plan: plan,
+      cursorOverlay: MetalMarkedTextOverlay(row: 9, col: 6, width: 8)
+    )
+
+    let cursor = overlays.first(where: { $0.kind == .cursor })
+    #expect(cursor?.rect.minX == CGFloat(14 * 2 + 6 * 8 * 2))
+    #expect(cursor?.rect.minY == CGFloat(12 * 2 + 9 * 16 * 2))
+  }
+
   @Test func metalOverlayBufferSuppressesCursorWhileMarkedTextIsActive() {
     let plan = MetalTerminalRenderPlan(
       presentation: .frame,
@@ -1233,6 +1309,33 @@ struct TerminalRendererBackendTests {
 
     #expect(!overlays.contains(where: { $0.kind == .cursor }))
     #expect(overlays.contains(where: { $0.kind == .markedText }))
+  }
+
+  @MainActor @Test func metalDirectCursorGlyphLayoutUsesResolvedCursorOverlayForTransientHomeCursor() {
+    var snapshot = frame(rows: ["h", "", "> /res"], cols: 12, cursorX: 0, cursorY: 0)
+    snapshot.cursorShape = .block
+    let plan = MetalTerminalRenderPlan(
+      presentation: .frame,
+      viewportRows: 3,
+      cols: 12,
+      overscanTopRows: 0,
+      overscanBottomRows: 0,
+      pixelRemainderY: 0,
+      dirtyRows: [0, 2],
+      cellSize: CGSize(width: 8, height: 16),
+      backingScale: 2,
+      isFocused: true
+    )
+
+    let glyph = MetalDirectRenderEngine.cursorGlyphLayout(
+      renderFrame: TerminalRenderFrame(frame: snapshot, isFocused: true),
+      plan: plan,
+      contentInset: CGSize(width: 14, height: 12),
+      markedTextActive: false,
+      cursorOverlay: MetalMarkedTextOverlay(row: 2, col: 6, width: 8)
+    )
+
+    #expect(glyph == nil)
   }
 
   @MainActor @Test func metalDirectMarkedTextGlyphLayoutDrawsCompositionStringAtOverlayOrigin() {
@@ -1723,6 +1826,9 @@ struct TerminalRendererBackendTests {
     let lastRenderedRunCount = 1
     let lastRenderPassLoadPolicy = MetalDirectRenderPassLoadPolicy.clear
     let lastWaitedForCompletion = true
+    var lastGPUWaitReason = "none"
+    var lastGlyphTextureHitCount = 0
+    var lastGlyphTextureMissCount = 0
     var staleCompletionCount = 0
     var lastSelectionCellRanges: [GridSelectionCellRange] = []
 
@@ -1755,6 +1861,9 @@ struct TerminalRendererBackendTests {
     let lastRenderedRunCount = 0
     let lastRenderPassLoadPolicy = MetalDirectRenderPassLoadPolicy.clear
     let lastWaitedForCompletion = false
+    let lastGPUWaitReason = "none"
+    let lastGlyphTextureHitCount = 0
+    let lastGlyphTextureMissCount = 0
     let staleCompletionCount = 0
 
     func resetTextureCache() {}
@@ -2025,6 +2134,17 @@ struct TerminalRendererBackendTests {
     #expect(diagnostics.debugSummary.contains("pendingScrollRowDelta=0"))
     #expect(diagnostics.debugSummary.contains("scrollCommitMs=0.000"))
     #expect(diagnostics.debugSummary.contains("scrollRenderMs=0.000"))
+    #expect(diagnostics.debugSummary.contains("bridgeScrollViewportMs=0.000"))
+    #expect(diagnostics.debugSummary.contains("bridgeScrollbarSnapshotMs=0.000"))
+    #expect(diagnostics.debugSummary.contains("bridgeFrameSnapshotMs=0.000"))
+    #expect(diagnostics.debugSummary.contains("bridgeScrollFrameSnapshotMs=0.000"))
+    #expect(diagnostics.debugSummary.contains("bridgeSnapshotCells=0"))
+    #expect(diagnostics.debugSummary.contains("metalDirectFullRedrawReason=\"none\""))
+    #expect(diagnostics.debugSummary.contains("metalDirectExpandedFrameCells=0"))
+    #expect(diagnostics.debugSummary.contains("metalDirectGlyphTextureHits=0"))
+    #expect(diagnostics.debugSummary.contains("metalDirectGlyphTextureMisses=0"))
+    #expect(diagnostics.debugSummary.contains("metalDirectTextureHitRate=0.000"))
+    #expect(diagnostics.debugSummary.contains("metalDirectGPUWaitReason=\"none\""))
   }
 
   @Test func rendererDiagnosticsReportOverscanRows() {

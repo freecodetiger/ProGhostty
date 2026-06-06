@@ -17,6 +17,23 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     var lastHTMLSnapshot: String? = nil
     var lastCursorFrame: GhosttyTerminalFrame? = nil
     var liveRendererFallbackReason: String? = nil
+    var bridgeDiagnostics = BridgeRenderDiagnostics()
+  }
+
+  private struct BridgeRenderDiagnostics {
+    var scrollViewportDuration: TimeInterval = 0
+    var scrollbarSnapshotDuration: TimeInterval = 0
+    var frameSnapshotDuration: TimeInterval = 0
+    var scrollFrameSnapshotDuration: TimeInterval = 0
+    var snapshotCellCount: Int = 0
+
+    func apply(to diagnostics: inout TerminalRendererDiagnostics) {
+      diagnostics.bridgeScrollViewportDuration = scrollViewportDuration
+      diagnostics.bridgeScrollbarSnapshotDuration = scrollbarSnapshotDuration
+      diagnostics.bridgeFrameSnapshotDuration = frameSnapshotDuration
+      diagnostics.bridgeScrollFrameSnapshotDuration = scrollFrameSnapshotDuration
+      diagnostics.bridgeSnapshotCellCount = snapshotCellCount
+    }
   }
 
   private struct CursorTextPlacement {
@@ -195,14 +212,21 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
 
   public func rendererDiagnostics(for id: TerminalSessionID) -> TerminalRendererDiagnostics? {
     guard let surface = surfaces[id] else { return nil }
+    return composedRendererDiagnostics(for: surface)
+  }
+
+  private func composedRendererDiagnostics(for surface: SurfaceState) -> TerminalRendererDiagnostics {
+    var diagnostics: TerminalRendererDiagnostics
     if surface.containerView.isShowingLiveGrid {
-      var diagnostics = surface.liveRenderer.diagnostics
+      diagnostics = surface.liveRenderer.diagnostics
       if let liveRendererFallbackReason = surface.liveRendererFallbackReason {
         diagnostics.backendFallbackReason = liveRendererFallbackReason
       }
-      return diagnostics
+    } else {
+      diagnostics = surface.textBackend.diagnostics
     }
-    return surface.textBackend.diagnostics
+    surface.bridgeDiagnostics.apply(to: &diagnostics)
+    return diagnostics
   }
 
   public func applyPalette(_ palette: TerminalSurfacePalette) {
@@ -347,7 +371,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   public func render(_ bridge: GhosttyVTBridge, session id: TerminalSessionID) {
     guard var surface = surfaces[id] else { return }
     outputCoordinator.cancel(session: id)
+    let scrollbarStart = Self.now()
     surface.scrollbar = try? bridge.scrollbar()
+    surface.bridgeDiagnostics.scrollbarSnapshotDuration = Self.now() - scrollbarStart
     render(bridge, surface: &surface, session: id)
     surfaces[id] = surface
   }
@@ -452,8 +478,12 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     if let viewportScrollHandler {
       return viewportScrollHandler(id, rowDelta)
     }
+    let scrollViewportStart = Self.now()
     bridge.scrollViewport(deltaRows: terminalDelta)
+    surface.bridgeDiagnostics.scrollViewportDuration = Self.now() - scrollViewportStart
+    let scrollbarStart = Self.now()
     surface.scrollbar = try? bridge.scrollbar()
+    surface.bridgeDiagnostics.scrollbarSnapshotDuration = Self.now() - scrollbarStart
     render(bridge, surface: &surface, session: id)
     backend.flushPendingFrame()
     handleLiveRendererFailureIfNeeded(session: id, surface: &surface)
@@ -543,11 +573,22 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   private func render(_ bridge: GhosttyVTBridge, surface: inout SurfaceState, session id: TerminalSessionID) {
     surface.bridge = bridge
     let shouldFollowOutput = surface.textBackend.isScrolledToBottom
+    let frameStart = Self.now()
     let frame = try? bridge.frame()
+    surface.bridgeDiagnostics.frameSnapshotDuration = Self.now() - frameStart
+    surface.bridgeDiagnostics.scrollFrameSnapshotDuration = 0
+    surface.bridgeDiagnostics.snapshotCellCount = frame?.cells.count ?? 0
     let rendererSelection = rendererSelection(for: frame)
     if let frame, rendererSelection.presentation == .liveCellGrid {
+      let scrollFrameStart = Self.now()
+      let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2)
+      surface.bridgeDiagnostics.scrollFrameSnapshotDuration = Self.now() - scrollFrameStart
+      surface.bridgeDiagnostics.snapshotCellCount = Self.snapshotCellCount(
+        frame: frame,
+        scrollFrame: scrollFrame
+      )
       let renderFrame: TerminalRenderFrame
-      if let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2) {
+      if let scrollFrame {
         renderFrame = TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: isFocused(id))
       } else {
         renderFrame = TerminalRenderFrame(frame: frame, isFocused: isFocused(id))
@@ -565,12 +606,12 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
         surface.gridView.window?.makeFirstResponder(surface.gridView)
       }
       render(renderFrame, in: surface.liveRenderer)
-      if let scrollbar = try? bridge.scrollbar(), let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2) {
+      if let scrollbar = surface.scrollbar, let scrollFrame {
         PTYRenderDebugLog.write(
           "snapshot session=\(id) scrollbar=(offset:\(scrollbar.offset), length:\(scrollbar.length), total:\(scrollbar.total)) viewportStart=\(String(describing: scrollFrame.viewportStartRow)) tail=\"\(Self.tailText(from: scrollFrame.viewport))\""
         )
       }
-      PTYRenderDebugLog.write("diagnostics session=\(id) \(surface.liveRenderer.diagnostics.debugSummary)")
+      PTYRenderDebugLog.write("diagnostics session=\(id) \(composedRendererDiagnostics(for: surface).debugSummary)")
     } else if let html = try? bridge.htmlText(),
       let attributed = try? attributedTerminalSnapshot(fromHTML: html, cursorFrame: frame, isFocused: isFocused(id))
     {
@@ -583,7 +624,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       surface.lastCursorFrame = frame
       surface.textBackend.setFocused(isFocused(id))
       surface.textBackend.render(attributed: attributed, scrollToEnd: shouldFollowOutput)
-      PTYRenderDebugLog.write("diagnostics session=\(id) \(surface.textBackend.diagnostics.debugSummary)")
+      PTYRenderDebugLog.write("diagnostics session=\(id) \(composedRendererDiagnostics(for: surface).debugSummary)")
     } else if let text = try? bridge.plainText() {
       surface.containerView.showScrollback()
       PTYRenderDebugLog.write("render session=\(id) mode=plain-text")
@@ -591,7 +632,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       surface.lastFrame = nil
       surface.lastCursorFrame = nil
       surface.textBackend.render(plainText: text)
-      PTYRenderDebugLog.write("diagnostics session=\(id) \(surface.textBackend.diagnostics.debugSummary)")
+      PTYRenderDebugLog.write("diagnostics session=\(id) \(composedRendererDiagnostics(for: surface).debugSummary)")
     }
   }
 
@@ -680,6 +721,20 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
           .trimmingCharacters(in: .whitespaces)
       }
       .joined(separator: " | ")
+  }
+
+  private static func snapshotCellCount(
+    frame: GhosttyTerminalFrame,
+    scrollFrame: GhosttyTerminalScrollFrame?
+  ) -> Int {
+    guard let scrollFrame else { return frame.cells.count }
+    return scrollFrame.viewport.cells.count
+      + scrollFrame.overscanTop.reduce(0) { $0 + $1.cells.count }
+      + scrollFrame.overscanBottom.reduce(0) { $0 + $1.cells.count }
+  }
+
+  private static func now() -> TimeInterval {
+    ProcessInfo.processInfo.systemUptime
   }
 
   private func render(

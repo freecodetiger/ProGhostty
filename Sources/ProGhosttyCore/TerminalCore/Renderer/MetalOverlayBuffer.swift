@@ -42,6 +42,7 @@ public enum MetalOverlayBuffer {
     selectionRowsOffset: Int = 0,
     linkHoverRows: Set<Int> = [],
     linkHoverCellRanges: [MetalLinkHoverCellRange] = [],
+    cursorOverlay: MetalMarkedTextOverlay? = nil,
     markedTextOverlay: MetalMarkedTextOverlay? = nil,
     imeCompositionCursorOverlay: MetalMarkedTextOverlay? = nil,
     markedTextRowsOffset: Int = 0,
@@ -60,8 +61,10 @@ public enum MetalOverlayBuffer {
     )
     let effectivePixelRemainderY = pixelRemainderY ?? plan.pixelRemainderY
     let translationY = -CGFloat(plan.overscanTopRows) * cellSize.height + effectivePixelRemainderY * pixelScale
-    let cursorRow = renderFrame.scrollFrame.map { $0.overscanTop.count + $0.viewport.cursorY } ?? frame.cursorY
-    let cursorCol = frame.cursorX
+    let cursorRow = cursorOverlay.map { $0.row + markedTextRowsOffset }
+      ?? renderFrame.scrollFrame.map { $0.overscanTop.count + $0.viewport.cursorY }
+      ?? frame.cursorY
+    let cursorCol = cursorOverlay?.col ?? frame.cursorX
     var overlays: [MetalOverlayPrimitive] = []
 
     if frame.cursorVisible && renderFrame.isFocused && !markedTextActive {

@@ -64,6 +64,20 @@ public final class MetalDirectRendererView: PTYGridView {
     } else {
       super.render(renderFrame.frame, isFocused: renderFrame.isFocused)
     }
+    if PTYRenderDebugLog.isEnabled {
+      PTYRenderDebugLog.write(
+        "metalDirectPresent gen=\(renderFrame.generation) presentation=\(renderFrame.presentation) focused=\(renderFrame.isFocused) frameCursor=(\(renderFrame.frame.cursorX),\(renderFrame.frame.cursorY)) overscanTop=\(renderFrame.scrollFrame?.overscanTop.count ?? 0) visualOffsetY=\(String(format: "%.2f", viewport.visualOffsetY)) cursorRect=\(Self.debugDescription(for: cursorCellRect)) cursorOverlay=\(Self.debugDescription(for: currentCursorOverlay)) markedOverlay=\(Self.debugDescription(for: currentMarkedTextOverlay))"
+      )
+    }
+  }
+
+  private static func debugDescription(for rect: NSRect?) -> String {
+    rect.map(NSStringFromRect) ?? "nil"
+  }
+
+  private static func debugDescription(for overlay: GridMarkedTextOverlay?) -> String {
+    guard let overlay else { return "nil" }
+    return "(row:\(overlay.row),col:\(overlay.col),width:\(String(format: "%.1f", overlay.width)))"
   }
 }
 
@@ -105,6 +119,11 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   private var nextAssignedRenderGeneration: Int = 0
   private var flushScheduled = false
   private var pendingFullRedraw = false
+
+  private struct DirtyRowsEvaluation {
+    let dirty: CellGridDirtyResult
+    let fullRedrawReason: String
+  }
 
   private struct StyleStatsCache {
     private(set) var rows: [TerminalCellStyleStats] = []
@@ -497,10 +516,11 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
 
   private func updateDiagnostics(from renderFrame: TerminalRenderFrame) {
     let frame = renderFrame.frame
-    let dirty = dirtyRows(
+    let dirtyEvaluation = dirtyRows(
       for: renderFrame,
       transientOverlayRevision: directView.markedTextStateRevision
     )
+    let dirty = dirtyEvaluation.dirty
     let plan = MetalTerminalFrameEncoder.encode(
       renderFrame,
       pixelRemainderY: directView.viewport.visualOffsetY,
@@ -574,7 +594,16 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
       ? String(describing: engine?.lastRenderPassLoadPolicy ?? MetalDirectRenderPassLoadPolicy.clear)
       : "none"
     diagnosticsState.metalDirectWaitedForCompletion = didRender ? (engine?.lastWaitedForCompletion ?? false) : false
+    diagnosticsState.metalDirectGPUWaitReason = didRender ? (engine?.lastGPUWaitReason ?? "none") : "none"
     diagnosticsState.metalDirectStaleCompletionCount = didRender ? (engine?.staleCompletionCount ?? 0) : 0
+    diagnosticsState.metalDirectFullRedrawReason = dirtyEvaluation.fullRedrawReason
+    diagnosticsState.metalDirectExpandedFrameCellCount = drawFrame.cells.count
+    diagnosticsState.metalDirectGlyphTextureHitCount = didRender ? (engine?.lastGlyphTextureHitCount ?? 0) : 0
+    diagnosticsState.metalDirectGlyphTextureMissCount = didRender ? (engine?.lastGlyphTextureMissCount ?? 0) : 0
+    let textureLookupCount = diagnosticsState.metalDirectGlyphTextureHitCount + diagnosticsState.metalDirectGlyphTextureMissCount
+    diagnosticsState.metalDirectTextureCacheHitRate = textureLookupCount > 0
+      ? Double(diagnosticsState.metalDirectGlyphTextureHitCount) / Double(textureLookupCount)
+      : 0
     if didRender {
       latestPresentedGeneration = renderFrame.generation
     }
@@ -604,41 +633,56 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   private func dirtyRows(
     for renderFrame: TerminalRenderFrame,
     transientOverlayRevision: Int
-  ) -> CellGridDirtyResult {
+  ) -> DirtyRowsEvaluation {
     let frame = renderFrame.frame
     let gridUpdate = instanceBuffer.updateGridSize(rows: frame.rows, cols: frame.cols)
     if pendingFullRedraw {
       pendingFullRedraw = false
       previousTransientOverlayRevision = transientOverlayRevision
-      return CellGridDirtyTracker.fullDirtyResult(for: frame)
+      return DirtyRowsEvaluation(
+        dirty: CellGridDirtyTracker.fullDirtyResult(for: frame),
+        fullRedrawReason: "pending-full-redraw"
+      )
     }
     guard gridUpdate == .unchanged, let previousFrame else {
-      return CellGridDirtyTracker.fullDirtyResult(for: frame)
+      return DirtyRowsEvaluation(
+        dirty: CellGridDirtyTracker.fullDirtyResult(for: frame),
+        fullRedrawReason: "grid-size-changed"
+      )
     }
     if transientOverlayRevision != 0, transientOverlayRevision != previousTransientOverlayRevision {
       previousTransientOverlayRevision = transientOverlayRevision
-      return CellGridDirtyTracker.fullDirtyResult(for: frame)
+      return DirtyRowsEvaluation(
+        dirty: CellGridDirtyTracker.fullDirtyResult(for: frame),
+        fullRedrawReason: "transient-overlay-changed"
+      )
     }
     let diff = CellGridDirtyTracker.diff(
       previous: previousFrame,
       next: frame
     )
     if previousIsFocused != renderFrame.isFocused {
-      return CellGridDirtyTracker.fullDirtyResult(for: frame)
+      return DirtyRowsEvaluation(
+        dirty: CellGridDirtyTracker.fullDirtyResult(for: frame),
+        fullRedrawReason: "focus-changed"
+      )
     }
-    if scrollFrameNeedsFullSceneRebuild(renderFrame) {
-      return CellGridDirtyTracker.fullDirtyResult(for: frame)
+    if let reason = scrollFrameFullSceneRebuildReason(renderFrame) {
+      return DirtyRowsEvaluation(
+        dirty: CellGridDirtyTracker.fullDirtyResult(for: frame),
+        fullRedrawReason: reason
+      )
     }
     guard previousFrame.cursorShape != .block, frame.cursorShape != .block else {
       previousTransientOverlayRevision = transientOverlayRevision
-      return diff
+      return DirtyRowsEvaluation(dirty: diff, fullRedrawReason: "none")
     }
     let result = CellGridDirtyTracker.diffIgnoringCursorOnlyChanges(
       previous: previousFrame,
       next: frame
     )
     previousTransientOverlayRevision = transientOverlayRevision
-    return result
+    return DirtyRowsEvaluation(dirty: result, fullRedrawReason: "none")
   }
 
   private func requestFullRedraw() {
@@ -647,34 +691,34 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     diagnosticsState.dirtyRowCount = previousFrame?.rows ?? 0
   }
 
-  private func scrollFrameNeedsFullSceneRebuild(_ renderFrame: TerminalRenderFrame) -> Bool {
+  private func scrollFrameFullSceneRebuildReason(_ renderFrame: TerminalRenderFrame) -> String? {
     guard renderFrame.presentation == .scrollFrame || previousPresentation == .scrollFrame else {
-      return false
+      return nil
     }
     guard let previousExpandedFrame else {
-      return true
+      return "missing-expanded-frame"
     }
     guard previousPresentation == renderFrame.presentation else {
-      return true
+      return "scroll-presentation-changed"
     }
     let expanded = expandedFrame(from: renderFrame)
     guard previousExpandedFrame.rows == expanded.rows, previousExpandedFrame.cols == expanded.cols else {
-      return true
+      return "scroll-frame-shape-changed"
     }
     guard let scrollFrame = renderFrame.scrollFrame else {
-      return false
+      return nil
     }
     let overscanTopRows = scrollFrame.overscanTop.count
     let viewportRows = scrollFrame.viewport.rows
     guard previousOverscanTopRows == overscanTopRows, previousViewportRows == viewportRows else {
-      return true
+      return "scroll-frame-shape-changed"
     }
     return overscanRowsChanged(
       previous: previousExpandedFrame,
       next: expanded,
       overscanTopRows: overscanTopRows,
       viewportRows: viewportRows
-    )
+    ) ? "overscan-content-changed" : nil
   }
 
   private func overscanRowsChanged(

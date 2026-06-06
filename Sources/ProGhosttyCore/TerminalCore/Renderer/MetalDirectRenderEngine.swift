@@ -15,6 +15,9 @@ protocol MetalDirectRenderingEngine: AnyObject {
   var lastRenderedRunCount: Int { get }
   var lastRenderPassLoadPolicy: MetalDirectRenderPassLoadPolicy { get }
   var lastWaitedForCompletion: Bool { get }
+  var lastGPUWaitReason: String { get }
+  var lastGlyphTextureHitCount: Int { get }
+  var lastGlyphTextureMissCount: Int { get }
   var staleCompletionCount: Int { get }
 
   func resetTextureCache()
@@ -165,6 +168,9 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
   private(set) var lastRenderedRunCount = 0
   private(set) var lastRenderPassLoadPolicy = MetalDirectRenderPassLoadPolicy.clear
   private(set) var lastWaitedForCompletion = false
+  private(set) var lastGPUWaitReason = "none"
+  private(set) var lastGlyphTextureHitCount = 0
+  private(set) var lastGlyphTextureMissCount = 0
   var presentedFrameCount: Int { completionBox.presentedFrameCount }
   var latestSubmittedGeneration: Int { completionBox.latestSubmittedGeneration }
   var latestPresentedGeneration: Int { completionBox.latestPresentedGeneration }
@@ -215,6 +221,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     glyphAtlas: MetalGlyphAtlas
   ) -> Bool {
     guard pipelineReady else { return false }
+    lastGlyphTextureHitCount = 0
+    lastGlyphTextureMissCount = 0
 
     let drawFrame = expandedFrame(from: renderFrame)
     let pixelScale = plan.backingScale
@@ -240,6 +248,14 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       forViewBounds: view.bounds.size,
       backingScale: pixelScale
     )
+    let cursorOverlay = view.currentCursorOverlay
+    let markedTextOverlay = view.currentMarkedTextOverlay
+    let markedTextString = view.currentMarkedTextString
+    if PTYRenderDebugLog.isEnabled {
+      PTYRenderDebugLog.write(
+        "metalDirectEngine gen=\(renderFrame.generation) presentation=\(renderFrame.presentation) frameCursor=(\(renderFrame.frame.cursorX),\(renderFrame.frame.cursorY)) overscanTop=\(renderFrame.scrollFrame?.overscanTop.count ?? 0) cursorOverlay=\(Self.debugDescription(for: cursorOverlay)) markedOverlay=\(Self.debugDescription(for: markedTextOverlay)) markedActive=\(view.isComposingMarkedText) markedString=\(markedTextString.map { "\"\(Self.debugLogText($0))\"" } ?? "nil")"
+      )
+    }
 
     let plannedRenderRowRuns = Self.renderRowRuns(for: plan, drawFrameRows: drawFrame.rows)
     let plannedRenderCellRanges = Self.renderCellRanges(for: plan, drawFrameRows: drawFrame.rows)
@@ -287,7 +303,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       selectionRowsOffset: 0,
       linkHoverRows: [],
       linkHoverCellRanges: view.currentLinkHoverCellRanges,
-      markedTextOverlay: view.currentMarkedTextOverlay,
+      cursorOverlay: cursorOverlay,
+      markedTextOverlay: markedTextOverlay,
       imeCompositionCursorOverlay: view.currentIMECompositionCursorOverlay,
       markedTextRowsOffset: renderFrame.scrollFrame?.overscanTop.count ?? 0,
       pixelRemainderY: 0
@@ -302,7 +319,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       selectionRowsOffset: 0,
       linkHoverRows: [],
       linkHoverCellRanges: view.currentLinkHoverCellRanges,
-      markedTextOverlay: view.currentMarkedTextOverlay,
+      cursorOverlay: cursorOverlay,
+      markedTextOverlay: markedTextOverlay,
       imeCompositionCursorOverlay: view.currentIMECompositionCursorOverlay,
       markedTextRowsOffset: renderFrame.scrollFrame?.overscanTop.count ?? 0,
       pixelRemainderY: plan.pixelRemainderY
@@ -337,8 +355,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     )
     let drawableOverlayVertices = buildOverlayVertices(overlays: drawableTransientOverlays)
     let markedTextGlyphLayout = Self.markedTextGlyphLayout(
-      text: view.currentMarkedTextString ?? "",
-      overlay: view.currentMarkedTextOverlay,
+      text: markedTextString ?? "",
+      overlay: markedTextOverlay,
       renderFrame: renderFrame,
       plan: plan,
       contentInset: view.terminalContentInset
@@ -354,7 +372,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
         renderFrame: renderFrame,
         plan: plan,
         contentInset: view.terminalContentInset,
-        markedTextActive: view.isComposingMarkedText
+        markedTextActive: view.isComposingMarkedText,
+        cursorOverlay: cursorOverlay
       ),
       palette: palette,
       glyphAtlas: glyphAtlas
@@ -362,7 +381,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     let hasDrawableTransientOverlays = !drawableOverlayVertices.isEmpty
       || !markedTextGlyphDraw.vertices.isEmpty
       || !cursorGlyphDraw.vertices.isEmpty
-    let shouldWait = Self.shouldWaitForCommandCompletion(
+    let waitReason = Self.commandCompletionWaitReason(
       isFirstFrame: drawPassCount == 0,
       didResizeTexture: offscreen.didResize,
       redrawMode: redrawMode,
@@ -371,6 +390,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       rendersScene: shouldRenderScene,
       hasDrawableTransientOverlays: hasDrawableTransientOverlays
     )
+    let shouldWait = waitReason != "none"
     let glyphSlices = glyphTextureSlices(for: drawFrame, cellRanges: renderCellRanges, glyphAtlas: glyphAtlas)
     let compositeVertices = quadVertices(
       rect: CGRect(
@@ -578,6 +598,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     lastRenderedRunCount = shouldRenderScene ? renderRowRuns.count : 0
     lastRenderPassLoadPolicy = loadPolicy
     lastWaitedForCompletion = shouldWait
+    lastGPUWaitReason = waitReason
     if shouldRenderScene {
       drawPassCount += 1
     }
@@ -586,8 +607,10 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
 
   func texture(for entry: MetalGlyphAtlasEntry, glyphAtlas: MetalGlyphAtlas) -> MTLTexture? {
     if let cached = cachedTextures[entry.id], cached.generation == entry.generation {
+      lastGlyphTextureHitCount += 1
       return cached.texture
     }
+    lastGlyphTextureMissCount += 1
     guard let image = glyphAtlas.renderedImage(for: entry.scalar, style: entry.style) else {
       return nil
     }
@@ -688,7 +711,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     renderFrame: TerminalRenderFrame,
     plan: MetalTerminalRenderPlan,
     contentInset: CGSize,
-    markedTextActive: Bool
+    markedTextActive: Bool,
+    cursorOverlay: MetalMarkedTextOverlay? = nil
   ) -> MetalCursorGlyphLayout? {
     guard !markedTextActive else { return nil }
     let frame: GhosttyTerminalFrame
@@ -703,17 +727,20 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     } else {
       frame = renderFrame.frame
     }
+    let cursorRowsOffset = renderFrame.scrollFrame?.overscanTop.count ?? 0
+    let cursorRow = cursorOverlay.map { $0.row + cursorRowsOffset } ?? frame.cursorY
+    let cursorCol = cursorOverlay?.col ?? frame.cursorX
     guard renderFrame.isFocused,
       frame.cursorVisible,
       frame.cursorShape == .block,
-      frame.cursorY >= 0,
-      frame.cursorY < frame.rows,
-      frame.cursorX >= 0,
-      frame.cursorX < frame.cols
+      cursorRow >= 0,
+      cursorRow < frame.rows,
+      cursorCol >= 0,
+      cursorCol < frame.cols
     else {
       return nil
     }
-    let index = frame.cursorY * frame.cols + frame.cursorX
+    let index = cursorRow * frame.cols + cursorCol
     guard index >= 0, index < frame.cells.count else { return nil }
     let cell = frame.cells[index]
     guard cell.scalar != " " else { return nil }
@@ -729,8 +756,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     )
     let translationY = -CGFloat(plan.overscanTopRows) * cellSize.height + plan.pixelRemainderY * pixelScale
     let rect = CGRect(
-      x: inset.width + CGFloat(frame.cursorX) * cellSize.width,
-      y: inset.height + CGFloat(frame.cursorY) * cellSize.height + translationY,
+      x: inset.width + CGFloat(cursorCol) * cellSize.width,
+      y: inset.height + CGFloat(cursorRow) * cellSize.height + translationY,
       width: cellSize.width,
       height: cellSize.height
     )
@@ -945,13 +972,48 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     rendersScene: Bool = true,
     hasDrawableTransientOverlays: Bool = false
   ) -> Bool {
-    isFirstFrame
-      || didResizeTexture
-      || redrawMode == .full
-      || loadPolicy == .clear
-      || cursorRowDirty
-      || (rendersScene && loadPolicy == .load)
-      || hasDrawableTransientOverlays
+    commandCompletionWaitReason(
+      isFirstFrame: isFirstFrame,
+      didResizeTexture: didResizeTexture,
+      redrawMode: redrawMode,
+      loadPolicy: loadPolicy,
+      cursorRowDirty: cursorRowDirty,
+      rendersScene: rendersScene,
+      hasDrawableTransientOverlays: hasDrawableTransientOverlays
+    ) != "none"
+  }
+
+  static func commandCompletionWaitReason(
+    isFirstFrame: Bool,
+    didResizeTexture: Bool,
+    redrawMode: TerminalRedrawMode,
+    loadPolicy: MetalDirectRenderPassLoadPolicy,
+    cursorRowDirty: Bool,
+    rendersScene: Bool = true,
+    hasDrawableTransientOverlays: Bool = false
+  ) -> String {
+    if isFirstFrame {
+      return "first-frame"
+    }
+    if didResizeTexture {
+      return "texture-resize"
+    }
+    if redrawMode == .full {
+      return "full-redraw"
+    }
+    if loadPolicy == .clear {
+      return "clear-load-action"
+    }
+    if cursorRowDirty {
+      return "cursor-row-dirty"
+    }
+    if rendersScene && loadPolicy == .load {
+      return "load-scene-render"
+    }
+    if hasDrawableTransientOverlays {
+      return "drawable-transient-overlays"
+    }
+    return "none"
   }
 
   private func makeBuffer(vertices: [Vertex]) -> MTLBuffer? {
@@ -1200,6 +1262,22 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     descriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
     descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
     return try device.makeRenderPipelineState(descriptor: descriptor)
+  }
+
+  private static func debugDescription(for overlay: GridMarkedTextOverlay?) -> String {
+    guard let overlay else { return "nil" }
+    return "(row:\(overlay.row),col:\(overlay.col),width:\(String(format: "%.1f", overlay.width)))"
+  }
+
+  private static func debugLogText(_ text: String) -> String {
+    let sanitized = text
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"")
+      .replacingOccurrences(of: "\n", with: "\\n")
+      .replacingOccurrences(of: "\r", with: "\\r")
+    let maxLength = 120
+    guard sanitized.count > maxLength else { return sanitized }
+    return String(sanitized.prefix(maxLength)) + "..."
   }
 
   static let shaderSource = #"""

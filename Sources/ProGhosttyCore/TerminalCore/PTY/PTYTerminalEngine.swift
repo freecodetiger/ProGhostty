@@ -113,7 +113,7 @@ enum TerminalAttributedDiff {
 
 enum PTYRenderDebugLog {
   private static let url = URL(fileURLWithPath: "/tmp/proghostty-render.log")
-  private static let isEnabled = ProcessInfo.processInfo.environment["PROGHOSTTY_RENDER_DEBUG"] == "1"
+  static let isEnabled = ProcessInfo.processInfo.environment["PROGHOSTTY_RENDER_DEBUG"] == "1"
 
   static func write(_ message: String) {
     guard isEnabled else { return }
@@ -868,6 +868,7 @@ public class PTYGridView: NSView {
     didSet {
       guard oldValue != viewport else { return }
       currentInputPresentation = nil
+      latestPromptInputCursorRect = nil
       viewportDidChangeHandler?()
       needsDisplay = true
       window?.invalidateCursorRects(for: self)
@@ -897,6 +898,7 @@ public class PTYGridView: NSView {
   private var inputRenderGeneration = 0
   private var inputStateMachine = TerminalInputStateMachine()
   private var currentInputPresentation: TerminalInputPresentationSnapshot?
+  private var latestPromptInputCursorRect: NSRect?
 
   public override var acceptsFirstResponder: Bool { true }
   public override var isFlipped: Bool { true }
@@ -1690,6 +1692,13 @@ public class PTYGridView: NSView {
     resolvedInputPresentation().markedTextString
   }
 
+  public var currentCursorOverlay: GridMarkedTextOverlay? {
+    guard let cursorRect = resolvedInputPresentation().cursorRect, let frame = frameSnapshot else {
+      return nil
+    }
+    return gridOverlay(anchorRect: cursorRect, width: cellSize.width, frame: frame)
+  }
+
   public var currentIMECompositionCursorOverlay: GridMarkedTextOverlay? {
     guard isComposingMarkedText, let cursorRect = resolvedInputPresentation().cursorRect, let frame = frameSnapshot else {
       return nil
@@ -1962,21 +1971,31 @@ public class PTYGridView: NSView {
 
   private func ingestInputRenderSnapshot() {
     inputRenderGeneration &+= 1
-    applyInputPresentation(
-      inputStateMachine.ingestRenderSnapshot(
-        TerminalInputRenderSnapshot(
-          generation: inputRenderGeneration,
-          cursorRect: inputCursorRect(),
-          isFocused: isFocusedTerminalStorage,
-          hasMarkedText: hasMarkedText()
-        )
-      )
+    let proposedCursorRect = inputCursorRect()
+    let inputSnapshot = TerminalInputRenderSnapshot(
+      generation: inputRenderGeneration,
+      cursorRect: proposedCursorRect,
+      isFocused: isFocusedTerminalStorage,
+      hasMarkedText: hasMarkedText()
     )
+    let previousPresentation = currentInputPresentation
+    let stateSnapshot = inputStateMachine.ingestRenderSnapshot(inputSnapshot)
+    applyInputPresentation(stateSnapshot)
+    if PTYRenderDebugLog.isEnabled {
+      logInputRenderSnapshot(
+        inputSnapshot: inputSnapshot,
+        proposedCursorRect: proposedCursorRect,
+        previousPresentation: previousPresentation,
+        stateSnapshot: stateSnapshot,
+        resolvedPresentation: currentInputPresentation
+      )
+    }
   }
 
   private func applyInputPresentation(_ snapshot: TerminalInputPresentationSnapshot) {
     let resolved = resolvedInputPresentation(from: snapshot)
     currentInputPresentation = resolved
+    rememberPromptCursorRect(from: resolved.cursorRect)
     markedTextCompositionActive = resolved.cursorSuppressed
     if !resolved.cursorSuppressed && resolved.markedTextString == nil {
       markedText = NSAttributedString(string: "")
@@ -2171,6 +2190,53 @@ public class PTYGridView: NSView {
     return frame.cells[rowStart..<rowEnd].map { String($0.scalar) }.joined()
   }
 
+  private func logInputRenderSnapshot(
+    inputSnapshot: TerminalInputRenderSnapshot,
+    proposedCursorRect: NSRect?,
+    previousPresentation: TerminalInputPresentationSnapshot?,
+    stateSnapshot: TerminalInputPresentationSnapshot,
+    resolvedPresentation: TerminalInputPresentationSnapshot?
+  ) {
+    let viewportCursor = frameSnapshot.map { "(\($0.cursorX),\($0.cursorY))" } ?? "nil"
+    let viewportShape = frameSnapshot.map { "\($0.cursorShape)" } ?? "nil"
+    let geometry = renderedGeometry()
+    let geometryCursor = geometry.map { "(\($0.frame.cursorX),\($0.frame.cursorY))" } ?? "nil"
+    let overscanTop = scrollFrameSnapshot?.overscanTop.count ?? 0
+    let cursorRow = geometry?.frame.cursorY ?? frameSnapshot?.cursorY ?? -1
+    let rowText = geometry.map { Self.debugLogText(inRow: cursorRow, frame: $0.frame) } ?? ""
+    let overlay = resolvedPresentation.flatMap { presentation -> GridMarkedTextOverlay? in
+      guard let cursorRect = presentation.cursorRect, let frame = frameSnapshot else { return nil }
+      return gridOverlay(anchorRect: cursorRect, width: cellSize.width, frame: frame)
+    }
+    PTYRenderDebugLog.write(
+      "inputRender gen=\(inputSnapshot.generation) focused=\(inputSnapshot.isFocused) marked=\(inputSnapshot.hasMarkedText) composing=\(isComposingMarkedText) viewportCursor=\(viewportCursor) shape=\(viewportShape) geometryCursor=\(geometryCursor) overscanTop=\(overscanTop) proposedRect=\(Self.debugDescription(for: proposedCursorRect)) beforeRect=\(Self.debugDescription(for: previousPresentation?.cursorRect)) stateRect=\(Self.debugDescription(for: stateSnapshot.cursorRect)) resolvedRect=\(Self.debugDescription(for: resolvedPresentation?.cursorRect)) suppressed=\(resolvedPresentation?.cursorSuppressed ?? false) markedString=\(resolvedPresentation?.markedTextString.map { "\"\(Self.debugLogText($0))\"" } ?? "nil") cursorOverlay=\(Self.debugDescription(for: overlay)) row=\(cursorRow) rowText=\"\(rowText)\""
+    )
+  }
+
+  private static func debugLogText(inRow row: Int, frame: GhosttyTerminalFrame) -> String {
+    debugLogText(debugText(inRow: row, frame: frame))
+  }
+
+  private static func debugLogText(_ text: String) -> String {
+    let sanitized = text
+      .replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "\"", with: "\\\"")
+      .replacingOccurrences(of: "\n", with: "\\n")
+      .replacingOccurrences(of: "\r", with: "\\r")
+    let maxLength = 120
+    guard sanitized.count > maxLength else { return sanitized }
+    return String(sanitized.prefix(maxLength)) + "..."
+  }
+
+  private static func debugDescription(for rect: NSRect?) -> String {
+    rect.map(NSStringFromRect) ?? "nil"
+  }
+
+  private static func debugDescription(for overlay: GridMarkedTextOverlay?) -> String {
+    guard let overlay else { return "nil" }
+    return "(row:\(overlay.row),col:\(overlay.col),width:\(String(format: "%.1f", overlay.width)))"
+  }
+
   private static func debugDescription(for hit: TerminalLinkHit?) -> String {
     guard let hit else { return "nil" }
     return "row=\(hit.row) range=\(hit.range.lowerBound)..<\(hit.range.upperBound) text=\"\(hit.text)\" target=\(debugDescription(for: hit.target))"
@@ -2313,24 +2379,146 @@ public class PTYGridView: NSView {
   }
 
   private func inputCursorRect() -> NSRect? {
-    inferredPromptCursorRect() ?? renderedCursorRect()
+    inferredPromptCursorRect() ?? preservedPromptCursorRectForBlankTransient() ?? renderedCursorRect()
   }
 
   private func inferredPromptCursorRect() -> NSRect? {
     guard
       let viewportFrame = frameSnapshot,
       viewportFrame.cursorX == 0,
-      viewportFrame.cursorY == 0,
       let geometry = renderedGeometry(),
-      let coordinate = inferredPromptCursorCoordinate(in: geometry)
+      shouldInferPromptCursor(for: viewportFrame, in: geometry),
+      let coordinate = (viewportFrame.cursorY != 0 ? inferredPromptCursorCoordinateOnCursorRow(in: geometry) : nil)
+        ?? inferredPromptCursorCoordinate(in: geometry)
     else {
       return nil
+    }
+    if viewportFrame.cursorY != 0,
+      let currentCursorRect = currentInputPresentation?.cursorRect,
+      abs(currentCursorRect.minY - geometry.rowRect(geometry.frame.cursorY).minY) < 0.5
+    {
+      PTYRenderDebugLog.write(
+        "inputCursor preservedPromptCursor rect=\(NSStringFromRect(currentCursorRect)) frameCursor=(\(viewportFrame.cursorX),\(viewportFrame.cursorY))"
+      )
+      return currentCursorRect
     }
     let rect = geometry.rectForCell(row: coordinate.row, col: coordinate.col)
     PTYRenderDebugLog.write(
       "inputCursor inferredPromptCursor=(\(coordinate.col),\(coordinate.row)) rect=\(NSStringFromRect(rect)) frameCursor=(\(viewportFrame.cursorX),\(viewportFrame.cursorY))"
     )
     return rect
+  }
+
+  private func preservedPromptCursorRectForBlankTransient() -> NSRect? {
+    guard
+      let viewportFrame = frameSnapshot,
+      viewportFrame.cursorX == 0,
+      let currentCursorRect = currentInputPresentation?.cursorRect,
+      let geometry = renderedGeometry()
+    else {
+      return nil
+    }
+    let cursorRow = geometry.frame.cursorY
+    guard
+      let currentCoordinate = geometry.coordinate(at: NSPoint(x: currentCursorRect.midX, y: currentCursorRect.midY)),
+      currentCoordinate.row > cursorRow,
+      rowIsBlank(cursorRow, in: geometry),
+      rowIsInPromptInputRegion(currentCoordinate.row, in: geometry)
+        || rect(currentCursorRect, approximatelyEquals: latestPromptInputCursorRect)
+    else {
+      return nil
+    }
+    PTYRenderDebugLog.write(
+      "inputCursor preservedBlankTransient rect=\(NSStringFromRect(currentCursorRect)) frameCursor=(\(viewportFrame.cursorX),\(viewportFrame.cursorY)) promptRow=\(currentCoordinate.row) transientRow=\(cursorRow)"
+    )
+    return currentCursorRect
+  }
+
+  private func rememberPromptCursorRect(from rect: NSRect?) {
+    guard
+      let rect,
+      let geometry = renderedGeometry(),
+      let coordinate = geometry.coordinate(at: NSPoint(x: rect.midX, y: rect.midY)),
+      rowIsInPromptInputRegion(coordinate.row, in: geometry)
+    else {
+      return
+    }
+    latestPromptInputCursorRect = rect
+  }
+
+  private func shouldInferPromptCursor(
+    for viewportFrame: GhosttyTerminalFrame,
+    in geometry: RenderedGridGeometry
+  ) -> Bool {
+    if viewportFrame.cursorY == 0 {
+      return true
+    }
+    let row = geometry.frame.cursorY
+    let rowStart = row * geometry.frame.cols
+    let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
+    guard row >= 0, row < geometry.frame.rows, rowStart < rowEnd else {
+      return false
+    }
+    let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
+    return promptMarkerColumn(in: cells) != nil
+  }
+
+  private func inferredPromptCursorCoordinateOnCursorRow(in geometry: RenderedGridGeometry) -> GridCoordinate? {
+    let row = geometry.frame.cursorY
+    let rowStart = row * geometry.frame.cols
+    let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
+    guard row >= 0, row < geometry.frame.rows, rowStart < rowEnd else {
+      return nil
+    }
+    let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
+    guard let promptCol = promptMarkerColumn(in: cells) else {
+      return nil
+    }
+    let lowerBound = promptCol + 1
+    if let lastTextCol = cells.indices.last(where: { $0 >= lowerBound && cells[$0].scalar != " " }) {
+      return GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
+    }
+    if let cursorCol = cells.indices.last(where: { $0 >= lowerBound && isVisualInputCursorCell(cells[$0]) }) {
+      return GridCoordinate(row: row, col: cursorCol)
+    }
+    return nil
+  }
+
+  private func rowContainsPromptMarker(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
+    guard let cells = cells(inRow: row, frame: geometry.frame) else { return false }
+    return promptMarkerColumn(in: cells) != nil
+  }
+
+  private func rowIsInPromptInputRegion(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
+    guard row >= 0, row < geometry.frame.rows else { return false }
+    for candidateRow in stride(from: row, through: 0, by: -1) {
+      if rowContainsPromptMarker(candidateRow, in: geometry) {
+        return true
+      }
+    }
+    return false
+  }
+
+  private func rowIsBlank(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
+    guard let cells = cells(inRow: row, frame: geometry.frame) else { return false }
+    return cells.allSatisfy { $0.scalar == " " }
+  }
+
+  private func cells(inRow row: Int, frame: GhosttyTerminalFrame) -> [GhosttyTerminalFrame.Cell]? {
+    let rowStart = row * frame.cols
+    let rowEnd = min(rowStart + frame.cols, frame.cells.count)
+    guard row >= 0, row < frame.rows, rowStart < rowEnd else {
+      return nil
+    }
+    return Array(frame.cells[rowStart..<rowEnd])
+  }
+
+  private func rect(_ lhs: NSRect, approximatelyEquals rhs: NSRect?) -> Bool {
+    guard let rhs else { return false }
+    return abs(lhs.minX - rhs.minX) < 0.5
+      && abs(lhs.minY - rhs.minY) < 0.5
+      && abs(lhs.width - rhs.width) < 0.5
+      && abs(lhs.height - rhs.height) < 0.5
   }
 
   private func inferredPromptCursorCoordinate(in geometry: RenderedGridGeometry) -> GridCoordinate? {

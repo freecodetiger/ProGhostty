@@ -468,6 +468,30 @@ struct TerminalSurfaceTests {
     #expect(abs(surfaceView.liveGridView.viewport.visualOffsetY) < surfaceView.liveGridView.terminalCellSize.height)
     #expect(registry.rendererDiagnostics(for: session)?.scrollCommitMode == .coalesced)
     #expect(registry.rendererDiagnostics(for: session)?.lastScrollCommitDuration ?? 0 >= 0)
+    #expect(registry.rendererDiagnostics(for: session)?.bridgeScrollViewportDuration ?? 0 >= 0)
+    #expect(registry.rendererDiagnostics(for: session)?.bridgeScrollbarSnapshotDuration ?? 0 >= 0)
+    #expect(registry.rendererDiagnostics(for: session)?.debugSummary.contains("bridgeScrollViewportMs=") == true)
+    #expect(registry.rendererDiagnostics(for: session)?.debugSummary.contains("bridgeScrollbarSnapshotMs=") == true)
+  }
+
+  @MainActor @Test func rendererDiagnosticsReportBridgeSnapshotTimingsAndCellCount() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTCellGrid))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
+    #expect(diagnostics.bridgeFrameSnapshotDuration >= 0)
+    #expect(diagnostics.bridgeScrollFrameSnapshotDuration >= 0)
+    #expect(diagnostics.bridgeSnapshotCellCount >= 40)
+    #expect(diagnostics.debugSummary.contains("bridgeFrameSnapshotMs="))
+    #expect(diagnostics.debugSummary.contains("bridgeScrollFrameSnapshotMs="))
+    #expect(diagnostics.debugSummary.contains("bridgeSnapshotCells="))
   }
 
   @MainActor @Test func liveCellGridCanDelegateViewportCommitsOffMainThread() throws {
@@ -1004,6 +1028,245 @@ struct TerminalSurfaceTests {
       cellSize: surfaceView.liveGridView.terminalCellSize,
       inset: surfaceView.liveGridView.terminalContentInset
     ))
+  }
+
+  @MainActor @Test func liveGridInfersPromptCursorWhenCodexTransientCursorMovesToPromptLineStart() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTCellGrid))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try codexLikeBridge(suggestions: [
+      "/resume       resume a previous session",
+      "/review       review current changes",
+    ])
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let initialCursor = try #require(surfaceView.liveGridView.cursorCellRect)
+
+    bridge.write(Data("\u{1B}[10;1H".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    #expect(surfaceView.liveGridView.cursorCellRect == initialCursor)
+  }
+
+  @MainActor @Test func liveGridPreservesPromptCursorWhenCodexTransientCursorMovesToBlankRowStart() throws {
+    let gridView = PTYGridView()
+    let rows = [
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "› /res",
+      "",
+    ]
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(43) * cellSize.width,
+      height: inset.height * 2 + CGFloat(rows.count) * cellSize.height
+    )
+    let initialFrame = frameWithText(rows: rows, cols: 43, cursorX: 6, cursorY: 10)
+    let initialScrollFrame = GhosttyTerminalScrollFrame(
+      viewport: initialFrame,
+      overscanTop: [
+        cellRow(text: "history 1", cols: initialFrame.cols),
+        cellRow(text: "history 2", cols: initialFrame.cols),
+      ],
+      overscanBottom: [],
+      requestedOverscanTop: 2,
+      requestedOverscanBottom: 0,
+      viewportStartRow: 12
+    )
+    gridView.render(initialScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<rows.count)))
+    let stableCursor = try #require(gridView.cursorCellRect)
+
+    let transientFrame = frameWithText(rows: rows, cols: 43, cursorX: 0, cursorY: 8)
+    let transientScrollFrame = GhosttyTerminalScrollFrame(
+      viewport: transientFrame,
+      overscanTop: initialScrollFrame.overscanTop,
+      overscanBottom: [],
+      requestedOverscanTop: 2,
+      requestedOverscanBottom: 0,
+      viewportStartRow: 12
+    )
+    gridView.render(transientScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<rows.count)))
+
+    #expect(gridView.cursorCellRect == stableCursor)
+  }
+
+  @MainActor @Test func liveGridPreservesPromptCursorWhenCodexTransientCursorMovesToStyledBlankRowStart() throws {
+    let gridView = PTYGridView()
+    let rows = [
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "› /res",
+      "",
+    ]
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(43) * cellSize.width,
+      height: inset.height * 2 + CGFloat(rows.count) * cellSize.height
+    )
+    let initialFrame = frameWithText(rows: rows, cols: 43, cursorX: 6, cursorY: 10)
+    let initialScrollFrame = GhosttyTerminalScrollFrame(
+      viewport: initialFrame,
+      overscanTop: [
+        cellRow(text: "history 1", cols: initialFrame.cols),
+        cellRow(text: "history 2", cols: initialFrame.cols),
+      ],
+      overscanBottom: [],
+      requestedOverscanTop: 2,
+      requestedOverscanBottom: 0,
+      viewportStartRow: 12
+    )
+    gridView.render(initialScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<rows.count)))
+    let stableCursor = try #require(gridView.cursorCellRect)
+
+    var transientFrame = frameWithText(rows: rows, cols: 43, cursorX: 0, cursorY: 8)
+    for index in (8 * transientFrame.cols)..<((8 + 1) * transientFrame.cols) {
+      transientFrame.cells[index].usesDefaultBackground = false
+      transientFrame.cells[index].background = GhosttyTerminalFrame.RGB(r: 8, g: 24, b: 40)
+    }
+    let transientScrollFrame = GhosttyTerminalScrollFrame(
+      viewport: transientFrame,
+      overscanTop: initialScrollFrame.overscanTop,
+      overscanBottom: [],
+      requestedOverscanTop: 2,
+      requestedOverscanBottom: 0,
+      viewportStartRow: 12
+    )
+    gridView.render(transientScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<rows.count)))
+
+    #expect(gridView.cursorCellRect == stableCursor)
+  }
+
+  @MainActor @Test func liveGridPreservesPromptCursorWhenCodexTransientFrameErasesPromptRow() throws {
+    let gridView = PTYGridView()
+    let stableRows = [
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "› /res",
+      "",
+    ]
+    let transientRows = Array(repeating: "", count: stableRows.count)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(43) * cellSize.width,
+      height: inset.height * 2 + CGFloat(stableRows.count) * cellSize.height
+    )
+    let initialFrame = frameWithText(rows: stableRows, cols: 43, cursorX: 6, cursorY: 10)
+    let initialScrollFrame = GhosttyTerminalScrollFrame(
+      viewport: initialFrame,
+      overscanTop: [
+        cellRow(text: "history 1", cols: initialFrame.cols),
+        cellRow(text: "history 2", cols: initialFrame.cols),
+      ],
+      overscanBottom: [],
+      requestedOverscanTop: 2,
+      requestedOverscanBottom: 0,
+      viewportStartRow: 12
+    )
+    gridView.render(initialScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<stableRows.count)))
+    let stableCursor = try #require(gridView.cursorCellRect)
+
+    let transientFrame = frameWithText(rows: transientRows, cols: 43, cursorX: 0, cursorY: 8)
+    let transientScrollFrame = GhosttyTerminalScrollFrame(
+      viewport: transientFrame,
+      overscanTop: initialScrollFrame.overscanTop,
+      overscanBottom: [],
+      requestedOverscanTop: 2,
+      requestedOverscanBottom: 0,
+      viewportStartRow: 12
+    )
+    gridView.render(transientScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<stableRows.count)))
+
+    #expect(gridView.cursorCellRect == stableCursor)
+  }
+
+  @MainActor @Test func liveGridPreservesContinuationCursorWhenCodexTransientMovesToBlankRowStart() throws {
+    let gridView = PTYGridView()
+    let stableRows = [
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "› long input fills the first prompt line",
+      "  continuation text near wrap edge",
+    ]
+    let transientRows = Array(repeating: "", count: stableRows.count)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(43) * cellSize.width,
+      height: inset.height * 2 + CGFloat(stableRows.count) * cellSize.height
+    )
+    let initialFrame = frameWithText(rows: stableRows, cols: 43, cursorX: 35, cursorY: 11)
+    let initialScrollFrame = GhosttyTerminalScrollFrame(
+      viewport: initialFrame,
+      overscanTop: [
+        cellRow(text: "history 1", cols: initialFrame.cols),
+        cellRow(text: "history 2", cols: initialFrame.cols),
+      ],
+      overscanBottom: [],
+      requestedOverscanTop: 2,
+      requestedOverscanBottom: 0,
+      viewportStartRow: 12
+    )
+    gridView.render(initialScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<stableRows.count)))
+    let stableCursor = try #require(gridView.cursorCellRect)
+
+    let transientFrame = frameWithText(rows: transientRows, cols: 43, cursorX: 0, cursorY: 8)
+    let transientScrollFrame = GhosttyTerminalScrollFrame(
+      viewport: transientFrame,
+      overscanTop: initialScrollFrame.overscanTop,
+      overscanBottom: [],
+      requestedOverscanTop: 2,
+      requestedOverscanBottom: 0,
+      viewportStartRow: 12
+    )
+    gridView.render(transientScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<stableRows.count)))
+
+    #expect(gridView.cursorCellRect == stableCursor)
   }
 
   @MainActor @Test func terminalOutputCoordinatorKeepsLatestSnapshotDuringCoalescingWindow() async throws {
@@ -1771,6 +2034,49 @@ struct TerminalSurfaceTests {
     let firstRect = gridView.firstRect(forCharacterRange: NSRange(location: 0, length: 1), actualRange: nil)
 
     #expect(firstRect == expectedScreenRect)
+  }
+
+  @MainActor @Test func ptyGridUpdatesCursorOverlayWhenScrollFrameArrivesDuringPixelScroll() throws {
+    let gridView = PTYGridView()
+    var initialFrame = frameWithText(rows: ["visible text"], cols: 24, cursorX: 2, cursorY: 0)
+    initialFrame.isAlternateScreen = false
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(initialFrame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(initialFrame.rows) * cellSize.height
+    )
+    let initialScrollFrame = GhosttyTerminalScrollFrame(
+      viewport: initialFrame,
+      overscanTop: [cellRow(text: "previous row", cols: initialFrame.cols)],
+      overscanBottom: [cellRow(text: "next row", cols: initialFrame.cols)],
+      requestedOverscanTop: 1,
+      requestedOverscanBottom: 1,
+      viewportStartRow: 1
+    )
+    gridView.render(initialScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: [0]))
+    #expect(gridView.currentCursorOverlay?.col == 2)
+
+    gridView.viewportCanScrollHandler = { _ in true }
+    gridView.testScrollWheelDeltaY(cellSize.height * 0.75)
+
+    var nextFrame = frameWithText(rows: ["visible text"], cols: 24, cursorX: 8, cursorY: 0)
+    nextFrame.isAlternateScreen = false
+    let nextScrollFrame = GhosttyTerminalScrollFrame(
+      viewport: nextFrame,
+      overscanTop: [cellRow(text: "previous row", cols: nextFrame.cols)],
+      overscanBottom: [cellRow(text: "next row", cols: nextFrame.cols)],
+      requestedOverscanTop: 1,
+      requestedOverscanBottom: 1,
+      viewportStartRow: 1
+    )
+
+    gridView.render(nextScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: [0]))
+
+    let overlay = try #require(gridView.currentCursorOverlay)
+    #expect(overlay.col == 8)
   }
 
   @MainActor @Test func ptyGridMarkedTextHidesTerminalCursorDuringComposition() throws {
@@ -2749,6 +3055,9 @@ private final class RuntimeFailingMetalDirectRenderingEngine: MetalDirectRenderi
   let lastRenderedRunCount = 0
   let lastRenderPassLoadPolicy = MetalDirectRenderPassLoadPolicy.clear
   let lastWaitedForCompletion = false
+  let lastGPUWaitReason = "none"
+  let lastGlyphTextureHitCount = 0
+  let lastGlyphTextureMissCount = 0
   let staleCompletionCount = 0
 
   func resetTextureCache() {}
