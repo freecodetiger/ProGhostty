@@ -1013,7 +1013,6 @@ struct TerminalSurfaceTests {
     bridge.write(Data("\u{1B}[8;1H".utf8))
     let transientSnapshot = ResizeRenderSnapshot.capture(from: bridge)
     registry.renderOutput(transientSnapshot, bridge: bridge, session: session, wasPinnedToBottom: true)
-    try await Task.sleep(nanoseconds: 1_000_000)
 
     #expect(surfaceView.liveGridView.cursorCellRect == initialCursor)
 
@@ -1297,7 +1296,7 @@ struct TerminalSurfaceTests {
       wasPinnedToBottom: true
     )
 
-    try await Task.sleep(nanoseconds: 20_000_000)
+    coordinator.flush(session: session)
 
     #expect(deliveredCursorPositions == [GridCoordinate(row: 1, col: 3)])
   }
