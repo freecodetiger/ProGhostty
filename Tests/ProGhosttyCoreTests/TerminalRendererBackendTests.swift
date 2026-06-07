@@ -715,7 +715,7 @@ struct TerminalRendererBackendTests {
     #expect(diagnostics.metalDirectRenderPassLoadAction == "load")
   }
 
-  @MainActor @Test func metalDirectRendererBackendRebuildsSceneWhenScrollOverscanChanges() {
+  @MainActor @Test func metalDirectRendererBackendKeepsScrollOverscanChangesDirty() {
     let backend = MetalDirectRendererBackend()
     let initial = scrollFrame(
       viewportRows: ["two", "three"],
@@ -736,9 +736,10 @@ struct TerminalRendererBackendTests {
     backend.flushPendingFrame()
 
     let diagnostics = backend.diagnostics
-    #expect(diagnostics.redrawMode == .full)
-    #expect(diagnostics.metalDirectDrawnRowCount == 4)
-    #expect(diagnostics.metalDirectRenderPassLoadAction == "clear")
+    #expect(diagnostics.redrawMode != .full)
+    #expect(diagnostics.metalDirectFullRedrawReason == "none")
+    #expect(diagnostics.metalDirectDrawnRowCount < 4)
+    #expect(diagnostics.metalDirectRenderPassLoadAction == "load")
   }
 
   @MainActor @Test func metalDirectRendererBackendStagesResizeFramesUntilDiagnosticsComplete() {

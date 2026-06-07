@@ -114,20 +114,32 @@ enum TerminalAttributedDiff {
 enum PTYRenderDebugLog {
   private static let url = URL(fileURLWithPath: "/tmp/proghostty-render.log")
   static let isEnabled = ProcessInfo.processInfo.environment["PROGHOSTTY_RENDER_DEBUG"] == "1"
+  private static let maxBytes = Int(ProcessInfo.processInfo.environment["PROGHOSTTY_RENDER_LOG_MAX_BYTES"] ?? "")
+    ?? 8 * 1024 * 1024
+  private static let sampleRate = max(
+    1,
+    Int(ProcessInfo.processInfo.environment["PROGHOSTTY_RENDER_LOG_SAMPLE_RATE"] ?? "") ?? 1
+  )
+  private static let sink = BoundedDebugLogSink(url: url, maxBytes: maxBytes, batchSize: 64)
 
   static func write(_ message: String) {
     guard isEnabled else { return }
-    let line = "[\(Date())] \(message)\n"
-    guard let data = line.data(using: .utf8) else { return }
-    if FileManager.default.fileExists(atPath: url.path) {
-      if let handle = try? FileHandle(forWritingTo: url) {
-        defer { try? handle.close() }
-        _ = try? handle.seekToEnd()
-        try? handle.write(contentsOf: data)
-      }
-    } else {
-      try? data.write(to: url)
-    }
+    guard shouldWrite(message) else { return }
+    sink.write(message)
+  }
+
+  private static func shouldWrite(_ message: String) -> Bool {
+    guard sampleRate > 1, isHighFrequency(message) else { return true }
+    return Int.random(in: 0..<sampleRate) == 0
+  }
+
+  private static func isHighFrequency(_ message: String) -> Bool {
+    message.hasPrefix("wheel ")
+      || message.hasPrefix("wheel-decision")
+      || message.hasPrefix("metalDirectPresent")
+      || message.hasPrefix("metalDirectEngine")
+      || message.hasPrefix("inputCursor")
+      || message.hasPrefix("inputRender")
   }
 }
 

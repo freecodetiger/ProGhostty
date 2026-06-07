@@ -713,43 +713,7 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     guard previousOverscanTopRows == overscanTopRows, previousViewportRows == viewportRows else {
       return "scroll-frame-shape-changed"
     }
-    return overscanRowsChanged(
-      previous: previousExpandedFrame,
-      next: expanded,
-      overscanTopRows: overscanTopRows,
-      viewportRows: viewportRows
-    ) ? "overscan-content-changed" : nil
-  }
-
-  private func overscanRowsChanged(
-    previous: GhosttyTerminalFrame,
-    next: GhosttyTerminalFrame,
-    overscanTopRows: Int,
-    viewportRows: Int
-  ) -> Bool {
-    let viewportRange = overscanTopRows..<(overscanTopRows + viewportRows)
-    for row in 0..<next.rows where !viewportRange.contains(row) {
-      if rowChanged(previous: previous, next: next, row: row) {
-        return true
-      }
-    }
-    return false
-  }
-
-  private func rowChanged(previous: GhosttyTerminalFrame, next: GhosttyTerminalFrame, row: Int) -> Bool {
-    guard row >= 0, row < previous.rows, row < next.rows, previous.cols == next.cols else {
-      return true
-    }
-    let cols = next.cols
-    let start = row * cols
-    let end = min(start + cols, previous.cells.count, next.cells.count)
-    guard start < end else {
-      return false
-    }
-    for index in start..<end where previous.cells[index] != next.cells[index] {
-      return true
-    }
-    return false
+    return nil
   }
 
   private func instanceRanges(

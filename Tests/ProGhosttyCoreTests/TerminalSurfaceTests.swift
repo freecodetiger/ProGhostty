@@ -494,6 +494,57 @@ struct TerminalSurfaceTests {
     #expect(diagnostics.debugSummary.contains("bridgeSnapshotCells="))
   }
 
+  @MainActor @Test func scrollCommitUsesSingleScrollFrameSnapshotBoundary() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .ghosttyVTCellGrid))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    registry.flushPendingRenderers()
+
+    let diagnostics = try #require(registry.rendererDiagnostics(for: session))
+    #expect(diagnostics.bridgeFrameSnapshotDuration == 0)
+    #expect(diagnostics.bridgeScrollFrameSnapshotDuration >= 0)
+    #expect(diagnostics.bridgeSnapshotCellCount == 80)
+  }
+
+  @MainActor @Test func scrollCommitRendersWithoutSynchronouslyFlushingBackend() throws {
+    let renderer = PaletteRecordingLiveRendererBackend()
+    let registry = PTYTerminalSurfaceRegistry(
+      isMetalDirectAvailable: true,
+      makeDirectRenderer: { _ in renderer }
+    )
+    registry.applyRendererOptions(TerminalRendererOptions(mode: .metalDirect))
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 2, maxScrollback: 100)
+
+    bridge.write(Data("first\r\nsecond\r\nthird\r\nfourth".utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+    let surfaceView = try #require(registry.viewForSession(session) as? PTYTerminalSurfaceView)
+    let renderCountBeforeScroll = renderer.renderFrameCount
+    let flushCountBeforeScroll = renderer.flushCount
+
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    surfaceView.liveGridView.testScrollWheelDeltaY(37)
+    surfaceView.liveGridView.flushPendingScrollCommit()
+
+    #expect(renderer.renderFrameCount > renderCountBeforeScroll)
+    #expect(renderer.flushCount == flushCountBeforeScroll)
+
+    registry.flushPendingRenderers()
+
+    #expect(renderer.flushCount > flushCountBeforeScroll)
+  }
+
   @MainActor @Test func liveCellGridCanDelegateViewportCommitsOffMainThread() throws {
     let registry = PTYTerminalSurfaceRegistry()
     let session = TerminalSessionID()
@@ -2945,34 +2996,51 @@ private final class DummyTextInputClient: NSObject, NSTextInputClient {
 
 @MainActor
 private final class PaletteRecordingLiveRendererBackend: TerminalLiveRendererBackend {
-  let gridView = PTYGridView()
+  private let wrapped = GhosttyVTCellGridRendererBackend()
   var appliedPalettes: [TerminalSurfacePalette] = []
-  private let diagnosticsState = TerminalRendererDiagnostics(
-    backend: .metalDirect,
-    requestedBackend: .metalDirect,
-    metalDirectPipelineReady: true
-  )
+  var renderFrameCount = 0
+  var flushCount = 0
 
-  var view: NSView { gridView }
-  var diagnostics: TerminalRendererDiagnostics { diagnosticsState }
-  var selectedText: String? { nil }
+  var gridView: PTYGridView { wrapped.gridView }
+  var view: NSView { wrapped.view }
+  var diagnostics: TerminalRendererDiagnostics {
+    var diagnostics = wrapped.diagnostics
+    diagnostics.backend = .metalDirect
+    diagnostics.requestedBackend = .metalDirect
+    diagnostics.metalDirectPipelineReady = true
+    return diagnostics
+  }
+  var selectedText: String? { wrapped.selectedText }
 
-  func setInputHandler(_ handler: ((Data) -> Void)?) {}
-  func setActivationHandler(_ handler: (() -> Void)?) {}
-  func applyPalette(_ palette: TerminalSurfacePalette) { appliedPalettes.append(palette) }
-  func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String?) {}
-  func setFocused(_ isFocused: Bool) {}
-  func render(frame: GhosttyTerminalFrame) {}
-  func focus() {}
+  func setInputHandler(_ handler: ((Data) -> Void)?) { wrapped.setInputHandler(handler) }
+  func setActivationHandler(_ handler: (() -> Void)?) { wrapped.setActivationHandler(handler) }
+  func applyPalette(_ palette: TerminalSurfacePalette) {
+    appliedPalettes.append(palette)
+    wrapped.applyPalette(palette)
+  }
+  func applyFont(family: String, size: CGFloat, cjkFallbackFamily: String?) {
+    wrapped.applyFont(family: family, size: size, cjkFallbackFamily: cjkFallbackFamily)
+  }
+  func setFocused(_ isFocused: Bool) { wrapped.setFocused(isFocused) }
+  func render(frame: GhosttyTerminalFrame) { wrapped.render(frame: frame) }
+  func focus() { wrapped.focus() }
 
-  func applyOptions(_ options: TerminalRendererOptions) {}
-  func render(_ renderFrame: TerminalRenderFrame) {}
-  func flushPendingFrame() {}
-  func updateOverscanDiagnostics(topRows: Int, bottomRows: Int) {}
-  func markResizePending() {}
-  func applyResizeDiagnostics(_ diagnostics: TerminalResizeDiagnostics) {}
-  func resetViewportStartRowKeepingVisualOffset() {}
-  func resetPixelScroll(suppressMomentum: Bool) {}
+  func applyOptions(_ options: TerminalRendererOptions) { wrapped.applyOptions(options) }
+  func render(_ renderFrame: TerminalRenderFrame) {
+    renderFrameCount += 1
+    wrapped.render(renderFrame)
+  }
+  func flushPendingFrame() {
+    flushCount += 1
+    wrapped.flushPendingFrame()
+  }
+  func updateOverscanDiagnostics(topRows: Int, bottomRows: Int) {
+    wrapped.updateOverscanDiagnostics(topRows: topRows, bottomRows: bottomRows)
+  }
+  func markResizePending() { wrapped.markResizePending() }
+  func applyResizeDiagnostics(_ diagnostics: TerminalResizeDiagnostics) { wrapped.applyResizeDiagnostics(diagnostics) }
+  func resetViewportStartRowKeepingVisualOffset() { wrapped.resetViewportStartRowKeepingVisualOffset() }
+  func resetPixelScroll(suppressMomentum: Bool) { wrapped.resetPixelScroll(suppressMomentum: suppressMomentum) }
 }
 
 @MainActor

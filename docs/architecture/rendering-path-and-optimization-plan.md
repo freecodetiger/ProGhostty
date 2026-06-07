@@ -1,6 +1,6 @@
 # Rendering Path and Optimization Plan
 
-Last updated: 2026-06-04
+Last updated: 2026-06-07
 
 ## Purpose
 
@@ -82,8 +82,9 @@ TerminalRenderFrame
 Important detail: `MetalDirectRendererView` inherits `PTYGridView`. Its
 `draw(_:)` is empty, but `present(_:)` still calls `super.render(...)` to keep
 grid state, input presentation, cursor rects, selection, link hover, and IME
-state aligned. For scroll frames it currently passes a full dirty result for
-the visible viewport.
+state aligned. For scroll frames it passes a full dirty result to `PTYGridView`
+for state synchronization only; Metal dirty-row evaluation is computed
+separately in `MetalDirectRendererBackend.updateDiagnostics`.
 
 ### Scroll Render Path
 
@@ -101,20 +102,19 @@ trackpad / wheel event
   -> PTYTerminalSurfaceRegistry.scrollViewport
   -> GhosttyVTBridge.scrollViewport
   -> GhosttyVTBridge.scrollbar
-  -> PTYTerminalSurfaceRegistry.render
-  -> GhosttyVTBridge.frame
+  -> PTYTerminalSurfaceRegistry.renderScrollCommit
   -> GhosttyVTBridge.scrollFrame
   -> backend.render
-  -> backend.flushPendingFrame
   -> resetViewportStartRowKeepingVisualOffset
+  -> scheduled backend flush on the next main-queue turn
 ```
 
 The key performance distinction:
 
 - Pure sub-row pixel movement is relatively cheap.
 - Row commit frames are heavier because they update the authoritative
-  `libghostty-vt` viewport, capture a new snapshot, render it, and currently
-  force a backend flush.
+  `libghostty-vt` viewport, capture a new scroll snapshot, render it into the
+  backend, and schedule presentation.
 
 ## Existing Caches and Coalescing
 
@@ -137,26 +137,32 @@ commit frames can still do too much work synchronously on the main actor.
 
 ## Known Heavy Points
 
-### Synchronous Scroll Commit Flush
+### Scroll Commit Main-Actor Work
 
-`PTYTerminalSurfaceRegistry.scrollViewport` currently calls:
+`PTYTerminalSurfaceRegistry.scrollViewport` now avoids the previous synchronous
+`backend.flushPendingFrame()` call on the scroll path. The current shape is:
 
 ```text
 bridge.scrollViewport
 surface.scrollbar = bridge.scrollbar
-render(bridge, surface, session)
-backend.flushPendingFrame
+renderScrollCommit(bridge, surface, session)
+surface.liveRenderer.resetViewportStartRowKeepingVisualOffset
 ```
 
-This means a row commit frame can include VT state mutation, snapshot capture,
-renderer update, and Metal/AppKit flush before control returns to the scroll
-event path.
+This removes the renderer flush from `lastScrollCommitDuration`, but a row
+commit still includes VT state mutation, scrollbar capture, scroll-frame
+snapshot capture, backend staging, and viewport-remainder reset on the main
+actor.
 
 ### Duplicate Bridge Snapshot Work
 
-The scroll path captures `scrollbar`, then `render(bridge, ...)` captures
-`frame` and `scrollFrame`. The debug block in `render(bridge, ...)` can capture
-another `scrollbar` and `scrollFrame`.
+The scroll commit path has a dedicated single-snapshot boundary:
+`scrollbar` plus one `scrollFrame(overscanTop: 2, overscanBottom: 2)`.
+It no longer calls `bridge.frame()` during row commits.
+
+The output render path still captures both `frame()` and `scrollFrame(...)`
+when live-grid rendering is selected. Resize rendering uses an explicit
+`ResizeRenderSnapshot` boundary.
 
 Each snapshot crosses the bridge lock and copies cells into Swift values.
 
@@ -182,11 +188,14 @@ view. During scrolling, repeated array construction can add CPU pressure.
 
 ### Full Scene Rebuild Heuristics
 
-`MetalDirectRendererBackend.scrollFrameNeedsFullSceneRebuild` can force a full
+`MetalDirectRendererBackend.scrollFrameFullSceneRebuildReason` can force a full
 dirty result when scroll-frame presentation changes, dimensions change,
-overscan counts change, or overscan rows changed.
+overscan counts change, or the previous expanded frame is missing.
 
-This is conservative and correct, but it can make row commit frames expensive.
+The current pass removed the old `overscan-content-changed` full-redraw reason
+for consecutive scrollFrame renders with stable shape. This keeps normal
+continuous scroll commits closer to dirty-row rendering, while retaining
+conservative full redraws for ambiguous shape or presentation changes.
 
 ### GPU Wait Conditions
 
@@ -215,16 +224,17 @@ The most likely cause is not a single missing cache. It is the combination of:
 
 1. A row commit is triggered during scrolling.
 2. The row commit synchronously mutates `libghostty-vt` and captures snapshots.
-3. The renderer is immediately flushed.
-4. The frame is classified as full or near-full dirty because of scrollFrame or
-   overscan state.
+3. The renderer stages the newest frame and flushes it on the next main-queue
+   turn.
+4. The frame may be classified as full or near-full dirty because of
+   scrollFrame or overscan state.
 5. Metal builds a large number of vertices and may create glyph textures.
 6. The command buffer may wait for completion.
 
 This explains why the issue is occasional: most pixel-scroll events are cheap,
-but row commit frames can hit several expensive paths at once.
+but row commit frames can still hit several expensive paths close together.
 
-## Diagnostics to Add First
+## Diagnostics
 
 Before changing renderer behavior, add diagnostics that identify which layer
 caused a slow frame.
@@ -240,7 +250,7 @@ Current status:
 
 ### Bridge Diagnostics
 
-Add per-frame durations:
+Available per-frame durations:
 
 - `bridgeScrollViewportDuration` - added
 - `bridgeScrollbarSnapshotDuration` - added
@@ -258,7 +268,7 @@ These are also emitted in `TerminalRendererDiagnostics.debugSummary` as:
 
 ### MetalDirect Backend Diagnostics
 
-Add or refine:
+Available MetalDirect fields:
 
 - `metalDirectFullRedrawReason` - added
 - `metalDirectExpandedFrameCellCount` - added
@@ -281,19 +291,23 @@ Keep watching:
 - `metalDirectGlyphScanCellCount`
 - `metalDirectDrawnCellCount`
 
-## Optimization Plan
+## Optimization Plan Status
 
 ### Phase 1: Measure the Slow Frames
 
 Goal: prove which component produces scroll spikes.
 
-Tasks:
+Status: mostly implemented. Continue using the diagnostics during manual
+long-history scroll testing.
 
-- Add bridge timing diagnostics. Status: added for direct bridge render and
-  scroll commit paths.
-- Add full-redraw and GPU-wait reason diagnostics. Status: added for
-  MetalDirect frames.
-- Add glyph texture hit/miss diagnostics. Status: added for MetalDirect frames.
+Completed:
+
+- Bridge timing diagnostics for direct bridge render and scroll commit paths.
+- Full-redraw and GPU-wait reason diagnostics for MetalDirect frames.
+- Glyph texture hit/miss diagnostics for MetalDirect frames.
+
+Still useful to exercise:
+
 - Exercise long scrollback, slow trackpad crossing, fast inertial scroll, ASCII
   output, styled output, and CJK output.
 
@@ -321,7 +335,9 @@ Slow-frame triage guide:
 Goal: keep row commits from forcing a full render flush inside the scroll event
 path.
 
-Planned change:
+Status: implemented.
+
+Current behavior:
 
 - In `PTYTerminalSurfaceRegistry.scrollViewport`, keep the authoritative
   `bridge.scrollViewport` commit.
@@ -329,8 +345,8 @@ Planned change:
 - Do not immediately call `backend.flushPendingFrame()` on the scroll path.
 - Let the backend's existing scheduled flush coalesce and present the newest
   frame.
-- Preserve `resetViewportStartRowKeepingVisualOffset` timing so slow trackpad
-  row crossing does not twitch.
+- Keep `resetViewportStartRowKeepingVisualOffset` on the scroll commit path so
+  slow trackpad row crossing does not twitch.
 
 Success criteria:
 
@@ -343,7 +359,15 @@ Success criteria:
 
 Goal: avoid repeated bridge snapshot work in one render frame.
 
-Planned change:
+Status: partially implemented for scroll commits.
+
+Implemented:
+
+- Scroll commits use `renderScrollCommit`.
+- Scroll commits capture `scrollbar` plus one `scrollFrame(...)`.
+- Scroll commits do not capture `bridge.frame()`.
+
+Remaining planned change:
 
 - Introduce or extend a small render snapshot boundary containing:
   - `frame`
@@ -351,7 +375,8 @@ Planned change:
   - `scrollbar`
   - optional `html`
   - optional `plainText`
-- Use this boundary in output render, resize render, and scroll render.
+- Use this boundary consistently in output render and any future resize or
+  fallback paths that need it.
 - Remove duplicate `scrollbar` and `scrollFrame` capture from debug-only logging,
   or guard it behind an explicit debug flag.
 
@@ -366,13 +391,22 @@ Success criteria:
 Goal: avoid treating normal scroll commits as full scene rebuilds when only a
 small set of rows or overscan boundaries changed.
 
-Planned change:
+Status: partially implemented.
+
+Implemented:
+
+- Consecutive scrollFrame renders with stable shape no longer trigger a full
+  redraw only because top/bottom overscan content changed.
+- Full redraws remain for presentation changes, grid-size changes, focus
+  changes, transient overlay changes, missing previous expanded frame, and
+  scrollFrame shape mismatches.
+
+Remaining planned change:
 
 - Centralize expanded-frame construction so it is not rebuilt independently in
   several places.
-- Track whether the viewport content changed separately from overscan-only
-  changes.
-- Avoid full dirty result when a smaller dirty range can preserve correctness.
+- Track whether smaller dirty ranges can preserve correctness for more
+  scrollFrame transitions.
 - Keep cursor, selection, IME, and link hover overlays correct.
 
 Success criteria:
@@ -399,6 +433,88 @@ Success criteria:
 - `metalDirectWaitedForCompletion` is uncommon during scroll.
 - New glyph-heavy content produces fewer visible spikes.
 - No stale or torn frame presentation appears during pixel scroll.
+
+## Current Pass Summary
+
+This optimization pass uses a gradual, low-risk strategy. The goal is to reduce
+long-history scroll stutter without changing `libghostty-vt` as the single
+source of terminal truth and without keeping a full scrollback mirror in the UI.
+
+Implemented in this pass:
+
+- Added `renderScrollCommit` so row commits capture one `scrollFrame(...)`
+  snapshot and do not call `bridge.frame()`.
+- Removed the scroll-path forced `backend.flushPendingFrame()`. Scroll commits
+  now rely on the backend's existing scheduled flush.
+- Kept `resetViewportStartRowKeepingVisualOffset` immediately after staging the
+  scroll frame to preserve slow-row-crossing cursor stability.
+- Removed the old `overscan-content-changed` full-redraw reason for consecutive
+  scrollFrame renders with stable shape.
+
+Expected effect:
+
+- `lastScrollCommitDuration` no longer includes renderer presentation.
+- `bridgeFrameSnapshotMs` should be `0` on scroll commits.
+- `bridgeSnapshotCells` should stay bounded by viewport plus overscan rows.
+- `metalDirectFullRedrawReason=overscan-content-changed` should not appear
+  during ordinary continuous scrollback scrolling.
+
+Rollback trigger:
+
+- If cursor, selection, link hover, IME, or pixel remainder drift appears, keep
+  the single-snapshot boundary and revert only the forced-flush removal first.
+
+### Reassess Full Async Pipeline
+
+Only introduce a full `ScrollFramePipeline` if the first three stages still show
+row-commit frames exceeding the frame budget.
+
+Status: pending manual diagnostics after the implemented stages.
+
+Escalation criteria:
+
+- `scrollCommitMs` still spikes after removing the forced scroll-path flush.
+- Bridge snapshot timings remain high even after duplicate capture is removed.
+- MainActor work still blocks fast wheel input during long-history scrolling.
+
+If escalation is needed, split the architecture into:
+
+- `ScrollInteractionState` for pixel remainder and pending row delta.
+- `ScrollFramePipeline` for coalescing row commits and dropping stale snapshots.
+- `ViewportSnapshotProvider` for `bridge.scrollViewport`, `scrollbar`, and
+  `scrollFrame` capture.
+- `RendererFrameScheduler` for presenting the latest snapshot on display-frame
+  timing.
+
+This full pipeline should remain internal and should still avoid full scrollback
+mirroring.
+
+## Verification Commands
+
+Targeted tests:
+
+```bash
+swift test --filter TerminalSurfaceTests/liveCellGridWheelRowCommitsAreCoalescedUntilRendererFlush --no-parallel
+swift test --filter TerminalSurfaceTests/liveCellGridScrollsLibGhosttyViewportForScrollbackHistory --no-parallel
+swift test --filter TerminalSurfaceTests --no-parallel
+swift test --filter TerminalRendererBackendTests --no-parallel
+```
+
+Full regression:
+
+```bash
+swift test --no-parallel
+```
+
+Manual diagnostics:
+
+- Generate 20k to 100k lines of scrollback.
+- Fast-scroll with a trackpad through cold and warm history.
+- Compare `scrollCommitMs`, `scrollRenderMs`, `bridgeScrollViewportMs`,
+  `bridgeFrameSnapshotMs`, `bridgeScrollFrameSnapshotMs`,
+  `metalDirectFullRedrawReason`, `metalDirectWaited`,
+  `metalDirectGPUWaitReason`, and `metalDirectGlyphTextureMisses` before and
+  after each stage.
 
 ## Regression Coverage To Maintain
 
