@@ -1429,6 +1429,7 @@ struct TerminalSurfaceTests {
     let coordinator = TerminalOutputBurstCoordinator(
       coalescingDelayNanoseconds: 1,
       frameIntervalNanoseconds: 100_000_000,
+      maxPendingBytes: 1,
       maxFlushLineFeeds: 8
     ) { _, _, _, shouldRender, completion in
       if shouldRender {
@@ -1439,9 +1440,8 @@ struct TerminalSurfaceTests {
 
     coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
 
-    try await Task.sleep(nanoseconds: 30_000_000)
-
     #expect(renderedFrames == 1)
+    coordinator.cancel(session: session)
   }
 
   @MainActor @Test func terminalOutputBurstCoordinatorIngestsMultipleChunksWithinFrameBudget() async throws {
@@ -1451,6 +1451,7 @@ struct TerminalSurfaceTests {
     let coordinator = TerminalOutputBurstCoordinator(
       coalescingDelayNanoseconds: 1,
       frameIntervalNanoseconds: 100_000_000,
+      maxPendingBytes: 1,
       maxFlushLineFeeds: 8,
       frameIngestBudgetNanoseconds: 100_000_000,
       maxIngestChunksPerFrame: 99
@@ -1461,9 +1462,8 @@ struct TerminalSurfaceTests {
 
     coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
 
-    try await Task.sleep(nanoseconds: 30_000_000)
-
     #expect(shouldRenderValues == [false, false, true])
+    coordinator.cancel(session: session)
   }
 
   @MainActor @Test func terminalOutputBurstCoordinatorPresentsWhenFrameBudgetIsSpent() async throws {
@@ -1475,6 +1475,7 @@ struct TerminalSurfaceTests {
     let coordinator = TerminalOutputBurstCoordinator(
       coalescingDelayNanoseconds: 1,
       frameIntervalNanoseconds: 100_000_000,
+      maxPendingBytes: 1,
       maxFlushLineFeeds: 8,
       frameIngestBudgetNanoseconds: 1_000_000,
       maxIngestChunksPerFrame: 99,
@@ -1490,10 +1491,9 @@ struct TerminalSurfaceTests {
 
     coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
 
-    try await Task.sleep(nanoseconds: 30_000_000)
-
     #expect(Array(deliveredLineCounts.prefix(3)) == [8, 8, 0])
     #expect(Array(shouldRenderValues.prefix(3)) == [false, false, true])
+    coordinator.cancel(session: session)
   }
 
   @MainActor @Test func terminalOutputBurstCoordinatorDefaultBulkFrameStartsWithSmallerLineBatches() async throws {
@@ -1505,6 +1505,7 @@ struct TerminalSurfaceTests {
     let coordinator = TerminalOutputBurstCoordinator(
       coalescingDelayNanoseconds: 1,
       frameIntervalNanoseconds: 100_000_000,
+      maxPendingBytes: 1,
       frameIngestBudgetNanoseconds: 1_000_000,
       nowNanoseconds: { now }
     ) { data, _, _, shouldRender, completion in
@@ -1518,11 +1519,10 @@ struct TerminalSurfaceTests {
 
     coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
 
-    try await Task.sleep(nanoseconds: 30_000_000)
-
     let firstFrameOutput = (1...48).map(String.init).joined(separator: "\n") + "\n"
     #expect(delivered.joined() == firstFrameOutput)
     #expect(shouldRenderValues == [false, false, false, true])
+    coordinator.cancel(session: session)
   }
 
   @MainActor @Test func terminalOutputBurstCoordinatorDefaultBulkFramesRampLineBatchSize() async throws {
@@ -1545,11 +1545,15 @@ struct TerminalSurfaceTests {
 
     coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
 
-    try await Task.sleep(nanoseconds: 30_000_000)
+    let deadline = Date().addingTimeInterval(1)
+    while !chunkLineCounts.contains(128) && Date() < deadline {
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
 
     let nonEmptyLineCounts = chunkLineCounts.filter { $0 > 0 }
     #expect(Array(nonEmptyLineCounts.prefix(9)) == [16, 16, 16, 16, 16, 16, 32, 32, 32])
     #expect(nonEmptyLineCounts.contains(128))
+    coordinator.cancel(session: session)
   }
 
   @MainActor @Test func terminalOutputBurstCoordinatorPresentsScheduledFramesImmediately() async throws {
@@ -1559,6 +1563,7 @@ struct TerminalSurfaceTests {
     let coordinator = TerminalOutputBurstCoordinator(
       coalescingDelayNanoseconds: 1,
       frameIntervalNanoseconds: 100_000_000,
+      maxPendingBytes: 1,
       maxFlushLineFeeds: 8
     ) { _, _, delivery, shouldRender, completion in
       if shouldRender {
@@ -1569,9 +1574,8 @@ struct TerminalSurfaceTests {
 
     coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
 
-    try await Task.sleep(nanoseconds: 30_000_000)
-
     #expect(deliveries == [.immediate])
+    coordinator.cancel(session: session)
   }
 
   @MainActor @Test func terminalOutputBurstCoordinatorDoesNotFlushBacklogForImmediateOutput() async throws {
@@ -1581,6 +1585,7 @@ struct TerminalSurfaceTests {
     let coordinator = TerminalOutputBurstCoordinator(
       coalescingDelayNanoseconds: 1,
       frameIntervalNanoseconds: 100_000_000,
+      maxPendingBytes: 1,
       maxFlushLineFeeds: 8,
       maxIngestChunksPerFrame: 3
     ) { data, _, _, _, completion in
@@ -1589,13 +1594,12 @@ struct TerminalSurfaceTests {
     }
 
     coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
-    try await Task.sleep(nanoseconds: 30_000_000)
     let deliveredBeforeImmediate = delivered.count
     coordinator.receive(Data("prompt".utf8), session: session, delivery: .immediate)
-    try await Task.sleep(nanoseconds: 30_000_000)
 
     #expect(deliveredBeforeImmediate == 3)
     #expect(delivered.count == deliveredBeforeImmediate)
+    coordinator.cancel(session: session)
   }
 
   @MainActor @Test func terminalOutputBurstCoordinatorFlushesBulkBeforeInteractiveOutput() async throws {
