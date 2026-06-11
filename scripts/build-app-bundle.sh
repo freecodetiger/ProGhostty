@@ -22,7 +22,9 @@ swift build -c "${CONFIGURATION}" >&2
 rm -rf "${APP_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 cp "${BUILD_DIR}/${PRODUCT}" "${MACOS_DIR}/${PRODUCT}"
+cp "${BUILD_DIR}/pg" "${MACOS_DIR}/pg"
 cp "${GENERATED_ICON}" "${RESOURCES_DIR}/${ICON_FILE}"
+cp "${ROOT_DIR}/Sources/ProGhosttyApp/Resources/notification-piano.mp3" "${RESOURCES_DIR}/notification-piano.mp3"
 
 mkdir -p "${RESOURCES_DIR}/ghostty" "${RESOURCES_DIR}/terminfo/78"
 cp -R "${ROOT_DIR}/Vendor/ghostty/src/shell-integration" "${RESOURCES_DIR}/ghostty/"

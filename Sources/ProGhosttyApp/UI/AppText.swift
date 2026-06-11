@@ -73,6 +73,19 @@ struct AppText {
   var rendererTextFallback: String { text("Text fallback", "文本回退") }
   var dirtyRowRendering: String { text("Dirty row rendering", "脏行增量渲染") }
   var forceFullRedraw: String { text("Force full redraw for debug", "调试时强制全量重绘") }
+  var notifications: String { text("Notifications", "通知") }
+  var inAppNotifications: String { text("In-app notifications", "应用内通知") }
+  var inAppNotificationSound: String { text("Sound for in-app notifications", "应用内通知提示音") }
+  var desktopNotifications: String { text("Desktop notifications", "系统通知") }
+  var terminalBellNotifications: String { text("Terminal bell notifications", "终端响铃通知") }
+  var commandFinishNotifications: String { text("Command finish notifications", "命令完成通知") }
+  var notifyNever: String { text("Never", "从不") }
+  var notifyWhenUnfocused: String { text("When unfocused", "未聚焦时") }
+  var notifyAlways: String { text("Always", "始终") }
+  var notifyAfterSeconds: String { text("Notify after", "超过时长后通知") }
+  var notifyWithBell: String { text("Bell on command finish", "命令完成时响铃") }
+  var notifyWithDesktop: String { text("Desktop notification on command finish", "命令完成时系统通知") }
+  var notifyBellWithDesktop: String { text("Desktop notification on terminal bell", "终端响铃时系统通知") }
   var pgControlCommands: String { text("Enable pg control commands", "启用 pg 控制命令") }
   var shellEnhancements: String { text("Plugin Management", "插件管理") }
   var shellEnhancementsCaption: String { text("Inspect and manage terminal plugins without changing your environment until a plan is reviewed.", "检查和管理终端插件；只有在确认计划后才会修改环境。") }

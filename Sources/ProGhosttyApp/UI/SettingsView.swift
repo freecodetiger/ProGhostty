@@ -240,6 +240,47 @@ struct SettingsView: View {
             }
           }
 
+          SettingsSection(text.notifications) {
+            Toggle(text.inAppNotifications, isOn: $model.settings.inAppNotificationsEnabled)
+            Toggle(text.inAppNotificationSound, isOn: $model.settings.inAppNotificationSoundEnabled)
+            Toggle(text.desktopNotifications, isOn: $model.settings.desktopNotificationsEnabled)
+
+            SettingsRow(text.terminalBellNotifications) {
+              Picker("", selection: $model.settings.notifyOnTerminalBell) {
+                Text(text.notifyNever).tag(TerminalNotificationFocusPolicy.never)
+                Text(text.notifyWhenUnfocused).tag(TerminalNotificationFocusPolicy.unfocused)
+                Text(text.notifyAlways).tag(TerminalNotificationFocusPolicy.always)
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+            }
+
+            Toggle(text.notifyBellWithDesktop, isOn: $model.settings.notifyOnTerminalBellDesktopEnabled)
+
+            SettingsRow(text.commandFinishNotifications) {
+              Picker("", selection: $model.settings.notifyOnCommandFinish) {
+                Text(text.notifyNever).tag(TerminalNotificationFocusPolicy.never)
+                Text(text.notifyWhenUnfocused).tag(TerminalNotificationFocusPolicy.unfocused)
+                Text(text.notifyAlways).tag(TerminalNotificationFocusPolicy.always)
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+            }
+
+            SettingsRow(text.notifyAfterSeconds) {
+              HStack(spacing: 10) {
+                Slider(value: $model.settings.notifyOnCommandFinishAfterSeconds, in: 1...30, step: 1)
+                Text("\(Int(model.settings.notifyOnCommandFinishAfterSeconds))s")
+                  .font(.system(size: 12, weight: .medium, design: .monospaced))
+                  .frame(width: 36, alignment: .trailing)
+                  .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+              }
+            }
+
+            Toggle(text.notifyWithBell, isOn: $model.settings.notifyOnCommandFinishBellEnabled)
+            Toggle(text.notifyWithDesktop, isOn: $model.settings.notifyOnCommandFinishDesktopEnabled)
+          }
+
           SettingsSection(text.shellEnhancements) {
             Toggle(text.pgControlCommands, isOn: $model.settings.pgControlCommandsEnabled)
 

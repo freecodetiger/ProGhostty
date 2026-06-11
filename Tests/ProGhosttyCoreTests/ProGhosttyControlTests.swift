@@ -66,6 +66,44 @@ struct ProGhosttyControlTests {
     #expect(pluginPlan?.args == ["pack": "zsh-autosuggestions"])
   }
 
+  @Test func pgMapperPlansNotificationWithoutControlSession() throws {
+    let response = PGCommandMapper.response(
+      arguments: ["notify", "--title", "Codex", "--body", "Waiting for input"],
+      environment: ["PROGHOSTTY_NOTIFY_TTY": "/tmp/proghostty-test-tty"]
+    )
+
+    guard case .notification(let plan) = response else {
+      Issue.record("Expected notification response")
+      return
+    }
+    #expect(plan.targetPath == "/tmp/proghostty-test-tty")
+
+    var oscParser = OscParser()
+    let sequence = try #require(oscParser.parse(Data(plan.sequence.utf8)).first)
+    let notification = try #require(TerminalDesktopNotificationParser.parse(sequence))
+    #expect(notification.title == "Codex")
+    #expect(notification.body == "Waiting for input")
+  }
+
+  @Test func pgNotifySanitizesControlCharactersAndSemicolonTitleSeparators() throws {
+    let response = PGCommandMapper.response(
+      arguments: ["notify", "--title", "Bad;Title\u{1B}", "--body", "Done\u{07}now"],
+      environment: [:]
+    )
+
+    guard case .notification(let plan) = response else {
+      Issue.record("Expected notification response")
+      return
+    }
+    #expect(plan.targetPath == "/dev/tty")
+
+    var oscParser = OscParser()
+    let sequence = try #require(oscParser.parse(Data(plan.sequence.utf8)).first)
+    let notification = try #require(TerminalDesktopNotificationParser.parse(sequence))
+    #expect(notification.title == "Bad Title")
+    #expect(notification.body == "Done now")
+  }
+
   @Test func pgMapperDoesNotEmitOscOutsideProGhostty() {
     let response = PGCommandMapper.response(
       arguments: ["ws"],

@@ -8,7 +8,7 @@ struct ProGhosttyApp: App {
   @StateObject private var model = AppModel()
 
   var body: some Scene {
-    WindowGroup("ProGhostty") {
+    Window("ProGhostty", id: "main") {
       RootView()
         .environmentObject(model)
         .frame(
@@ -21,6 +21,12 @@ struct ProGhosttyApp: App {
       height: ProGhosttyWindowSizing.defaultContentHeight
     )
     .commands {
+      CommandGroup(replacing: .newItem) {
+        if ProGhosttyWindowPolicy.supportsMultipleTerminalWindows {
+          Button("New Window") {}
+        }
+      }
+
       CommandGroup(replacing: .appSettings) {
         Button(model.appText.settings + "...") {
           model.openSettingsWindow()

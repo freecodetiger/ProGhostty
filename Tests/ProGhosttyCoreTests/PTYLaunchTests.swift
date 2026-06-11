@@ -150,6 +150,7 @@ struct PTYLaunchTests {
     #expect(environment["TERM_PROGRAM"] == "ProGhostty")
     #expect(environment["PROGHOSTTY_SESSION_ID"] == "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
     #expect(environment["PROGHOSTTY_SESSION_TOKEN"] == "secret-token")
+    #expect(environment["PROGHOSTTY_NOTIFY_TTY"] == "/dev/tty")
     #expect(environment["PATH"] == "/Applications/ProGhostty.app/Contents/MacOS:/usr/bin")
   }
 

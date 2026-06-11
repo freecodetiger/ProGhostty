@@ -40,7 +40,8 @@ let package = Package(
     ),
     .executableTarget(
       name: "ProGhosttyApp",
-      dependencies: ["ProGhosttyCore"]
+      dependencies: ["ProGhosttyCore"],
+      exclude: ["Resources"]
     ),
     .executableTarget(
       name: "ProGhosttyPG",

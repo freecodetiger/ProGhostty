@@ -82,12 +82,25 @@ public enum ProGhosttyControlAuthorizer {
 
 public enum PGHelperResponse: Equatable, Sendable {
   case osc(String)
+  case notification(PGNotificationPlan)
   case message(String)
   case error(String)
 }
 
+public struct PGNotificationPlan: Equatable, Sendable {
+  public var targetPath: String
+  public var sequence: String
+}
+
 public enum PGCommandMapper {
   public static func response(arguments: [String], environment: [String: String]) -> PGHelperResponse {
+    if arguments.first == "notify" {
+      guard let plan = notificationPlan(arguments: Array(arguments.dropFirst()), environment: environment) else {
+        return .error(usage)
+      }
+      return .notification(plan)
+    }
+
     guard environment["TERM_PROGRAM"] == "ProGhostty" else {
       return .message("pg control commands are only available inside ProGhostty.")
     }
@@ -135,7 +148,80 @@ public enum PGCommandMapper {
   }
 
   public static let usage =
-    "Usage: pg ws|workspace [switch <name>|new <name>], pg plugins [scan|plan <pack>], pg settings, pg split right|down, pg layout save|restore"
+    "Usage: pg notify --title <title> --body <body> [--tty <path>], pg ws|workspace [switch <name>|new <name>], pg plugins [scan|plan <pack>], pg settings, pg split right|down, pg layout save|restore"
+
+  private static func notificationPlan(arguments: [String], environment: [String: String]) -> PGNotificationPlan? {
+    var title: String?
+    var body: String?
+    var tty = environment["PROGHOSTTY_NOTIFY_TTY"]
+    var index = 0
+
+    while index < arguments.count {
+      let argument = arguments[index]
+      switch argument {
+      case "--title":
+        guard index + 1 < arguments.count else { return nil }
+        title = arguments[index + 1]
+        index += 2
+      case "--body":
+        guard index + 1 < arguments.count else { return nil }
+        body = arguments[index + 1]
+        index += 2
+      case "--tty":
+        guard index + 1 < arguments.count else { return nil }
+        tty = arguments[index + 1]
+        index += 2
+      default:
+        if title == nil {
+          title = argument
+          index += 1
+        } else if body == nil {
+          body = Array(arguments[index...]).joined(separator: " ")
+          index = arguments.count
+        } else {
+          return nil
+        }
+      }
+    }
+
+    guard
+      let title = nonEmpty(title).map(notificationTitle),
+      let body = nonEmpty(body).map(notificationBody)
+    else {
+      return nil
+    }
+
+    let targetPath = nonEmpty(tty) ?? "/dev/tty"
+    return PGNotificationPlan(
+      targetPath: targetPath,
+      sequence: "\u{1B}]777;notify;\(title);\(body)\u{07}"
+    )
+  }
+
+  private static func notificationTitle(_ value: String) -> String {
+    sanitizeNotificationText(value, replacesSemicolons: true)
+  }
+
+  private static func notificationBody(_ value: String) -> String {
+    sanitizeNotificationText(value, replacesSemicolons: false)
+  }
+
+  private static func sanitizeNotificationText(_ value: String, replacesSemicolons: Bool) -> String {
+    String(value.map { character in
+      if character == "\u{1B}" || character == "\u{07}" || character == "\u{9B}" {
+        return " "
+      }
+      if replacesSemicolons, character == ";" {
+        return " "
+      }
+      return character
+    })
+  }
+
+  private static func nonEmpty(_ value: String?) -> String? {
+    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return trimmed.isEmpty ? nil : trimmed
+  }
 
   private static func mapWorkspace(_ arguments: [String]) -> (ProGhosttyControlCommand, [String: String])? {
     guard let subcommand = arguments.first else { return (.workspaceOpen, [:]) }

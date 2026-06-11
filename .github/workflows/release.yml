@@ -56,6 +56,6 @@ jobs:
             ProGhostty ${{ github.ref_name }} 正式版。
 
             更新内容：
-            - 修复 Codex 输入 `/res` 等命令时，终端 transient cursor 帧导致光标短暂跳到输入行左上方的问题。
-            - 修复长输入自动换行瞬间，prompt continuation 行的光标可能短暂漂移的问题。
-            - 增加 Metal 直渲染路径诊断日志与缓存/滚动性能指标，沉淀当前渲染路径和后续优化计划。
+            - 增加 Codex 和 Claude Code 任务完成后的 ProGhostty 通知 hook 注入。
+            - 增加应用内通知与提示音，降低系统通知权限和投递不稳定带来的影响。
+            - 优化大批量终端输出的按帧吞吐节奏，改善 `seq 1 30000` 等场景的连续渲染体验。

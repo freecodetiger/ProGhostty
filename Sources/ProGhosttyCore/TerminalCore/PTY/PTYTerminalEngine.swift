@@ -153,8 +153,8 @@ public struct ResizeRenderSnapshot: Sendable {
   public var scrollbar: GhosttyTerminalScrollbar?
 
   public static func capture(from bridge: GhosttyVTBridge) -> ResizeRenderSnapshot {
-    let frame = try? bridge.frame()
     let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2)
+    let frame = scrollFrame?.viewport ?? (try? bridge.frame())
     let html = frame == nil ? try? bridge.htmlText() : nil
     let plainText = frame == nil && html == nil ? try? bridge.plainText() : nil
     return ResizeRenderSnapshot(
@@ -317,10 +317,13 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     var readSource: DispatchSourceRead
     var waitTimer: DispatchSourceTimer
     var oscParser: OscParser
+    var bellParser: TerminalBellParser
     var vtBridge: GhosttyVTBridge
     var controlToken: String
     var vtQueue: DispatchQueue
     var resizeGeneration: UInt64 = 0
+    var commandStartedAt: Date?
+    var deferredOutputWasPinnedToBottom: Bool?
   }
 
   private let surfaceRegistry: PTYTerminalSurfaceRegistry
@@ -331,6 +334,15 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   public let events: AsyncStream<TerminalEvent>
   private lazy var resizeScheduler: TerminalResizeScheduler<PendingResizeJob> = TerminalResizeScheduler { [weak self] session, job in
     self?.performScheduledResize(session: session, job: job)
+  }
+  private lazy var outputBurstCoordinator: TerminalOutputBurstCoordinator = TerminalOutputBurstCoordinator { [weak self] data, session, delivery, shouldRender, completion in
+    self?.flushOutput(
+      data,
+      session: session,
+      delivery: delivery,
+      shouldRender: shouldRender,
+      completion: completion
+    )
   }
   private nonisolated static let interactiveInputByteLimit = 16
   private nonisolated static let interactiveEchoOutputByteLimit = 96
@@ -364,6 +376,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       readSource: readSource,
       waitTimer: waitTimer,
       oscParser: OscParser(),
+      bellParser: TerminalBellParser(),
       vtBridge: vtBridge,
       controlToken: token,
       vtQueue: DispatchQueue(label: "dev.proghostty.vt.\(id.rawValue.uuidString)", qos: .userInteractive)
@@ -380,6 +393,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   public func closeSession(_ id: TerminalSessionID) {
     guard let state = sessions.removeValue(forKey: id) else { return }
     lastInputUptimeBySession[id] = nil
+    outputBurstCoordinator.cancel(session: id)
     state.readSource.cancel()
     state.waitTimer.cancel()
     resizeScheduler.cancel(session: id)
@@ -392,6 +406,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   public func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int) {
     guard var state = sessions[id] else { return }
     guard state.config.rows != rows || state.config.cols != cols else { return }
+    outputBurstCoordinator.flush(session: id)
     state.config.rows = rows
     state.config.cols = cols
     state.resizeGeneration &+= 1
@@ -418,6 +433,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   public func writeInput(_ data: Data, to id: TerminalSessionID) {
     guard let state = sessions[id] else { return }
+    outputBurstCoordinator.flush(session: id)
     if data.count <= Self.interactiveInputByteLimit {
       lastInputUptimeBySession[id] = ProcessInfo.processInfo.systemUptime
     }
@@ -458,6 +474,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   public func scrollViewport(_ id: TerminalSessionID, rowDelta: Int) -> Bool {
     guard rowDelta != 0, let state = sessions[id] else { return false }
+    outputBurstCoordinator.flush(session: id)
     let bridge = state.vtBridge
     let vtQueue = state.vtQueue
     let generation = state.resizeGeneration
@@ -512,6 +529,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     environment["TERM_PROGRAM"] = "ProGhostty"
     environment["PROGHOSTTY_SESSION_ID"] = id.description
     environment["PROGHOSTTY_SESSION_TOKEN"] = token
+    environment["PROGHOSTTY_NOTIFY_TTY"] = environment["PROGHOSTTY_NOTIFY_TTY"] ?? "/dev/tty"
     let existingPath = environment["PATH"] ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
     let pathPrefix = helperSearchPath.trimmingCharacters(in: .whitespacesAndNewlines)
     if !pathPrefix.isEmpty {
@@ -620,13 +638,36 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       secondsSinceLastInput: secondsSinceLastInput
     ) ? .immediate : .coalesced
     let sequences = state.oscParser.parse(data)
-    let bridge = state.vtBridge
-    let vtQueue = state.vtQueue
-    let generation = state.resizeGeneration
+    let bellCount = state.bellParser.parse(data)
     sessions[id] = state
     continuation.yield(.output(session: id, data: data))
+    for _ in 0..<bellCount {
+      continuation.yield(.bell(session: id))
+    }
     for sequence in sequences {
       continuation.yield(.osc(session: id, sequence: sequence))
+      if let notification = TerminalDesktopNotificationParser.parse(sequence) {
+        continuation.yield(.desktopNotification(session: id, notification: notification))
+      }
+      if let marker = TerminalCommandLifecycleParser.parse(sequence) {
+        switch marker {
+        case .started:
+          state.commandStartedAt = Date()
+          sessions[id] = state
+        case .finished(let exitCode):
+          if let startedAt = state.commandStartedAt {
+            let finished = TerminalCommandFinished(
+              exitCode: exitCode,
+              duration: Date().timeIntervalSince(startedAt)
+            )
+            state.commandStartedAt = nil
+            sessions[id] = state
+            continuation.yield(.commandFinished(session: id, command: finished))
+          }
+        case .promptStarted:
+          break
+        }
+      }
       if let cwd = CwdTracker.cwd(from: sequence) {
         state.config.workingDirectory = cwd
         sessions[id] = state
@@ -639,17 +680,58 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       }
     }
 
+    outputBurstCoordinator.receive(data, session: id, delivery: delivery)
+  }
+
+  private func flushOutput(
+    _ data: Data,
+    session id: TerminalSessionID,
+    delivery: TerminalOutputCoordinator.Delivery,
+    shouldRender: Bool = true,
+    completion: @escaping @MainActor () -> Void = {}
+  ) {
+    guard let state = sessions[id] else {
+      completion()
+      return
+    }
+    let bridge = state.vtBridge
+    let vtQueue = state.vtQueue
+    let generation = state.resizeGeneration
+    let deferredPinnedToBottom = state.deferredOutputWasPinnedToBottom
+    let canDeferPinnedCheck = delivery == .immediate
     vtQueue.async { [weak self] in
-      let wasPinnedToBottom = GhosttyVTQueueWork.viewportIsPinnedToBottom(bridge)
+      let capturedPinnedToBottom = deferredPinnedToBottom
+        ?? GhosttyVTQueueWork.viewportIsPinnedToBottom(bridge)
+      let wasPinnedToBottom = capturedPinnedToBottom
       bridge.write(data)
-      if wasPinnedToBottom {
+      if wasPinnedToBottom && (shouldRender || !canDeferPinnedCheck) {
         GhosttyVTQueueWork.scrollToBottom(bridge)
+      }
+      guard shouldRender else {
+        Task { @MainActor [weak self] in
+          guard canDeferPinnedCheck,
+            let self,
+            var current = self.sessions[id],
+            current.resizeGeneration == generation
+          else {
+            completion()
+            return
+          }
+          current.deferredOutputWasPinnedToBottom = wasPinnedToBottom
+          self.sessions[id] = current
+          completion()
+        }
+        return
       }
       let snapshot = ResizeRenderSnapshot.capture(from: bridge)
       Task { @MainActor [weak self] in
         guard let self, let current = self.sessions[id], current.resizeGeneration == generation else {
+          completion()
           return
         }
+        var updated = current
+        updated.deferredOutputWasPinnedToBottom = nil
+        self.sessions[id] = updated
         self.surfaceRegistry.renderOutput(
           snapshot,
           bridge: bridge,
@@ -657,6 +739,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
           wasPinnedToBottom: wasPinnedToBottom,
           delivery: delivery
         )
+        completion()
       }
     }
   }

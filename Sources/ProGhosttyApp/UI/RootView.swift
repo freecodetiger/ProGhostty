@@ -6,7 +6,7 @@ struct RootView: View {
   @EnvironmentObject private var model: AppModel
 
   var body: some View {
-    ZStack {
+    ZStack(alignment: .topTrailing) {
       TerminalCanvasView()
         .blur(radius: model.isWorkspaceSwitcherPresented
           ? ProGhosttyOverlayStyle.workspaceSwitcherTerminalBlurRadius
@@ -18,9 +18,16 @@ struct RootView: View {
           .transition(.opacity.combined(with: .scale(scale: 0.98)))
       }
 
+      TerminalNotificationOverlay(
+        notification: model.inAppNotification,
+        usesDarkAppearance: model.usesDarkAppearance,
+        action: { model.openInAppNotificationAction() }
+      )
+
     }
     .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
     .animation(.easeOut(duration: 0.14), value: model.titlebarToast)
+    .animation(.easeOut(duration: 0.16), value: model.inAppNotification)
     .preferredColorScheme(model.appColorScheme)
     .background(Color(nsColor: model.terminalBackgroundColor).ignoresSafeArea())
     .background(
@@ -87,6 +94,82 @@ struct RootView: View {
     hasher.combine(model.usesDarkAppearance)
     hasher.combine(model.terminalBackgroundColor.rgbSignature)
     return hasher.finalize()
+  }
+}
+
+private struct TerminalNotificationOverlay: View {
+  let notification: AppModel.InAppNotification?
+  let usesDarkAppearance: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Group {
+      if let notification {
+        Button(action: action) {
+          HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "bell.badge")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(accentColor)
+              .frame(width: 20, height: 20)
+
+            VStack(alignment: .leading, spacing: 4) {
+              Text(notification.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(primaryTextColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+              Text(notification.body)
+                .font(.system(size: 12))
+                .foregroundStyle(secondaryTextColor)
+                .lineLimit(2)
+                .truncationMode(.tail)
+            }
+          }
+          .padding(.horizontal, 12)
+          .padding(.vertical, 10)
+          .frame(width: 300, alignment: .leading)
+          .background(backgroundColor)
+          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+              .stroke(borderColor, lineWidth: 1)
+          )
+          .shadow(color: Color.black.opacity(usesDarkAppearance ? 0.32 : 0.14), radius: 12, x: 0, y: 8)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 42)
+        .padding(.trailing, 14)
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .accessibilityLabel("\(notification.title): \(notification.body)")
+      }
+    }
+    .allowsHitTesting(notification != nil)
+  }
+
+  private var backgroundColor: Color {
+    usesDarkAppearance
+      ? Color(nsColor: NSColor(calibratedWhite: 0.10, alpha: 0.96))
+      : Color(nsColor: NSColor(calibratedWhite: 0.98, alpha: 0.98))
+  }
+
+  private var borderColor: Color {
+    usesDarkAppearance
+      ? Color.white.opacity(0.14)
+      : Color.black.opacity(0.12)
+  }
+
+  private var primaryTextColor: Color {
+    usesDarkAppearance ? Color.white.opacity(0.94) : Color.black.opacity(0.88)
+  }
+
+  private var secondaryTextColor: Color {
+    usesDarkAppearance ? Color.white.opacity(0.68) : Color.black.opacity(0.62)
+  }
+
+  private var accentColor: Color {
+    usesDarkAppearance
+      ? Color(red: 0.64, green: 0.86, blue: 0.82)
+      : Color(red: 0.05, green: 0.42, blue: 0.48)
   }
 }
 

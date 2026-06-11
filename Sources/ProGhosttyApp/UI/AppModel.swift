@@ -39,6 +39,7 @@ final class AppModel: ObservableObject {
   @Published var isWorkspaceSwitcherPresented = false
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
   @Published var titlebarToast: TitlebarToast?
+  @Published var inAppNotification: InAppNotification?
   @Published var commandLine = ""
   @Published var sideInputStore = TerminalSideInputStore.empty
   @Published var workspaces: [Workspace] = []
@@ -55,6 +56,8 @@ final class AppModel: ObservableObject {
 
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
+  private let terminalNotificationCenter: TerminalNotificationCenter
+  private let terminalNotificationSoundPlayer: TerminalNotificationSoundPlaying
   private let paneWorkspaceController: PaneWorkspaceController
   private let updateChecker = AppUpdateChecker()
   private let focusStore = TerminalFocusStore()
@@ -66,6 +69,7 @@ final class AppModel: ObservableObject {
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
   private var rememberedWorkspaceContentSizes: [UUID: NSSize] = [:]
   private var titlebarToastTask: Task<Void, Never>?
+  private var inAppNotificationTask: Task<Void, Never>?
   private var paneSplitAvailability: [UUID: PaneSplitAvailability] = [:]
 
   struct TitlebarToast: Equatable, Sendable {
@@ -79,6 +83,14 @@ final class AppModel: ObservableObject {
       case error
       case update(URL)
     }
+  }
+
+  struct InAppNotification: Identifiable, Equatable, Sendable {
+    var id = UUID()
+    var title: String
+    var body: String
+    var session: TerminalSessionID
+    var source: TerminalDesktopNotification.Source
   }
 
   private struct PaneSplitAvailability: Equatable {
@@ -96,7 +108,12 @@ final class AppModel: ObservableObject {
     }
   }
 
-  init() {
+  init(
+    terminalNotificationCenter: TerminalNotificationCenter = TerminalNotificationCenter(),
+    terminalNotificationSoundPlayer: TerminalNotificationSoundPlaying = TerminalNotificationSoundPlayer()
+  ) {
+    self.terminalNotificationCenter = terminalNotificationCenter
+    self.terminalNotificationSoundPlayer = terminalNotificationSoundPlayer
     DebugLog.write("AppModel init")
     settingsStore = SettingsStore()
     let loadedSettings = settingsStore.load()
@@ -981,6 +998,15 @@ final class AppModel: ObservableObject {
     }
   }
 
+  func openInAppNotificationAction() {
+    guard let notification = inAppNotification else { return }
+    selectSession(notification.session)
+    inAppNotification = nil
+    inAppNotificationTask?.cancel()
+    inAppNotificationTask = nil
+    restoreTerminalKeyboardFocus()
+  }
+
   func resetSettings() {
     settings = .defaults
     saveSettings()
@@ -1483,10 +1509,75 @@ final class AppModel: ObservableObject {
     case .osc(let session, let sequence):
       shellIntegrationState = "available"
       handleProGhosttyControlOsc(session: session, sequence: sequence)
+    case .desktopNotification(let session, let notification):
+      DebugLog.write("desktop notification event session=\(session) title=\(notification.title) body=\(notification.body) inApp=\(settings.inAppNotificationsEnabled) desktop=\(settings.desktopNotificationsEnabled)")
+      let actions = TerminalNotificationPolicy.desktopNotificationActions(
+        settings: settings,
+        notification: notification
+      )
+      performNotificationActions(actions, session: session)
+    case .commandFinished(let session, let command):
+      handleCommandFinished(session: session, command: command)
+    case .bell(let session):
+      handleTerminalBell(session: session)
     case .error(_, let message):
       shellIntegrationState = message
     default:
       break
+    }
+  }
+
+  private func handleCommandFinished(session: TerminalSessionID, command: TerminalCommandFinished) {
+    let actions = TerminalNotificationPolicy.commandFinishedActions(
+      settings: settings,
+      command: command,
+      isAppActive: NSApp.isActive,
+      isSessionFocused: selectedSessionID == session
+    )
+    performNotificationActions(actions, session: session)
+  }
+
+  private func handleTerminalBell(session: TerminalSessionID) {
+    let actions = TerminalNotificationPolicy.terminalBellActions(
+      settings: settings,
+      isAppActive: NSApp.isActive,
+      isSessionFocused: selectedSessionID == session
+    )
+    performNotificationActions(actions, session: session)
+  }
+
+  private func performNotificationActions(_ actions: [TerminalNotificationAction], session: TerminalSessionID) {
+    for action in actions {
+      switch action {
+      case .bell:
+        NSSound.beep()
+      case .inApp(let notification):
+        showInAppNotification(notification, session: session)
+      case .sound:
+        terminalNotificationSoundPlayer.playNotificationSound()
+      case .desktop(let notification):
+        terminalNotificationCenter.showDesktopNotification(notification, session: session)
+      }
+    }
+  }
+
+  private func showInAppNotification(_ notification: TerminalDesktopNotification, session: TerminalSessionID) {
+    let next = InAppNotification(
+      title: notification.title,
+      body: notification.body,
+      session: session,
+      source: notification.source
+    )
+    inAppNotification = next
+    inAppNotificationTask?.cancel()
+    inAppNotificationTask = Task { [weak self, id = next.id] in
+      try? await Task.sleep(nanoseconds: 4_000_000_000)
+      guard !Task.isCancelled else { return }
+      await MainActor.run {
+        guard self?.inAppNotification?.id == id else { return }
+        self?.inAppNotification = nil
+        self?.inAppNotificationTask = nil
+      }
     }
   }
 

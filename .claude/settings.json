@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PROGHOSTTY_HOOKS_DIR:-$HOME/.proghostty/hooks}/claude_stop_notify.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
