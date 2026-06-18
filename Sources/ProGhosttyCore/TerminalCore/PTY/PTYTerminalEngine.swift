@@ -323,7 +323,6 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     var vtQueue: DispatchQueue
     var resizeGeneration: UInt64 = 0
     var commandStartedAt: Date?
-    var deferredOutputWasPinnedToBottom: Bool?
   }
 
   private let surfaceRegistry: PTYTerminalSurfaceRegistry
@@ -335,14 +334,8 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   private lazy var resizeScheduler: TerminalResizeScheduler<PendingResizeJob> = TerminalResizeScheduler { [weak self] session, job in
     self?.performScheduledResize(session: session, job: job)
   }
-  private lazy var outputBurstCoordinator: TerminalOutputBurstCoordinator = TerminalOutputBurstCoordinator { [weak self] data, session, delivery, shouldRender, completion in
-    self?.flushOutput(
-      data,
-      session: session,
-      delivery: delivery,
-      shouldRender: shouldRender,
-      completion: completion
-    )
+  private lazy var outputBatchCoordinator: TerminalOutputBatchCoordinator = TerminalOutputBatchCoordinator { [weak self] data, session, delivery in
+    self?.flushOutput(data, session: session, delivery: delivery)
   }
   private nonisolated static let interactiveInputByteLimit = 16
   private nonisolated static let interactiveEchoOutputByteLimit = 96
@@ -393,7 +386,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   public func closeSession(_ id: TerminalSessionID) {
     guard let state = sessions.removeValue(forKey: id) else { return }
     lastInputUptimeBySession[id] = nil
-    outputBurstCoordinator.cancel(session: id)
+    outputBatchCoordinator.cancel(session: id)
     state.readSource.cancel()
     state.waitTimer.cancel()
     resizeScheduler.cancel(session: id)
@@ -406,7 +399,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   public func resizeSession(_ id: TerminalSessionID, rows: Int, cols: Int) {
     guard var state = sessions[id] else { return }
     guard state.config.rows != rows || state.config.cols != cols else { return }
-    outputBurstCoordinator.flush(session: id)
+    outputBatchCoordinator.flush(session: id)
     state.config.rows = rows
     state.config.cols = cols
     state.resizeGeneration &+= 1
@@ -433,7 +426,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   public func writeInput(_ data: Data, to id: TerminalSessionID) {
     guard let state = sessions[id] else { return }
-    outputBurstCoordinator.flush(session: id)
+    outputBatchCoordinator.flush(session: id)
     if data.count <= Self.interactiveInputByteLimit {
       lastInputUptimeBySession[id] = ProcessInfo.processInfo.systemUptime
     }
@@ -474,7 +467,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
 
   public func scrollViewport(_ id: TerminalSessionID, rowDelta: Int) -> Bool {
     guard rowDelta != 0, let state = sessions[id] else { return false }
-    outputBurstCoordinator.flush(session: id)
+    outputBatchCoordinator.flush(session: id)
     let bridge = state.vtBridge
     let vtQueue = state.vtQueue
     let generation = state.resizeGeneration
@@ -680,58 +673,29 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       }
     }
 
-    outputBurstCoordinator.receive(data, session: id, delivery: delivery)
+    outputBatchCoordinator.receive(data, session: id, delivery: delivery)
   }
 
   private func flushOutput(
     _ data: Data,
     session id: TerminalSessionID,
-    delivery: TerminalOutputCoordinator.Delivery,
-    shouldRender: Bool = true,
-    completion: @escaping @MainActor () -> Void = {}
+    delivery: TerminalOutputCoordinator.Delivery
   ) {
-    guard let state = sessions[id] else {
-      completion()
-      return
-    }
+    guard let state = sessions[id] else { return }
     let bridge = state.vtBridge
     let vtQueue = state.vtQueue
     let generation = state.resizeGeneration
-    let deferredPinnedToBottom = state.deferredOutputWasPinnedToBottom
-    let canDeferPinnedCheck = delivery == .immediate
     vtQueue.async { [weak self] in
-      let capturedPinnedToBottom = deferredPinnedToBottom
-        ?? GhosttyVTQueueWork.viewportIsPinnedToBottom(bridge)
-      let wasPinnedToBottom = capturedPinnedToBottom
+      let wasPinnedToBottom = GhosttyVTQueueWork.viewportIsPinnedToBottom(bridge)
       bridge.write(data)
-      if wasPinnedToBottom && (shouldRender || !canDeferPinnedCheck) {
+      if wasPinnedToBottom {
         GhosttyVTQueueWork.scrollToBottom(bridge)
-      }
-      guard shouldRender else {
-        Task { @MainActor [weak self] in
-          guard canDeferPinnedCheck,
-            let self,
-            var current = self.sessions[id],
-            current.resizeGeneration == generation
-          else {
-            completion()
-            return
-          }
-          current.deferredOutputWasPinnedToBottom = wasPinnedToBottom
-          self.sessions[id] = current
-          completion()
-        }
-        return
       }
       let snapshot = ResizeRenderSnapshot.capture(from: bridge)
       Task { @MainActor [weak self] in
         guard let self, let current = self.sessions[id], current.resizeGeneration == generation else {
-          completion()
           return
         }
-        var updated = current
-        updated.deferredOutputWasPinnedToBottom = nil
-        self.sessions[id] = updated
         self.surfaceRegistry.renderOutput(
           snapshot,
           bridge: bridge,
@@ -739,7 +703,6 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
           wasPinnedToBottom: wasPinnedToBottom,
           delivery: delivery
         )
-        completion()
       }
     }
   }

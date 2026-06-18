@@ -1388,12 +1388,11 @@ struct TerminalSurfaceTests {
     #expect(deliveredCursorPositions == [GridCoordinate(row: 0, col: 4)])
   }
 
-  @MainActor @Test func terminalOutputBurstCoordinatorCoalescesBulkChunksBeforeFlush() async throws {
+  @MainActor @Test func terminalOutputBatchCoordinatorCombinesBulkOutputIntoOneRender() async throws {
     let session = TerminalSessionID()
     var delivered: [String] = []
-    let coordinator = TerminalOutputBurstCoordinator(coalescingDelayNanoseconds: 50_000_000) { data, _, _, _, completion in
+    let coordinator = TerminalOutputBatchCoordinator(coalescingDelayNanoseconds: 50_000_000) { data, _, _ in
       delivered.append(String(decoding: data, as: UTF8.self))
-      completion()
     }
 
     coordinator.receive(Data("one".utf8), session: session, delivery: .coalesced)
@@ -1403,211 +1402,11 @@ struct TerminalSurfaceTests {
     #expect(delivered == ["onetwo"])
   }
 
-  @MainActor @Test func terminalOutputBurstCoordinatorSlicesLineFloodsIntoOrderedFlushes() async throws {
-    let session = TerminalSessionID()
-    let output = (1...80).map(String.init).joined(separator: "\n") + "\n"
-    var delivered: [String] = []
-    let coordinator = TerminalOutputBurstCoordinator(
-      coalescingDelayNanoseconds: 50_000_000,
-      maxFlushLineFeeds: 8
-    ) { data, _, _, _, completion in
-      delivered.append(String(decoding: data, as: UTF8.self))
-      completion()
-    }
-
-    coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
-    coordinator.flush(session: session)
-
-    #expect(delivered.count > 1)
-    #expect(delivered.joined() == output)
-  }
-
-  @MainActor @Test func terminalOutputBurstCoordinatorDrainsScheduledOutputOneFrameAtATime() async throws {
-    let session = TerminalSessionID()
-    let output = (1...24).map(String.init).joined(separator: "\n") + "\n"
-    var renderedFrames = 0
-    let coordinator = TerminalOutputBurstCoordinator(
-      coalescingDelayNanoseconds: 1,
-      frameIntervalNanoseconds: 100_000_000,
-      maxPendingBytes: 1,
-      maxFlushLineFeeds: 8
-    ) { _, _, _, shouldRender, completion in
-      if shouldRender {
-        renderedFrames += 1
-      }
-      completion()
-    }
-
-    coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
-
-    #expect(renderedFrames == 1)
-    coordinator.cancel(session: session)
-  }
-
-  @MainActor @Test func terminalOutputBurstCoordinatorIngestsMultipleChunksWithinFrameBudget() async throws {
-    let session = TerminalSessionID()
-    let output = (1...24).map(String.init).joined(separator: "\n") + "\n"
-    var shouldRenderValues: [Bool] = []
-    let coordinator = TerminalOutputBurstCoordinator(
-      coalescingDelayNanoseconds: 1,
-      frameIntervalNanoseconds: 100_000_000,
-      maxPendingBytes: 1,
-      maxFlushLineFeeds: 8,
-      frameIngestBudgetNanoseconds: 100_000_000,
-      maxIngestChunksPerFrame: 99
-    ) { _, _, _, shouldRender, completion in
-      shouldRenderValues.append(shouldRender)
-      completion()
-    }
-
-    coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
-
-    #expect(shouldRenderValues == [false, false, true])
-    coordinator.cancel(session: session)
-  }
-
-  @MainActor @Test func terminalOutputBurstCoordinatorPresentsWhenFrameBudgetIsSpent() async throws {
-    let session = TerminalSessionID()
-    let output = (1...80).map(String.init).joined(separator: "\n") + "\n"
-    var deliveredLineCounts: [Int] = []
-    var shouldRenderValues: [Bool] = []
-    var now: UInt64 = 0
-    let coordinator = TerminalOutputBurstCoordinator(
-      coalescingDelayNanoseconds: 1,
-      frameIntervalNanoseconds: 100_000_000,
-      maxPendingBytes: 1,
-      maxFlushLineFeeds: 8,
-      frameIngestBudgetNanoseconds: 1_000_000,
-      maxIngestChunksPerFrame: 99,
-      nowNanoseconds: { now }
-    ) { data, _, _, shouldRender, completion in
-      deliveredLineCounts.append(data.filter { $0 == 10 }.count)
-      shouldRenderValues.append(shouldRender)
-      if !shouldRender {
-        now += 700_000
-      }
-      completion()
-    }
-
-    coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
-
-    #expect(Array(deliveredLineCounts.prefix(3)) == [8, 8, 0])
-    #expect(Array(shouldRenderValues.prefix(3)) == [false, false, true])
-    coordinator.cancel(session: session)
-  }
-
-  @MainActor @Test func terminalOutputBurstCoordinatorDefaultBulkFrameStartsWithSmallerLineBatches() async throws {
-    let session = TerminalSessionID()
-    let output = (1...192).map(String.init).joined(separator: "\n") + "\n"
-    var delivered: [String] = []
-    var shouldRenderValues: [Bool] = []
-    var now: UInt64 = 0
-    let coordinator = TerminalOutputBurstCoordinator(
-      coalescingDelayNanoseconds: 1,
-      frameIntervalNanoseconds: 100_000_000,
-      maxPendingBytes: 1,
-      frameIngestBudgetNanoseconds: 1_000_000,
-      nowNanoseconds: { now }
-    ) { data, _, _, shouldRender, completion in
-      delivered.append(String(decoding: data, as: UTF8.self))
-      shouldRenderValues.append(shouldRender)
-      if !shouldRender {
-        now += 400_000
-      }
-      completion()
-    }
-
-    coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
-
-    let firstFrameOutput = (1...48).map(String.init).joined(separator: "\n") + "\n"
-    #expect(delivered.joined() == firstFrameOutput)
-    #expect(shouldRenderValues == [false, false, false, true])
-    coordinator.cancel(session: session)
-  }
-
-  @MainActor @Test func terminalOutputBurstCoordinatorDefaultBulkFramesRampLineBatchSize() async throws {
-    let session = TerminalSessionID()
-    let output = (1...2_000).map(String.init).joined(separator: "\n") + "\n"
-    var chunkLineCounts: [Int] = []
-    var now: UInt64 = 0
-    let coordinator = TerminalOutputBurstCoordinator(
-      coalescingDelayNanoseconds: 1,
-      frameIntervalNanoseconds: 1_000_000,
-      frameIngestBudgetNanoseconds: 1_000_000,
-      nowNanoseconds: { now }
-    ) { data, _, _, shouldRender, completion in
-      chunkLineCounts.append(data.filter { $0 == 10 }.count)
-      if !shouldRender {
-        now += 400_000
-      }
-      completion()
-    }
-
-    coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
-
-    let deadline = Date().addingTimeInterval(1)
-    while !chunkLineCounts.contains(128) && Date() < deadline {
-      try await Task.sleep(nanoseconds: 10_000_000)
-    }
-
-    let nonEmptyLineCounts = chunkLineCounts.filter { $0 > 0 }
-    #expect(Array(nonEmptyLineCounts.prefix(9)) == [16, 16, 16, 16, 16, 16, 32, 32, 32])
-    #expect(nonEmptyLineCounts.contains(128))
-    coordinator.cancel(session: session)
-  }
-
-  @MainActor @Test func terminalOutputBurstCoordinatorPresentsScheduledFramesImmediately() async throws {
-    let session = TerminalSessionID()
-    let output = (1...16).map(String.init).joined(separator: "\n") + "\n"
-    var deliveries: [TerminalOutputCoordinator.Delivery] = []
-    let coordinator = TerminalOutputBurstCoordinator(
-      coalescingDelayNanoseconds: 1,
-      frameIntervalNanoseconds: 100_000_000,
-      maxPendingBytes: 1,
-      maxFlushLineFeeds: 8
-    ) { _, _, delivery, shouldRender, completion in
-      if shouldRender {
-        deliveries.append(delivery)
-      }
-      completion()
-    }
-
-    coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
-
-    #expect(deliveries == [.immediate])
-    coordinator.cancel(session: session)
-  }
-
-  @MainActor @Test func terminalOutputBurstCoordinatorDoesNotFlushBacklogForImmediateOutput() async throws {
-    let session = TerminalSessionID()
-    let output = (1...80).map(String.init).joined(separator: "\n") + "\n"
-    var delivered: [String] = []
-    let coordinator = TerminalOutputBurstCoordinator(
-      coalescingDelayNanoseconds: 1,
-      frameIntervalNanoseconds: 100_000_000,
-      maxPendingBytes: 1,
-      maxFlushLineFeeds: 8,
-      maxIngestChunksPerFrame: 3
-    ) { data, _, _, _, completion in
-      delivered.append(String(decoding: data, as: UTF8.self))
-      completion()
-    }
-
-    coordinator.receive(Data(output.utf8), session: session, delivery: .coalesced)
-    let deliveredBeforeImmediate = delivered.count
-    coordinator.receive(Data("prompt".utf8), session: session, delivery: .immediate)
-
-    #expect(deliveredBeforeImmediate == 3)
-    #expect(delivered.count == deliveredBeforeImmediate)
-    coordinator.cancel(session: session)
-  }
-
-  @MainActor @Test func terminalOutputBurstCoordinatorFlushesBulkBeforeInteractiveOutput() async throws {
+  @MainActor @Test func terminalOutputBatchCoordinatorFlushesBulkBeforeInteractiveOutput() async throws {
     let session = TerminalSessionID()
     var delivered: [(text: String, immediate: Bool)] = []
-    let coordinator = TerminalOutputBurstCoordinator(coalescingDelayNanoseconds: 50_000_000) { data, _, delivery, _, completion in
+    let coordinator = TerminalOutputBatchCoordinator(coalescingDelayNanoseconds: 50_000_000) { data, _, delivery in
       delivered.append((String(decoding: data, as: UTF8.self), delivery == .immediate))
-      completion()
     }
 
     coordinator.receive(Data("bulk".utf8), session: session, delivery: .coalesced)

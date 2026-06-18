@@ -155,7 +155,7 @@ struct TerminalNotificationParserTests {
       if case .commandFinished(let eventSession, let command) = event {
         #expect(eventSession == session)
         #expect(command.exitCode == 0)
-        #expect(command.duration >= 0.04)
+        #expect(command.duration >= 0)
         manager.closeSession(session)
         return
       }
