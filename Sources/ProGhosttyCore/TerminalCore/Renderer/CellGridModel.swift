@@ -321,12 +321,6 @@ public enum CellGridDirtyTracker {
   }
 }
 
-public enum SmoothScrollDecision: Equatable, Sendable {
-  case consumed(rowDelta: Int)
-  case forwardToPTY
-  case ignored
-}
-
 public enum PaneScrollDecision: Equatable, Sendable {
   case consumed(rowDelta: Int, pixelRemainderY: CGFloat)
   case forwardToPTY
@@ -466,96 +460,6 @@ public struct ScrollCommitCoordinator: Sendable {
     pendingRowDelta = 0
     pendingWheelEvents = 0
     commitScheduled = false
-  }
-}
-
-public struct SmoothScrollController: Sendable {
-  public private(set) var viewport: TerminalViewport
-  public var isEnabled: Bool
-
-  public init(viewport: TerminalViewport = TerminalViewport(), isEnabled: Bool = true) {
-    self.viewport = viewport
-    self.isEnabled = isEnabled
-  }
-
-  @discardableResult
-  public mutating func scroll(
-    deltaY: CGFloat,
-    cellHeight: CGFloat,
-    maxStartRow: Int?,
-    alternateScreen: Bool
-  ) -> SmoothScrollDecision {
-    guard deltaY != 0 else { return .ignored }
-    guard !alternateScreen else { return .forwardToPTY }
-    guard isEnabled else {
-      let rowDelta = deltaY.sign == .minus ? -1 : 1
-      viewport.visualOffsetY = 0
-      if let maxStartRow {
-        let nextStartRow = clamp(viewport.startRow + rowDelta, maxStartRow: maxStartRow)
-        guard nextStartRow != viewport.startRow else { return .ignored }
-        viewport.startRow = nextStartRow
-      } else {
-        viewport.startRow += rowDelta
-      }
-      return .consumed(rowDelta: rowDelta)
-    }
-    guard cellHeight > 0 else { return .ignored }
-
-    let edgeDirection = deltaY.sign == .minus ? -1 : 1
-    if let maxStartRow, isAtEdge(for: edgeDirection, maxStartRow: maxStartRow) {
-      viewport.visualOffsetY = 0
-      return .ignored
-    }
-
-    viewport.visualOffsetY += deltaY
-    var rowDelta = 0
-    while abs(viewport.visualOffsetY) >= cellHeight {
-      if viewport.visualOffsetY > 0 {
-        guard moveStartRow(by: 1, maxStartRow: maxStartRow) else {
-          viewport.visualOffsetY = 0
-          break
-        }
-        viewport.visualOffsetY -= cellHeight
-        rowDelta += 1
-      } else {
-        guard moveStartRow(by: -1, maxStartRow: maxStartRow) else {
-          viewport.visualOffsetY = 0
-          break
-        }
-        viewport.visualOffsetY += cellHeight
-        rowDelta -= 1
-      }
-    }
-    return rowDelta == 0 && viewport.visualOffsetY == 0 ? .ignored : .consumed(rowDelta: rowDelta)
-  }
-
-  public mutating func reset() {
-    viewport = TerminalViewport()
-  }
-
-  public mutating func resetStartRowKeepingVisualOffset() {
-    viewport.startRow = 0
-  }
-
-  private func clamp(_ row: Int, maxStartRow: Int) -> Int {
-    min(max(0, row), max(0, maxStartRow))
-  }
-
-  private func isAtEdge(for rowDelta: Int, maxStartRow: Int) -> Bool {
-    (rowDelta < 0 && viewport.startRow == 0)
-      || (rowDelta > 0 && viewport.startRow == max(0, maxStartRow))
-  }
-
-  @discardableResult
-  private mutating func moveStartRow(by rowDelta: Int, maxStartRow: Int?) -> Bool {
-    guard let maxStartRow else {
-      viewport.startRow += rowDelta
-      return true
-    }
-    let nextStartRow = clamp(viewport.startRow + rowDelta, maxStartRow: maxStartRow)
-    guard nextStartRow != viewport.startRow else { return false }
-    viewport.startRow = nextStartRow
-    return true
   }
 }
 
