@@ -42,7 +42,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   }
 
   private var surfaces: [TerminalSessionID: SurfaceState] = [:]
-  private lazy var outputCoordinator: TerminalOutputCoordinator = TerminalOutputCoordinator { [weak self] snapshot, bridge, session, wasPinnedToBottom in
+  private lazy var outputCoordinator: TerminalOutputCoordinator = TerminalOutputCoordinator(
+    coalescingDelayNanoseconds: TerminalOutputCoordinator.pipelineStageDelayNanoseconds
+  ) { [weak self] snapshot, bridge, session, wasPinnedToBottom in
     self?.renderOutputImmediately(
       snapshot,
       bridge: bridge,
@@ -119,6 +121,10 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   }
 
   private func makeLiveRenderer() -> any TerminalLiveRendererBackend {
+    // Resolved with hasFrame: true because this only builds the *live* renderer;
+    // the text-fallback presentation is driven separately by the textBackend
+    // when there is no live frame. So .ghosttyVTTextFallback here means "no live
+    // GPU/text choice applies" and we use the CPU cell grid as the live surface.
     let selection = TerminalRendererPolicy.resolve(
       mode: rendererOptions.mode,
       hasFrame: true,
@@ -127,7 +133,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     switch selection.activeBackend {
     case .metalDirect:
       let directRenderer = makeDirectRenderer(rendererOptions)
-      if directRenderer.diagnostics.metalDirectPipelineReady {
+      if directRenderer.diagnostics.metalDirect.pipelineReady {
         return directRenderer
       }
       return GhosttyVTCellGridRendererBackend(options: rendererOptions)

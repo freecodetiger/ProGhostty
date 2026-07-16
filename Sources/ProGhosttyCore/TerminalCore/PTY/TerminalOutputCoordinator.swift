@@ -7,6 +7,15 @@ public final class TerminalOutputCoordinator {
     case immediate
   }
 
+  /// The output pipeline coalesces twice in series: once over raw PTY bytes
+  /// (TerminalOutputBatchCoordinator) and once over render snapshots
+  /// (TerminalOutputCoordinator). To keep the worst-case byte→pixel latency for
+  /// bulk output near a single 8 ms frame instead of ~16 ms, the two stages
+  /// split one 8 ms budget rather than each waiting a full 8 ms. Interactive
+  /// echo bypasses both stages via `.immediate`, so this only affects bulk
+  /// output where coalescing is desired anyway.
+  public static let pipelineStageDelayNanoseconds: UInt64 = 4_000_000
+
   public typealias RenderOutputHandler = @MainActor (
     ResizeRenderSnapshot,
     GhosttyVTBridge,
