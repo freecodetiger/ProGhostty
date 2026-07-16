@@ -73,19 +73,13 @@ struct AppText {
   var rendererTextFallback: String { text("Text fallback", "文本回退") }
   var dirtyRowRendering: String { text("Dirty row rendering", "脏行增量渲染") }
   var forceFullRedraw: String { text("Force full redraw for debug", "调试时强制全量重绘") }
-  var notifications: String { text("Notifications", "通知") }
-  var inAppNotifications: String { text("In-app notifications", "应用内通知") }
-  var inAppNotificationSound: String { text("Sound for in-app notifications", "应用内通知提示音") }
-  var desktopNotifications: String { text("Desktop notifications", "系统通知") }
-  var terminalBellNotifications: String { text("Terminal bell notifications", "终端响铃通知") }
-  var commandFinishNotifications: String { text("Command finish notifications", "命令完成通知") }
-  var notifyNever: String { text("Never", "从不") }
-  var notifyWhenUnfocused: String { text("When unfocused", "未聚焦时") }
-  var notifyAlways: String { text("Always", "始终") }
-  var notifyAfterSeconds: String { text("Notify after", "超过时长后通知") }
-  var notifyWithBell: String { text("Bell on command finish", "命令完成时响铃") }
-  var notifyWithDesktop: String { text("Desktop notification on command finish", "命令完成时系统通知") }
-  var notifyBellWithDesktop: String { text("Desktop notification on terminal bell", "终端响铃时系统通知") }
+  var taskCompletionNotifications: String { text("Task Completion Notifications", "任务完成通知") }
+  var enableNotifications: String { text("Notify on task completion", "任务完成时通知") }
+  var enableNotificationsCaption: String { text("Notifies you when an agent (Claude Code, Codex, …) finishes a task via pg notify.", "当 agent（Claude Code、Codex 等）通过 pg notify 报告任务完成时提醒你。") }
+  var notifyWhenFocused: String { text("Notify even when focused", "聚焦时也通知") }
+  var notifyWhenFocusedCaption: String { text("By default you are only notified when the pane is not focused.", "默认只在该分屏未聚焦时通知。") }
+  var notificationsPermissionHint: String { text("System notifications are not enabled for ProGhostty.", "系统尚未授予 ProGhostty 通知权限。") }
+  var openSystemSettings: String { text("Open System Settings", "打开系统设置") }
   var pgControlCommands: String { text("Enable pg control commands", "启用 pg 控制命令") }
   var pgControlSection: String { text("pg Control", "pg 控制") }
   var shortcuts: String { text("Shortcuts", "快捷键") }

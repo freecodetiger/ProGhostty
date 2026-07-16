@@ -50,6 +50,7 @@ final class AppModel: ObservableObject {
     }
   }
   @Published var isCheckingForUpdates = false
+  @Published var systemNotificationsAuthorized = true
   @Published var shellIntegrationState = "partial"
 
   private let sessionManager: TerminalSessionManager
@@ -148,6 +149,21 @@ final class AppModel: ObservableObject {
     refreshWorkspaces()
     restorePersistedWorkspacesOrCreateDefault()
     Task { await checkForUpdates(manual: false) }
+    refreshNotificationAuthorization()
+  }
+
+  /// Refreshes whether the system has granted notification permission, so
+  /// Settings can show a low-key hint when it hasn't.
+  func refreshNotificationAuthorization() {
+    terminalNotificationCenter.refreshAuthorizationStatus { [weak self] granted in
+      self?.systemNotificationsAuthorized = granted
+    }
+  }
+
+  /// Opens the macOS System Settings notifications pane for this app.
+  func openSystemNotificationSettings() {
+    guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") else { return }
+    NSWorkspace.shared.open(url)
   }
 
   func createAndActivateWorkspace(workspace: Workspace? = nil) {
@@ -1449,16 +1465,13 @@ final class AppModel: ObservableObject {
       shellIntegrationState = "available"
       handleProGhosttyControlOsc(session: session, sequence: sequence)
     case .desktopNotification(let session, let notification):
-      DebugLog.write("desktop notification event session=\(session) title=\(notification.title) body=\(notification.body) inApp=\(settings.inAppNotificationsEnabled) desktop=\(settings.desktopNotificationsEnabled)")
       let actions = TerminalNotificationPolicy.desktopNotificationActions(
         settings: settings,
-        notification: notification
+        notification: notification,
+        isAppActive: NSApp.isActive,
+        isSessionFocused: selectedSessionID == session
       )
       performNotificationActions(actions, session: session)
-    case .commandFinished(let session, let command):
-      handleCommandFinished(session: session, command: command)
-    case .bell(let session):
-      handleTerminalBell(session: session)
     case .error(_, let message):
       shellIntegrationState = message
     default:
@@ -1466,30 +1479,9 @@ final class AppModel: ObservableObject {
     }
   }
 
-  private func handleCommandFinished(session: TerminalSessionID, command: TerminalCommandFinished) {
-    let actions = TerminalNotificationPolicy.commandFinishedActions(
-      settings: settings,
-      command: command,
-      isAppActive: NSApp.isActive,
-      isSessionFocused: selectedSessionID == session
-    )
-    performNotificationActions(actions, session: session)
-  }
-
-  private func handleTerminalBell(session: TerminalSessionID) {
-    let actions = TerminalNotificationPolicy.terminalBellActions(
-      settings: settings,
-      isAppActive: NSApp.isActive,
-      isSessionFocused: selectedSessionID == session
-    )
-    performNotificationActions(actions, session: session)
-  }
-
   private func performNotificationActions(_ actions: [TerminalNotificationAction], session: TerminalSessionID) {
     for action in actions {
       switch action {
-      case .bell:
-        NSSound.beep()
       case .inApp(let notification):
         showInAppNotification(notification, session: session)
       case .sound:

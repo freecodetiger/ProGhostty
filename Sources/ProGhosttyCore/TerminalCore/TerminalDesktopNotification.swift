@@ -4,8 +4,6 @@ public struct TerminalDesktopNotification: Equatable, Sendable {
   public enum Source: Equatable, Sendable {
     case osc9
     case osc777
-    case commandFinished
-    case bell
   }
 
   public var title: String

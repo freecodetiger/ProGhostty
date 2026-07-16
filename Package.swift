@@ -41,7 +41,7 @@ let package = Package(
     .executableTarget(
       name: "ProGhosttyApp",
       dependencies: ["ProGhosttyCore"],
-      exclude: ["Resources"]
+      resources: [.copy("Resources/notification-piano.mp3")]
     ),
     .executableTarget(
       name: "ProGhosttyPG",

@@ -1,26 +1,13 @@
 import AppKit
 import Foundation
 
-public enum TerminalNotificationFocusPolicy: String, Codable, Equatable, Hashable, Sendable {
-  case never
-  case unfocused
-  case always
-}
-
 public struct AppSettings: Codable, Equatable, Sendable {
   public var rendererMode: TerminalRendererMode
   public var smoothPixelScrollingEnabled: Bool
   public var dirtyRowRenderingEnabled: Bool
   public var forceFullRedrawEnabled: Bool
-  public var inAppNotificationsEnabled: Bool
-  public var inAppNotificationSoundEnabled: Bool
-  public var desktopNotificationsEnabled: Bool
-  public var notifyOnCommandFinish: TerminalNotificationFocusPolicy
-  public var notifyOnCommandFinishAfterSeconds: Double
-  public var notifyOnCommandFinishBellEnabled: Bool
-  public var notifyOnCommandFinishDesktopEnabled: Bool
-  public var notifyOnTerminalBell: TerminalNotificationFocusPolicy
-  public var notifyOnTerminalBellDesktopEnabled: Bool
+  public var notificationsEnabled: Bool
+  public var notifyWhenFocused: Bool
   public var defaultShell: String
   public var defaultWorkingDirectory: String?
   public var fontFamily: String
@@ -37,15 +24,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     smoothPixelScrollingEnabled: true,
     dirtyRowRenderingEnabled: true,
     forceFullRedrawEnabled: false,
-    inAppNotificationsEnabled: true,
-    inAppNotificationSoundEnabled: true,
-    desktopNotificationsEnabled: true,
-    notifyOnCommandFinish: .unfocused,
-    notifyOnCommandFinishAfterSeconds: 5,
-    notifyOnCommandFinishBellEnabled: true,
-    notifyOnCommandFinishDesktopEnabled: false,
-    notifyOnTerminalBell: .unfocused,
-    notifyOnTerminalBellDesktopEnabled: true,
+    notificationsEnabled: true,
+    notifyWhenFocused: false,
     defaultShell: "/bin/zsh",
     defaultWorkingDirectory: nil,
     fontFamily: FontManager.defaultMonospacedFontName(),
@@ -63,15 +43,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     case smoothPixelScrollingEnabled
     case dirtyRowRenderingEnabled
     case forceFullRedrawEnabled
-    case inAppNotificationsEnabled
-    case inAppNotificationSoundEnabled
-    case desktopNotificationsEnabled
-    case notifyOnCommandFinish
-    case notifyOnCommandFinishAfterSeconds
-    case notifyOnCommandFinishBellEnabled
-    case notifyOnCommandFinishDesktopEnabled
-    case notifyOnTerminalBell
-    case notifyOnTerminalBellDesktopEnabled
+    case notificationsEnabled
+    case notifyWhenFocused
     case defaultShell
     case defaultWorkingDirectory
     case fontFamily
@@ -89,15 +62,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     smoothPixelScrollingEnabled: Bool,
     dirtyRowRenderingEnabled: Bool,
     forceFullRedrawEnabled: Bool,
-    inAppNotificationsEnabled: Bool,
-    inAppNotificationSoundEnabled: Bool,
-    desktopNotificationsEnabled: Bool,
-    notifyOnCommandFinish: TerminalNotificationFocusPolicy,
-    notifyOnCommandFinishAfterSeconds: Double,
-    notifyOnCommandFinishBellEnabled: Bool,
-    notifyOnCommandFinishDesktopEnabled: Bool,
-    notifyOnTerminalBell: TerminalNotificationFocusPolicy,
-    notifyOnTerminalBellDesktopEnabled: Bool,
+    notificationsEnabled: Bool,
+    notifyWhenFocused: Bool,
     defaultShell: String,
     defaultWorkingDirectory: String?,
     fontFamily: String,
@@ -113,15 +79,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     self.smoothPixelScrollingEnabled = smoothPixelScrollingEnabled
     self.dirtyRowRenderingEnabled = dirtyRowRenderingEnabled
     self.forceFullRedrawEnabled = forceFullRedrawEnabled
-    self.inAppNotificationsEnabled = inAppNotificationsEnabled
-    self.inAppNotificationSoundEnabled = inAppNotificationSoundEnabled
-    self.desktopNotificationsEnabled = desktopNotificationsEnabled
-    self.notifyOnCommandFinish = notifyOnCommandFinish
-    self.notifyOnCommandFinishAfterSeconds = notifyOnCommandFinishAfterSeconds
-    self.notifyOnCommandFinishBellEnabled = notifyOnCommandFinishBellEnabled
-    self.notifyOnCommandFinishDesktopEnabled = notifyOnCommandFinishDesktopEnabled
-    self.notifyOnTerminalBell = notifyOnTerminalBell
-    self.notifyOnTerminalBellDesktopEnabled = notifyOnTerminalBellDesktopEnabled
+    self.notificationsEnabled = notificationsEnabled
+    self.notifyWhenFocused = notifyWhenFocused
     self.defaultShell = defaultShell
     self.defaultWorkingDirectory = defaultWorkingDirectory
     self.fontFamily = fontFamily
@@ -141,15 +100,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     smoothPixelScrollingEnabled = try container.decodeIfPresent(Bool.self, forKey: .smoothPixelScrollingEnabled) ?? Self.defaults.smoothPixelScrollingEnabled
     dirtyRowRenderingEnabled = try container.decodeIfPresent(Bool.self, forKey: .dirtyRowRenderingEnabled) ?? Self.defaults.dirtyRowRenderingEnabled
     forceFullRedrawEnabled = try container.decodeIfPresent(Bool.self, forKey: .forceFullRedrawEnabled) ?? Self.defaults.forceFullRedrawEnabled
-    inAppNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .inAppNotificationsEnabled) ?? Self.defaults.inAppNotificationsEnabled
-    inAppNotificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .inAppNotificationSoundEnabled) ?? Self.defaults.inAppNotificationSoundEnabled
-    desktopNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .desktopNotificationsEnabled) ?? Self.defaults.desktopNotificationsEnabled
-    notifyOnCommandFinish = try container.decodeIfPresent(TerminalNotificationFocusPolicy.self, forKey: .notifyOnCommandFinish) ?? Self.defaults.notifyOnCommandFinish
-    notifyOnCommandFinishAfterSeconds = try container.decodeIfPresent(Double.self, forKey: .notifyOnCommandFinishAfterSeconds) ?? Self.defaults.notifyOnCommandFinishAfterSeconds
-    notifyOnCommandFinishBellEnabled = try container.decodeIfPresent(Bool.self, forKey: .notifyOnCommandFinishBellEnabled) ?? Self.defaults.notifyOnCommandFinishBellEnabled
-    notifyOnCommandFinishDesktopEnabled = try container.decodeIfPresent(Bool.self, forKey: .notifyOnCommandFinishDesktopEnabled) ?? Self.defaults.notifyOnCommandFinishDesktopEnabled
-    notifyOnTerminalBell = try container.decodeIfPresent(TerminalNotificationFocusPolicy.self, forKey: .notifyOnTerminalBell) ?? Self.defaults.notifyOnTerminalBell
-    notifyOnTerminalBellDesktopEnabled = try container.decodeIfPresent(Bool.self, forKey: .notifyOnTerminalBellDesktopEnabled) ?? Self.defaults.notifyOnTerminalBellDesktopEnabled
+    notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? Self.defaults.notificationsEnabled
+    notifyWhenFocused = try container.decodeIfPresent(Bool.self, forKey: .notifyWhenFocused) ?? Self.defaults.notifyWhenFocused
     defaultShell = try container.decodeIfPresent(String.self, forKey: .defaultShell) ?? Self.defaults.defaultShell
     defaultWorkingDirectory = try container.decodeIfPresent(String.self, forKey: .defaultWorkingDirectory)
     fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? Self.defaults.fontFamily

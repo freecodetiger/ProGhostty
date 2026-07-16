@@ -36,34 +36,16 @@ struct TerminalNotificationCenterTests {
     #expect(sender.requests.count == 2)
   }
 
-  @Test func explicitTerminalNotificationUsesInAppAndSoundWhenDesktopIsDisabled() {
+  @Test func taskCompletionNotifiesInAppSoundAndDesktopInParallel() {
     var settings = AppSettings.defaults
-    settings.desktopNotificationsEnabled = false
-    settings.inAppNotificationsEnabled = true
-    settings.inAppNotificationSoundEnabled = true
+    settings.notificationsEnabled = true
     let notification = TerminalDesktopNotification(title: "Codex", body: "Waiting for input", source: .osc777)
 
     let actions = TerminalNotificationPolicy.desktopNotificationActions(
       settings: settings,
-      notification: notification
-    )
-
-    #expect(actions == [
-      .inApp(notification),
-      .sound,
-    ])
-  }
-
-  @Test func explicitTerminalNotificationCanUseInAppSoundAndDesktopTogether() {
-    var settings = AppSettings.defaults
-    settings.desktopNotificationsEnabled = true
-    settings.inAppNotificationsEnabled = true
-    settings.inAppNotificationSoundEnabled = true
-    let notification = TerminalDesktopNotification(title: "Codex", body: "Waiting for input", source: .osc777)
-
-    let actions = TerminalNotificationPolicy.desktopNotificationActions(
-      settings: settings,
-      notification: notification
+      notification: notification,
+      isAppActive: false,
+      isSessionFocused: false
     )
 
     #expect(actions == [
@@ -73,15 +55,14 @@ struct TerminalNotificationCenterTests {
     ])
   }
 
-  @Test func commandFinishPolicySkipsShortCommands() {
+  @Test func taskCompletionSuppressedWhenNotificationsDisabled() {
     var settings = AppSettings.defaults
-    settings.notifyOnCommandFinish = .always
-    settings.notifyOnCommandFinishDesktopEnabled = true
-    settings.notifyOnCommandFinishAfterSeconds = 5
+    settings.notificationsEnabled = false
+    let notification = TerminalDesktopNotification(title: "Codex", body: "Done", source: .osc777)
 
-    let actions = TerminalNotificationPolicy.commandFinishedActions(
+    let actions = TerminalNotificationPolicy.desktopNotificationActions(
       settings: settings,
-      command: TerminalCommandFinished(exitCode: 0, duration: 1),
+      notification: notification,
       isAppActive: false,
       isSessionFocused: false
     )
@@ -89,37 +70,15 @@ struct TerminalNotificationCenterTests {
     #expect(actions.isEmpty)
   }
 
-  @Test func commandFinishPolicyNotifiesLongCommandWhenDesktopActionEnabled() {
+  @Test func taskCompletionSkippedWhenFocusedSessionAndNotifyWhenFocusedOff() {
     var settings = AppSettings.defaults
-    settings.notifyOnCommandFinish = .always
-    settings.notifyOnCommandFinishDesktopEnabled = true
-    settings.notifyOnCommandFinishAfterSeconds = 5
+    settings.notificationsEnabled = true
+    settings.notifyWhenFocused = false
+    let notification = TerminalDesktopNotification(title: "Codex", body: "Done", source: .osc777)
 
-    let actions = TerminalNotificationPolicy.commandFinishedActions(
+    let actions = TerminalNotificationPolicy.desktopNotificationActions(
       settings: settings,
-      command: TerminalCommandFinished(exitCode: 0, duration: 6),
-      isAppActive: true,
-      isSessionFocused: true
-    )
-
-    #expect(actions == [
-      .bell,
-      .desktop(TerminalDesktopNotification(
-        title: "Command Succeeded",
-        body: "Command took 6s.",
-        source: .commandFinished
-      )),
-    ])
-  }
-
-  @Test func commandFinishPolicySkipsFocusedSessionWhenConfiguredForUnfocusedOnly() {
-    var settings = AppSettings.defaults
-    settings.notifyOnCommandFinish = .unfocused
-    settings.notifyOnCommandFinishDesktopEnabled = true
-
-    let actions = TerminalNotificationPolicy.commandFinishedActions(
-      settings: settings,
-      command: TerminalCommandFinished(exitCode: 0, duration: 6),
+      notification: notification,
       isAppActive: true,
       isSessionFocused: true
     )
@@ -127,30 +86,37 @@ struct TerminalNotificationCenterTests {
     #expect(actions.isEmpty)
   }
 
-  @Test func terminalBellPolicyNotifiesUnfocusedSessionByDefault() {
-    let actions = TerminalNotificationPolicy.terminalBellActions(
-      settings: .defaults,
-      isAppActive: false,
+  @Test func taskCompletionNotifiesUnfocusedSessionEvenWhenNotifyWhenFocusedOff() {
+    var settings = AppSettings.defaults
+    settings.notificationsEnabled = true
+    settings.notifyWhenFocused = false
+    let notification = TerminalDesktopNotification(title: "Codex", body: "Done", source: .osc777)
+
+    // App active but the notifying session is NOT the focused pane → still notify.
+    let actions = TerminalNotificationPolicy.desktopNotificationActions(
+      settings: settings,
+      notification: notification,
+      isAppActive: true,
       isSessionFocused: false
     )
 
-    #expect(actions == [
-      .desktop(TerminalDesktopNotification(
-        title: "Terminal Bell",
-        body: "A terminal session needs attention.",
-        source: .bell
-      )),
-    ])
+    #expect(actions == [.inApp(notification), .sound, .desktop(notification)])
   }
 
-  @Test func terminalBellPolicySkipsFocusedSessionWhenConfiguredForUnfocusedOnly() {
-    let actions = TerminalNotificationPolicy.terminalBellActions(
-      settings: .defaults,
+  @Test func taskCompletionNotifiesFocusedSessionWhenNotifyWhenFocusedOn() {
+    var settings = AppSettings.defaults
+    settings.notificationsEnabled = true
+    settings.notifyWhenFocused = true
+    let notification = TerminalDesktopNotification(title: "Codex", body: "Done", source: .osc777)
+
+    let actions = TerminalNotificationPolicy.desktopNotificationActions(
+      settings: settings,
+      notification: notification,
       isAppActive: true,
       isSessionFocused: true
     )
 
-    #expect(actions.isEmpty)
+    #expect(actions == [.inApp(notification), .sound, .desktop(notification)])
   }
 }
 
@@ -161,5 +127,9 @@ private final class RecordingTerminalNotificationSender: TerminalNotificationSen
 
   func send(title: String, body: String) {
     requests.append((title, body))
+  }
+
+  func fetchAuthorizationGranted(_ completion: @escaping @Sendable (Bool) -> Void) {
+    completion(true)
   }
 }

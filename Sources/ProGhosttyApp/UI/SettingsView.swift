@@ -240,45 +240,37 @@ struct SettingsView: View {
             }
           }
 
-          SettingsSection(text.notifications) {
-            Toggle(text.inAppNotifications, isOn: $model.settings.inAppNotificationsEnabled)
-            Toggle(text.inAppNotificationSound, isOn: $model.settings.inAppNotificationSoundEnabled)
-            Toggle(text.desktopNotifications, isOn: $model.settings.desktopNotificationsEnabled)
-
-            SettingsRow(text.terminalBellNotifications) {
-              Picker("", selection: $model.settings.notifyOnTerminalBell) {
-                Text(text.notifyNever).tag(TerminalNotificationFocusPolicy.never)
-                Text(text.notifyWhenUnfocused).tag(TerminalNotificationFocusPolicy.unfocused)
-                Text(text.notifyAlways).tag(TerminalNotificationFocusPolicy.always)
-              }
-              .pickerStyle(.segmented)
-              .labelsHidden()
+          SettingsSection(text.taskCompletionNotifications) {
+            VStack(alignment: .leading, spacing: 4) {
+              Toggle(text.enableNotifications, isOn: $model.settings.notificationsEnabled)
+              Text(text.enableNotificationsCaption)
+                .font(.system(size: 12))
+                .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
             }
 
-            Toggle(text.notifyBellWithDesktop, isOn: $model.settings.notifyOnTerminalBellDesktopEnabled)
-
-            SettingsRow(text.commandFinishNotifications) {
-              Picker("", selection: $model.settings.notifyOnCommandFinish) {
-                Text(text.notifyNever).tag(TerminalNotificationFocusPolicy.never)
-                Text(text.notifyWhenUnfocused).tag(TerminalNotificationFocusPolicy.unfocused)
-                Text(text.notifyAlways).tag(TerminalNotificationFocusPolicy.always)
-              }
-              .pickerStyle(.segmented)
-              .labelsHidden()
+            // Level-2 toggle: subordinate to the master switch above. Indented,
+            // and disabled + dimmed until notifications are enabled.
+            VStack(alignment: .leading, spacing: 4) {
+              Toggle(text.notifyWhenFocused, isOn: $model.settings.notifyWhenFocused)
+              Text(text.notifyWhenFocusedCaption)
+                .font(.system(size: 12))
+                .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
             }
+            .padding(.leading, 18)
+            .disabled(!model.settings.notificationsEnabled)
+            .opacity(model.settings.notificationsEnabled ? 1 : 0.45)
 
-            SettingsRow(text.notifyAfterSeconds) {
+            if model.settings.notificationsEnabled, !model.systemNotificationsAuthorized {
               HStack(spacing: 10) {
-                Slider(value: $model.settings.notifyOnCommandFinishAfterSeconds, in: 1...30, step: 1)
-                Text("\(Int(model.settings.notifyOnCommandFinishAfterSeconds))s")
-                  .font(.system(size: 12, weight: .medium, design: .monospaced))
-                  .frame(width: 36, alignment: .trailing)
+                Text(text.notificationsPermissionHint)
+                  .font(.system(size: 12))
                   .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+                Spacer()
+                Button(text.openSystemSettings) {
+                  model.openSystemNotificationSettings()
+                }
               }
             }
-
-            Toggle(text.notifyWithBell, isOn: $model.settings.notifyOnCommandFinishBellEnabled)
-            Toggle(text.notifyWithDesktop, isOn: $model.settings.notifyOnCommandFinishDesktopEnabled)
           }
 
           SettingsSection(text.pgControlSection) {

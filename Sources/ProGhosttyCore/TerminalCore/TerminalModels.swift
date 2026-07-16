@@ -47,8 +47,6 @@ public enum TerminalEvent: Sendable {
   case output(session: TerminalSessionID, data: Data)
   case osc(session: TerminalSessionID, sequence: OscSequence)
   case desktopNotification(session: TerminalSessionID, notification: TerminalDesktopNotification)
-  case commandFinished(session: TerminalSessionID, command: TerminalCommandFinished)
-  case bell(session: TerminalSessionID)
   case cwdChanged(session: TerminalSessionID, cwd: String)
   case titleChanged(session: TerminalSessionID, title: String)
   case error(session: TerminalSessionID, message: String)

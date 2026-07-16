@@ -6,6 +6,7 @@ import UserNotifications
 protocol TerminalNotificationSending: AnyObject {
   func requestAuthorizationIfNeeded()
   func send(title: String, body: String)
+  func fetchAuthorizationGranted(_ completion: @escaping @Sendable (Bool) -> Void)
 }
 
 protocol TerminalNotificationSoundPlaying: AnyObject {
@@ -41,107 +42,43 @@ final class TerminalNotificationCenter {
     sender.requestAuthorizationIfNeeded()
     sender.send(title: notification.title, body: notification.body)
   }
+
+  /// Reports whether the system has granted notification authorization, for the
+  /// low-key permission hint in Settings. Result is delivered on the main actor.
+  func refreshAuthorizationStatus(_ completion: @escaping @MainActor (Bool) -> Void) {
+    sender.fetchAuthorizationGranted { granted in
+      Task { @MainActor in completion(granted) }
+    }
+  }
 }
 
 enum TerminalNotificationAction: Equatable {
-  case bell
   case inApp(TerminalDesktopNotification)
   case sound
   case desktop(TerminalDesktopNotification)
 }
 
 enum TerminalNotificationPolicy {
+  /// The sole notification trigger: an agent task-completion notification
+  /// (`pg notify`, arriving via OSC 777). Fires in-app toast + system
+  /// notification + the piano sound in parallel, gated by the master toggle
+  /// and focus.
+  ///
+  /// - When notifications are disabled: nothing.
+  /// - When `notifyWhenFocused` is off (default): suppressed while the app is
+  ///   active AND the notifying session is the focused pane (you are already
+  ///   looking at it).
   static func desktopNotificationActions(
     settings: AppSettings,
-    notification: TerminalDesktopNotification
-  ) -> [TerminalNotificationAction] {
-    var actions: [TerminalNotificationAction] = []
-    if settings.inAppNotificationsEnabled {
-      actions.append(.inApp(notification))
-      if settings.inAppNotificationSoundEnabled {
-        actions.append(.sound)
-      }
-    }
-    if settings.desktopNotificationsEnabled {
-      actions.append(.desktop(notification))
-    }
-    return actions
-  }
-
-  static func terminalBellActions(
-    settings: AppSettings,
+    notification: TerminalDesktopNotification,
     isAppActive: Bool,
     isSessionFocused: Bool
   ) -> [TerminalNotificationAction] {
-    guard settings.desktopNotificationsEnabled, settings.notifyOnTerminalBellDesktopEnabled else {
+    guard settings.notificationsEnabled else { return [] }
+    if !settings.notifyWhenFocused, isAppActive, isSessionFocused {
       return []
     }
-
-    switch settings.notifyOnTerminalBell {
-    case .never:
-      return []
-    case .unfocused:
-      if isAppActive && isSessionFocused { return [] }
-    case .always:
-      break
-    }
-
-    return [.desktop(TerminalDesktopNotification(
-      title: "Terminal Bell",
-      body: "A terminal session needs attention.",
-      source: .bell
-    ))]
-  }
-
-  static func commandFinishedActions(
-    settings: AppSettings,
-    command: TerminalCommandFinished,
-    isAppActive: Bool,
-    isSessionFocused: Bool
-  ) -> [TerminalNotificationAction] {
-    guard command.duration >= settings.notifyOnCommandFinishAfterSeconds else { return [] }
-
-    switch settings.notifyOnCommandFinish {
-    case .never:
-      return []
-    case .unfocused:
-      if isAppActive && isSessionFocused { return [] }
-    case .always:
-      break
-    }
-
-    var actions: [TerminalNotificationAction] = []
-    if settings.notifyOnCommandFinishBellEnabled {
-      actions.append(.bell)
-    }
-    if settings.desktopNotificationsEnabled, settings.notifyOnCommandFinishDesktopEnabled {
-      actions.append(.desktop(TerminalDesktopNotification(
-        title: commandFinishedTitle(exitCode: command.exitCode),
-        body: commandFinishedBody(command),
-        source: .commandFinished
-      )))
-    }
-    return actions
-  }
-
-  private static func commandFinishedTitle(exitCode: Int?) -> String {
-    guard let exitCode else { return "Command Finished" }
-    return exitCode == 0 ? "Command Succeeded" : "Command Failed"
-  }
-
-  private static func commandFinishedBody(_ command: TerminalCommandFinished) -> String {
-    let duration = formattedDuration(command.duration)
-    if let exitCode = command.exitCode, exitCode != 0 {
-      return "Command took \(duration) and exited with code \(exitCode)."
-    }
-    return "Command took \(duration)."
-  }
-
-  private static func formattedDuration(_ duration: TimeInterval) -> String {
-    if duration >= 60 {
-      return "\(Int(duration / 60))m \(Int(duration) % 60)s"
-    }
-    return "\(Int(duration))s"
+    return [.inApp(notification), .sound, .desktop(notification)]
   }
 }
 
@@ -162,6 +99,17 @@ private final class MacTerminalNotificationSender: NSObject, TerminalNotificatio
         Self.requestFallbackAttention()
       } else {
         Self.log("notification authorization granted=\(isGranted)")
+      }
+    }
+  }
+
+  func fetchAuthorizationGranted(_ completion: @escaping @Sendable (Bool) -> Void) {
+    UNUserNotificationCenter.current().getNotificationSettings { settings in
+      switch settings.authorizationStatus {
+      case .authorized, .provisional, .ephemeral:
+        completion(true)
+      default:
+        completion(false)
       }
     }
   }
@@ -258,7 +206,14 @@ final class TerminalNotificationSoundPlayer: TerminalNotificationSoundPlaying {
   }
 
   private static func notificationSoundURL() -> URL? {
+    // Bundle.main first: the packaged .app copies the mp3 into Contents/Resources,
+    // and this avoids touching Bundle.module (whose synthesized accessor
+    // fatalErrors if the SwiftPM resource bundle isn't found next to the binary).
     if let bundled = Bundle.main.url(forResource: "notification-piano", withExtension: "mp3") {
+      return bundled
+    }
+    // SwiftPM resource bundle: used by `swift run` and the test target.
+    if let bundled = Bundle.module.url(forResource: "notification-piano", withExtension: "mp3") {
       return bundled
     }
     let sourceURL = URL(fileURLWithPath: #filePath)

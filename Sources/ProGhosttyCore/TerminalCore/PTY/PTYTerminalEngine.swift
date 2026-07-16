@@ -317,12 +317,10 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     var readSource: DispatchSourceRead
     var waitTimer: DispatchSourceTimer
     var oscParser: OscParser
-    var bellParser: TerminalBellParser
     var vtBridge: GhosttyVTBridge
     var controlToken: String
     var vtQueue: DispatchQueue
     var resizeGeneration: UInt64 = 0
-    var commandStartedAt: Date?
   }
 
   private let surfaceRegistry: PTYTerminalSurfaceRegistry
@@ -371,7 +369,6 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       readSource: readSource,
       waitTimer: waitTimer,
       oscParser: OscParser(),
-      bellParser: TerminalBellParser(),
       vtBridge: vtBridge,
       controlToken: token,
       vtQueue: DispatchQueue(label: "dev.proghostty.vt.\(id.rawValue.uuidString)", qos: .userInteractive)
@@ -633,35 +630,12 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       secondsSinceLastInput: secondsSinceLastInput
     ) ? .immediate : .coalesced
     let sequences = state.oscParser.parse(data)
-    let bellCount = state.bellParser.parse(data)
     sessions[id] = state
     continuation.yield(.output(session: id, data: data))
-    for _ in 0..<bellCount {
-      continuation.yield(.bell(session: id))
-    }
     for sequence in sequences {
       continuation.yield(.osc(session: id, sequence: sequence))
       if let notification = TerminalDesktopNotificationParser.parse(sequence) {
         continuation.yield(.desktopNotification(session: id, notification: notification))
-      }
-      if let marker = TerminalCommandLifecycleParser.parse(sequence) {
-        switch marker {
-        case .started:
-          state.commandStartedAt = Date()
-          sessions[id] = state
-        case .finished(let exitCode):
-          if let startedAt = state.commandStartedAt {
-            let finished = TerminalCommandFinished(
-              exitCode: exitCode,
-              duration: Date().timeIntervalSince(startedAt)
-            )
-            state.commandStartedAt = nil
-            sessions[id] = state
-            continuation.yield(.commandFinished(session: id, command: finished))
-          }
-        case .promptStarted:
-          break
-        }
       }
       if let cwd = CwdTracker.cwd(from: sequence) {
         state.config.workingDirectory = cwd

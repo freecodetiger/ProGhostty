@@ -92,45 +92,26 @@ struct AppSettingsTests {
   }
 
   @Test func decodesLegacySettingsWithNotificationDefaults() throws {
-    let data = Data(#"{"themeName":"dark"}"#.utf8)
+    // Old persisted JSON (pre-redesign keys are simply ignored) still decodes,
+    // and the two current notification toggles fall back to defaults.
+    let data = Data(#"{"themeName":"dark","inAppNotificationsEnabled":false,"notifyOnCommandFinish":"always"}"#.utf8)
 
     let settings = try JSONDecoder().decode(AppSettings.self, from: data)
 
-    #expect(settings.inAppNotificationsEnabled)
-    #expect(settings.inAppNotificationSoundEnabled)
-    #expect(settings.desktopNotificationsEnabled)
-    #expect(settings.notifyOnCommandFinish == .unfocused)
-    #expect(settings.notifyOnCommandFinishAfterSeconds == 5)
-    #expect(settings.notifyOnCommandFinishBellEnabled)
-    #expect(!settings.notifyOnCommandFinishDesktopEnabled)
-    #expect(settings.notifyOnTerminalBell == .unfocused)
-    #expect(settings.notifyOnTerminalBellDesktopEnabled)
+    #expect(settings.notificationsEnabled)
+    #expect(!settings.notifyWhenFocused)
   }
 
   @Test func notificationSettingsRoundTripThroughJSON() throws {
     var settings = AppSettings.defaults
-    settings.inAppNotificationsEnabled = false
-    settings.inAppNotificationSoundEnabled = false
-    settings.desktopNotificationsEnabled = false
-    settings.notifyOnCommandFinish = .always
-    settings.notifyOnCommandFinishAfterSeconds = 12
-    settings.notifyOnCommandFinishBellEnabled = false
-    settings.notifyOnCommandFinishDesktopEnabled = true
-    settings.notifyOnTerminalBell = .always
-    settings.notifyOnTerminalBellDesktopEnabled = false
+    settings.notificationsEnabled = false
+    settings.notifyWhenFocused = true
 
     let data = try JSONEncoder().encode(settings)
     let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
 
-    #expect(decoded.inAppNotificationsEnabled == false)
-    #expect(decoded.inAppNotificationSoundEnabled == false)
-    #expect(decoded.desktopNotificationsEnabled == false)
-    #expect(decoded.notifyOnCommandFinish == .always)
-    #expect(decoded.notifyOnCommandFinishAfterSeconds == 12)
-    #expect(decoded.notifyOnCommandFinishBellEnabled == false)
-    #expect(decoded.notifyOnCommandFinishDesktopEnabled == true)
-    #expect(decoded.notifyOnTerminalBell == .always)
-    #expect(decoded.notifyOnTerminalBellDesktopEnabled == false)
+    #expect(decoded.notificationsEnabled == false)
+    #expect(decoded.notifyWhenFocused == true)
   }
 
   @Test func rendererOptionsEnablePixelScrollByDefault() {
