@@ -369,7 +369,7 @@ public final class GhosttyVTBridge {
     let html = try formattedString { handle, pointer, length in
       proghostty_vt_format_html(handle, &pointer, &length)
     }
-    return GhosttyHTMLAttributedAdapter.normalizedHTMLPaletteColors(in: html)
+    return HTMLPaletteNormalizer.normalized(html)
   }
 
   private func formattedString(

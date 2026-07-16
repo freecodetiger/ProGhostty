@@ -162,18 +162,27 @@ struct GhosttyHTMLAttributedAdapterTests {
     #expect(attributed.string == "中文 é 😀")
   }
 
-  @MainActor @Test func reusesCachedResultForIdenticalInput() throws {
-    let adapter = GhosttyHTMLAttributedAdapter(
+  @MainActor @Test func liftsLowContrastForegroundToMeetMinimumContrast() throws {
+    // A near-background foreground (dark gray on the dark palette) would be
+    // unreadable; the HTML fallback must apply the same WCAG minimum-contrast
+    // correction as the cell-grid renderer so readability does not silently
+    // degrade on the fallback path.
+    let attributed = try GhosttyHTMLAttributedAdapter(
       palette: .dark,
       fontFamily: "Menlo",
       fontSize: 14
+    ).attributedString(fromHTML:
+      """
+      <div style="font-family: monospace; white-space: pre;"><div style="display: inline;color: rgb(26, 26, 26);">dim</div></div>
+      """,
+      isFocused: true
     )
-    let html = "<div style=\"font-family: monospace; white-space: pre;\">cached</div>"
 
-    let first = try adapter.attributedString(fromHTML: html, isFocused: true)
-    let second = try adapter.attributedString(fromHTML: html, isFocused: true)
+    let index = (attributed.string as NSString).range(of: "dim").location
+    let foreground = try #require(attributed.attribute(.foregroundColor, at: index, effectiveRange: nil) as? NSColor)
+    let background = TerminalSurfacePalette.dark.background
 
-    #expect(first === second)
+    #expect(foreground.contrastRatio(against: background) >= 3.0)
   }
 }
 
@@ -181,6 +190,22 @@ private extension NSColor {
   var lightness: CGFloat {
     guard let rgb = usingColorSpace(.deviceRGB) else { return 0 }
     return (rgb.redComponent + rgb.greenComponent + rgb.blueComponent) / 3
+  }
+
+  func contrastRatio(against other: NSColor) -> CGFloat {
+    let lighter = max(relativeLuminance, other.relativeLuminance)
+    let darker = min(relativeLuminance, other.relativeLuminance)
+    return (lighter + 0.05) / (darker + 0.05)
+  }
+
+  private var relativeLuminance: CGFloat {
+    let rgb = usingColorSpace(.deviceRGB) ?? self
+    func channel(_ value: CGFloat) -> CGFloat {
+      value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(rgb.redComponent)
+      + 0.7152 * channel(rgb.greenComponent)
+      + 0.0722 * channel(rgb.blueComponent)
   }
 
   func sameRGB(as other: NSColor) -> Bool {

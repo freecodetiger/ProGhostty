@@ -109,21 +109,45 @@ enum TerminalColorResolver {
       fallback: cell.usesDefaultForeground ? palette.foreground : nil
     )
 
-    var foreground = cell.faint
-      ? faintColor(baseForeground, background: baseBackground, usesDefaultForeground: cell.usesDefaultForeground, palette: palette)
+    return resolvedColors(
+      baseForeground: baseForeground,
+      baseBackground: baseBackground,
+      faint: cell.faint,
+      inverse: cell.inverse,
+      usesDefaultForeground: cell.usesDefaultForeground,
+      isFocused: isFocused,
+      palette: palette
+    )
+  }
+
+  /// Color-level resolver shared by the cell-grid renderer and the HTML
+  /// fallback adapter. Applies faint dimming, inverse swap, WCAG minimum
+  /// contrast, and inactive dimming so both presentation paths produce the
+  /// same readable colors.
+  static func resolvedColors(
+    baseForeground: NSColor,
+    baseBackground: NSColor,
+    faint: Bool,
+    inverse: Bool,
+    usesDefaultForeground: Bool,
+    isFocused: Bool,
+    palette: TerminalSurfacePalette
+  ) -> (foreground: NSColor, background: NSColor) {
+    var foreground = faint
+      ? faintColor(baseForeground, background: baseBackground, usesDefaultForeground: usesDefaultForeground, palette: palette)
       : baseForeground
     var background = baseBackground
 
-    if cell.inverse {
+    if inverse {
       swap(&foreground, &background)
     }
 
-    let activeMinimumContrast: CGFloat = cell.faint ? 2.0 : 3.0
+    let activeMinimumContrast: CGFloat = faint ? 2.0 : 3.0
     foreground = foreground.withMinimumContrast(activeMinimumContrast, against: background)
 
     if !isFocused {
       foreground = foreground.blended(toward: palette.background, amount: palette.inactiveForegroundBlend)
-      let inactiveMinimumContrast: CGFloat = cell.faint ? 1.8 : 2.4
+      let inactiveMinimumContrast: CGFloat = faint ? 1.8 : 2.4
       foreground = foreground.withMinimumContrast(inactiveMinimumContrast, against: background)
     }
 
