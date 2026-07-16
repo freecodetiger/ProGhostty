@@ -31,9 +31,42 @@ public final class PaneWorkspaceController {
     workspaceLayouts.first { $0.id == id }
   }
 
-  public func replaceWorkspaceLayout(_ workspace: WorkspaceLayout) {
-    guard let index = workspaceLayouts.firstIndex(where: { $0.id == workspace.id }) else { return }
-    workspaceLayouts[index] = workspace
+  /// Renames a workspace. The controller is the sole owner of the layout, so
+  /// callers mutate the title through here rather than editing a local copy.
+  @discardableResult
+  public func renameWorkspace(workspaceID: UUID, title: String) -> WorkspaceLayout? {
+    guard let index = workspaceLayouts.firstIndex(where: { $0.id == workspaceID }) else { return nil }
+    workspaceLayouts[index].title = title
+    return workspaceLayouts[index]
+  }
+
+  /// Updates the recorded working directory for every pane bound to `session`
+  /// and returns the mutated layout. Returns nil if no workspace owns the
+  /// session.
+  @discardableResult
+  public func updatePaneCwd(session: TerminalSessionID, cwd: String) -> WorkspaceLayout? {
+    guard let index = workspaceLayouts.firstIndex(where: { workspace in
+      PaneTreeReducer.listLeaves(in: workspace.root).contains { $0.sessionId == session }
+    }) else {
+      return nil
+    }
+    workspaceLayouts[index].root = PaneTreeReducer.mapLeaves(in: workspaceLayouts[index].root) { pane in
+      guard pane.sessionId == session else { return pane }
+      var updated = pane
+      updated.cwd = cwd
+      return updated
+    }
+    return workspaceLayouts[index]
+  }
+
+  /// Replaces an existing workspace's layout with a previously captured
+  /// snapshot. Only valid for a workspace that already exists (snapshots are
+  /// restored in place); creation still flows through open/restore.
+  @discardableResult
+  public func restoreLayout(workspaceID: UUID, layout: WorkspaceLayout) -> WorkspaceLayout? {
+    guard let index = workspaceLayouts.firstIndex(where: { $0.id == workspaceID }) else { return nil }
+    workspaceLayouts[index] = layout
+    return workspaceLayouts[index]
   }
 
   public func openTerminal(
@@ -107,7 +140,9 @@ public final class PaneWorkspaceController {
     return restored
   }
 
-  public func closeSelectedTerminal() -> (workspaceID: UUID, panes: [TerminalPane])? {
+  /// Closes the currently active workspace and all of its panes. Named for
+  /// what it does — this is not a single-pane close (see `closePane`).
+  public func closeActiveWorkspace() -> (workspaceID: UUID, panes: [TerminalPane])? {
     guard let activeWorkspaceID else {
       return nil
     }

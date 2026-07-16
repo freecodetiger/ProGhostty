@@ -153,6 +153,42 @@ struct PaneWorkspaceControllerTests {
     #expect(focusStore.focusedPaneId(in: restored.id) == PaneTreeReducer.listLeaves(in: restored.root).first?.paneId)
   }
 
+  @Test func renameWorkspaceUpdatesOwnedLayoutTitle() throws {
+    let controller = PaneWorkspaceController(sessionManager: RecordingSessionManager(), focusStore: TerminalFocusStore())
+    let opened = try controller.openTerminal(title: "work", config: makeConfig(cwd: "/a"), paneTitle: "zsh", cwd: "/a")
+
+    let renamed = try #require(controller.renameWorkspace(workspaceID: opened.workspace.id, title: "renamed"))
+
+    #expect(renamed.title == "renamed")
+    #expect(controller.workspaceLayout(id: opened.workspace.id)?.title == "renamed")
+    #expect(controller.renameWorkspace(workspaceID: UUID(), title: "x") == nil)
+  }
+
+  @Test func updatePaneCwdRewritesEveryMatchingPaneInOwnedLayout() throws {
+    let controller = PaneWorkspaceController(sessionManager: RecordingSessionManager(), focusStore: TerminalFocusStore())
+    let opened = try controller.openTerminal(title: "work", config: makeConfig(cwd: "/a"), paneTitle: "zsh", cwd: "/a")
+    let session = opened.pane.sessionId
+
+    let updated = try #require(controller.updatePaneCwd(session: session, cwd: "/changed"))
+
+    #expect(PaneTreeReducer.listLeaves(in: updated.root).first(where: { $0.sessionId == session })?.cwd == "/changed")
+    #expect(controller.workspaceLayout(id: opened.workspace.id).map { PaneTreeReducer.listLeaves(in: $0.root).first?.cwd } == "/changed")
+    #expect(controller.updatePaneCwd(session: TerminalSessionID(), cwd: "/nope") == nil)
+  }
+
+  @Test func restoreLayoutReplacesExistingWorkspaceButNotUnknownOne() throws {
+    let controller = PaneWorkspaceController(sessionManager: RecordingSessionManager(), focusStore: TerminalFocusStore())
+    let opened = try controller.openTerminal(title: "work", config: makeConfig(cwd: "/a"), paneTitle: "zsh", cwd: "/a")
+    var snapshot = try #require(controller.workspaceLayout(id: opened.workspace.id))
+    snapshot.title = "restored-snapshot"
+
+    let restored = try #require(controller.restoreLayout(workspaceID: opened.workspace.id, layout: snapshot))
+
+    #expect(restored.title == "restored-snapshot")
+    #expect(controller.workspaceLayout(id: opened.workspace.id)?.title == "restored-snapshot")
+    #expect(controller.restoreLayout(workspaceID: UUID(), layout: snapshot) == nil)
+  }
+
   private func makeConfig(cwd: String) -> TerminalSessionConfig {
     TerminalSessionConfig(shellPath: "/bin/sh", workingDirectory: cwd, environment: [:], rows: 24, cols: 80)
   }

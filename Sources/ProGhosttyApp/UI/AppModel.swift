@@ -250,7 +250,7 @@ final class AppModel: ObservableObject {
   }
 
   func closeSelectedTerminal() {
-    guard let closed = paneWorkspaceController.closeSelectedTerminal() else { return }
+    guard let closed = paneWorkspaceController.closeActiveWorkspace() else { return }
     removePaneSplitAvailability(for: closed.panes)
     workspaceRuntimes.removeAll { $0.id == closed.workspaceID }
     activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
@@ -818,7 +818,11 @@ final class AppModel: ObservableObject {
       runtime.workspace?.id == workspaceListID || runtime.id == workspaceListID
     }) {
       var runtime = workspaceRuntimes[runtimeIndex]
-      runtime.layout.title = nextName
+      if let renamed = paneWorkspaceController.renameWorkspace(workspaceID: runtime.id, title: nextName) {
+        runtime.layout = renamed
+      } else {
+        runtime.layout.title = nextName
+      }
       if var workspace = runtime.workspace {
         workspace.name = nextName
         workspace.updatedAt = Date()
@@ -832,7 +836,6 @@ final class AppModel: ObservableObject {
         runtime.workspace = workspace
       }
       workspaceRuntimes[runtimeIndex] = runtime
-      paneWorkspaceController.replaceWorkspaceLayout(runtime.layout)
       persistWorkspaceRuntime(at: runtimeIndex)
       refreshWorkspaces()
       return
@@ -1266,8 +1269,8 @@ final class AppModel: ObservableObject {
       workspaceRuntimes[index].cwdBySession[session] = nil
     }
 
-    workspaceRuntimes[index].layout = saved
-    paneWorkspaceController.replaceWorkspaceLayout(saved)
+    let restored = paneWorkspaceController.restoreLayout(workspaceID: activeWorkspaceID, layout: saved) ?? saved
+    workspaceRuntimes[index].layout = restored
     persistWorkspaceRuntime(at: index)
     expandTerminalWindowIfNeeded(for: workspaceRuntimes[index])
     if let firstPane = PaneTreeReducer.listLeaves(in: saved.root).first {
@@ -1467,16 +1470,6 @@ final class AppModel: ObservableObject {
     applyFocusedTerminalSurface()
   }
 
-  private func syncRuntimeLayout(for workspaceID: UUID) {
-    guard let updated = paneWorkspaceController.workspaceLayout(id: workspaceID),
-      let index = workspaceRuntimes.firstIndex(where: { $0.id == workspaceID })
-    else { return }
-    workspaceRuntimes[index].layout = updated
-    for pane in PaneTreeReducer.listLeaves(in: updated.root) {
-      workspaceRuntimes[index].cwdBySession[pane.sessionId] = workspaceRuntimes[index].cwdBySession[pane.sessionId] ?? pane.cwd ?? workspaceRuntimes[index].displayPath ?? ""
-    }
-  }
-
   private func sessionConfig(workspace: Workspace?, workingDirectory: String?) -> TerminalSessionConfig {
     TerminalSessionConfig(
       shellPath: workspace?.defaultShell ?? settings.defaultShell,
@@ -1502,8 +1495,11 @@ final class AppModel: ObservableObject {
       shellIntegrationState = "available"
       updateWorkspaceForSession(session, persist: true) { workspace in
         workspace.cwdBySession[session] = cwd
-        workspace.layout.root = layoutUpdatingPaneCwd(workspace.layout.root, session: session, cwd: cwd)
-        paneWorkspaceController.replaceWorkspaceLayout(workspace.layout)
+        if let updated = paneWorkspaceController.updatePaneCwd(session: session, cwd: cwd) {
+          workspace.layout = updated
+        } else {
+          workspace.layout.root = layoutUpdatingPaneCwd(workspace.layout.root, session: session, cwd: cwd)
+        }
       }
       objectWillChange.send()
     case .osc(let session, let sequence):
