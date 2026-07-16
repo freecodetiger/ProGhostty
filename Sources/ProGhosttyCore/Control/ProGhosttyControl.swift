@@ -4,9 +4,6 @@ public enum ProGhosttyControlCommand: String, Codable, CaseIterable, Sendable {
   case workspaceOpen = "workspace.open"
   case workspaceSwitch = "workspace.switch"
   case workspaceNew = "workspace.new"
-  case pluginsOpen = "plugins.open"
-  case pluginsScan = "plugins.scan"
-  case pluginsPlan = "plugins.plan"
   case settingsOpen = "settings.open"
   case splitRight = "split.right"
   case splitDown = "split.down"
@@ -134,8 +131,6 @@ public enum PGCommandMapper {
     switch head {
     case "ws", "workspace":
       return mapWorkspace(tail)
-    case "plugins":
-      return mapPlugins(tail)
     case "settings":
       return tail.isEmpty ? (.settingsOpen, [:]) : nil
     case "split":
@@ -148,7 +143,7 @@ public enum PGCommandMapper {
   }
 
   public static let usage =
-    "Usage: pg notify --title <title> --body <body> [--tty <path>], pg ws|workspace [switch <name>|new <name>], pg plugins [scan|plan <pack>], pg settings, pg split right|down, pg layout save|restore"
+    "Usage: pg notify --title <title> --body <body> [--tty <path>], pg ws|workspace [switch <name>|new <name>], pg settings, pg split right|down, pg layout save|restore"
 
   private static func notificationPlan(arguments: [String], environment: [String: String]) -> PGNotificationPlan? {
     var title: String?
@@ -231,19 +226,6 @@ public enum PGCommandMapper {
       return (.workspaceSwitch, ["name": value!])
     case "new" where value != nil:
       return (.workspaceNew, ["name": value!])
-    default:
-      return nil
-    }
-  }
-
-  private static func mapPlugins(_ arguments: [String]) -> (ProGhosttyControlCommand, [String: String])? {
-    guard let subcommand = arguments.first else { return (.pluginsOpen, [:]) }
-    let value = joined(Array(arguments.dropFirst()))
-    switch subcommand {
-    case "scan" where arguments.count == 1:
-      return (.pluginsScan, [:])
-    case "plan" where value != nil:
-      return (.pluginsPlan, ["pack": value!])
     default:
       return nil
     }

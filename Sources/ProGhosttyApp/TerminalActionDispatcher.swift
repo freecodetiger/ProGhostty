@@ -15,14 +15,6 @@ struct TerminalActionDispatcher {
       if let name = message.args["name"] {
         model.openWorkspaceCreation(named: name)
       }
-    case .pluginsOpen:
-      model.openPlugins()
-    case .pluginsScan:
-      model.openPlugins(scan: true)
-    case .pluginsPlan:
-      if let pack = message.args["pack"] {
-        model.openPluginPlan(pack)
-      }
     case .settingsOpen:
       model.openSettingsWindow()
     case .splitRight:

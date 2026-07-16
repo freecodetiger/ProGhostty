@@ -12,7 +12,7 @@ struct AppText {
   }
 
   var settings: String { text("Settings", "设置") }
-  var settingsCaption: String { text("Quiet defaults for terminal behavior, appearance, and plugins.", "调整终端行为、外观和插件管理的克制默认值。") }
+  var settingsCaption: String { text("Quiet defaults for terminal behavior and appearance.", "调整终端行为和外观的克制默认值。") }
   var workspaces: String { text("Workspaces...", "工作区...") }
   var copy: String { text("Copy", "复制") }
   var paste: String { text("Paste", "粘贴") }
@@ -87,8 +87,7 @@ struct AppText {
   var notifyWithDesktop: String { text("Desktop notification on command finish", "命令完成时系统通知") }
   var notifyBellWithDesktop: String { text("Desktop notification on terminal bell", "终端响铃时系统通知") }
   var pgControlCommands: String { text("Enable pg control commands", "启用 pg 控制命令") }
-  var shellEnhancements: String { text("Plugin Management", "插件管理") }
-  var shellEnhancementsCaption: String { text("Inspect and manage terminal plugins without changing your environment until a plan is reviewed.", "检查和管理终端插件；只有在确认计划后才会修改环境。") }
+  var pgControlSection: String { text("pg Control", "pg 控制") }
   var shortcuts: String { text("Shortcuts", "快捷键") }
   var shortcutConflict: String { text("Shortcut is already used.", "快捷键已被占用。") }
   var recordShortcut: String { text("Record", "录制") }
@@ -99,56 +98,16 @@ struct AppText {
   var sideInputPlaceholder: String { text("Type without moving the terminal view", "输入不会打断当前终端预览位置") }
   var focusPreviousPane: String { text("Focus Previous Pane", "聚焦上一个分屏") }
   var focusNextPane: String { text("Focus Next Pane", "聚焦下一个分屏") }
-  var shellTools: String { text("Terminal plugins", "终端插件") }
-  var shellToolsCaption: String { text("Detect-only by default; installs and removals require an explicit plan.", "默认仅检测；安装和卸载都需要明确的计划。") }
-  var refresh: String { text("Refresh", "刷新") }
-  var recommended: String { text("Recommended", "推荐") }
-  var plan: String { text("Plan", "计划") }
-  var install: String { text("Install", "安装") }
-  var installing: String { text("Installing...", "正在安装...") }
-  var uninstall: String { text("Uninstall", "卸载") }
-  var confirmInstall: String { text("Confirm Install", "确认安装") }
-  var confirmUninstall: String { text("Confirm Uninstall", "确认卸载") }
-  var rollback: String { text("Rollback", "回滚") }
-  var confirmRollback: String { text("Confirm Rollback", "确认回滚") }
-  var rollbackTitle: String { text("Rollback latest change", "回滚最近一次变更") }
-  var rollbackCaption: String {
-    text(
-      "Restore files from the latest backup manifest. Homebrew package changes are not automatically reversed.",
-      "从最近一次备份清单恢复文件。Homebrew 包的安装或卸载不会自动反向执行。"
-    )
-  }
-  var backupManifest: String { text("Backup manifest", "备份清单") }
-  var affectedFiles: String { text("Affected files", "受影响文件") }
   var cancel: String { text("Cancel", "取消") }
   var applyPlan: String { text("Apply Plan", "应用计划") }
   var close: String { text("Close", "关闭") }
-  var commands: String { text("Commands", "命令") }
-  var files: String { text("Files", "文件") }
-  var noFileChanges: String { text("No file changes.", "没有文件变更。") }
-  var risk: String { text("Risk", "风险") }
-  var noCommands: String { text("No commands.", "没有命令。") }
-  var description: String { text("Description", "描述") }
-  var usageInstructions: String { text("Usage", "使用说明") }
-  var status: String { text("Status", "状态") }
-  var source: String { text("Source", "来源") }
-  var category: String { text("Category", "类别") }
-  var detectedPaths: String { text("Detected paths", "检测到的路径") }
-  var noDetectedPaths: String { text("No detected paths", "未检测到路径") }
-  var issues: String { text("Issues", "问题") }
-  var environmentSummary: String { text("Environment", "环境") }
-  var selectShellEnhancement: String { text("Select a plugin", "选择一个插件") }
-  var noPlanAvailable: String { text("No plan available", "暂无可用计划") }
-  var shellDefault: String { text("Default shell", "默认 Shell") }
-  var homebrew: String { text("Homebrew", "Homebrew") }
-  var ohMyZsh: String { text("Oh My Zsh", "Oh My Zsh") }
   var open: String { text("Open", "打开") }
   var restoreDefaults: String { text("Restore Defaults", "恢复默认") }
   var restoreDefaultsTitle: String { text("Restore default settings?", "恢复默认设置？") }
   var restoreDefaultsMessage: String {
     text(
-      "This will reset terminal, appearance, shortcut, and plugin settings.",
-      "这会重置终端、外观、快捷键和插件设置。"
+      "This will reset terminal, appearance, and shortcut settings.",
+      "这会重置终端、外观和快捷键设置。"
     )
   }
   var about: String { text("About", "关于") }
@@ -164,13 +123,6 @@ struct AppText {
   var relativePathMissingCwdToast: String { text("No working directory for relative path", "没有用于解析相对路径的工作目录") }
   var revealPathFailedToast: String { text("Could not reveal path", "无法在访达中定位路径") }
   var splitRequiresMoreSpaceToast: String { text("Split needs more screen space", "屏幕空间不足，无法继续分屏") }
-  var pluginReloadCommandHint: String {
-    text(
-      "To apply plugin changes in an existing pane, copy and paste this command when you need it.",
-      "如需让已有分屏中的插件变更生效，可复制并按需粘贴运行这行命令。"
-    )
-  }
-  var pluginReloadCommandCopied: String { text("Copied", "已复制") }
   var defaultsRestored: String { text("Defaults restored.", "已恢复默认设置。") }
   var newWorkspace: String { text("New Workspace", "新建工作区") }
   var newWorkspaceName: String { text("Workspace name", "工作区名称") }

@@ -49,8 +49,6 @@ final class AppModel: ObservableObject {
       persistSettings()
     }
   }
-  @Published var requestedPluginPlanID: String?
-  @Published var requestedPluginScanToken = 0
   @Published var isCheckingForUpdates = false
   @Published var shellIntegrationState = "partial"
 
@@ -65,7 +63,6 @@ final class AppModel: ObservableObject {
   private let settingsStore: SettingsStore
   private let terminalActionDispatcher = TerminalActionDispatcher()
   private var settingsWindowController: NSWindowController?
-  private var pluginManagerWindowController: NSWindowController?
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
   private var rememberedWorkspaceContentSizes: [UUID: NSSize] = [:]
   private var titlebarToastTask: Task<Void, Never>?
@@ -917,7 +914,6 @@ final class AppModel: ObservableObject {
     func isTerminalCandidate(_ window: NSWindow) -> Bool {
       guard window.isVisible else { return false }
       if window === settingsWindowController?.window { return false }
-      if window === pluginManagerWindowController?.window { return false }
       return true
     }
 
@@ -1076,7 +1072,6 @@ final class AppModel: ObservableObject {
     applyFocusedTerminalSurface()
     for window in NSApp.windows
       where window !== settingsWindowController?.window
-        && window !== pluginManagerWindowController?.window
     {
       ProGhosttyWindowAppearance.applyTerminalChrome(
         to: window,
@@ -1085,9 +1080,6 @@ final class AppModel: ObservableObject {
       )
     }
     if let window = settingsWindowController?.window {
-      applyConfigurationWindowAppearance(to: window)
-    }
-    if let window = pluginManagerWindowController?.window {
       applyConfigurationWindowAppearance(to: window)
     }
   }
@@ -1172,55 +1164,6 @@ final class AppModel: ObservableObject {
     guard settings.followSystemAppearance else { return settings.themeName }
     let appearance = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
     return appearance == .aqua ? "light" : "dark"
-  }
-
-  func openPlugins(scan: Bool = false) {
-    if scan {
-      requestedPluginScanToken += 1
-    }
-
-    if let window = pluginManagerWindowController?.window {
-      applyConfigurationWindowAppearance(to: window)
-      window.makeKeyAndOrderFront(nil)
-      NSApp.activate(ignoringOtherApps: true)
-      return
-    }
-
-    let controller = NSHostingController(
-      rootView: PluginManagerView()
-        .environmentObject(self)
-        .preferredColorScheme(configurationColorScheme)
-    )
-    let window = NSWindow(contentViewController: controller)
-    window.title = appText.shellEnhancements
-    window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-    window.setContentSize(NSSize(
-      width: ProGhosttyWindowSizing.pluginManagerDefaultContentWidth,
-      height: ProGhosttyWindowSizing.pluginManagerDefaultContentHeight
-    ))
-    window.minSize = NSSize(
-      width: ProGhosttyWindowSizing.pluginManagerMinimumContentWidth,
-      height: ProGhosttyWindowSizing.pluginManagerMinimumContentHeight
-    )
-    window.isReleasedWhenClosed = false
-    window.center()
-    window.toolbarStyle = .unified
-    applyConfigurationWindowAppearance(to: window)
-
-    let windowController = NSWindowController(window: window)
-    pluginManagerWindowController = windowController
-    windowController.showWindow(nil)
-    NSApp.activate(ignoringOtherApps: true)
-  }
-
-  func openPluginPlan(_ pack: String) {
-    requestedPluginPlanID = pack
-    openPlugins()
-  }
-
-  func closePlugins() {
-    pluginManagerWindowController?.window?.close()
-    pluginManagerWindowController = nil
   }
 
   func closeUtilityOverlays() {

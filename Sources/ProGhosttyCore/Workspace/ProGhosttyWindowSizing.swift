@@ -6,12 +6,6 @@ public enum ProGhosttyWindowSizing {
 
   public static let minimumContentWidth: Double = 560
   public static let minimumContentHeight: Double = 360
-
-  public static let pluginManagerDefaultContentWidth: Double = 820
-  public static let pluginManagerDefaultContentHeight: Double = 640
-
-  public static let pluginManagerMinimumContentWidth: Double = 680
-  public static let pluginManagerMinimumContentHeight: Double = 520
 }
 
 public enum ProGhosttyOverlaySizing {

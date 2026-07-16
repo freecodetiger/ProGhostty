@@ -60,13 +60,6 @@ struct SplitRatioLayoutTests {
     #expect(size == nil)
   }
 
-  @Test func pluginManagerWindowHasIndependentConfigurationSize() {
-    #expect(ProGhosttyWindowSizing.pluginManagerDefaultContentWidth > ProGhosttyWindowSizing.minimumContentWidth)
-    #expect(ProGhosttyWindowSizing.pluginManagerDefaultContentHeight > ProGhosttyWindowSizing.minimumContentHeight)
-    #expect(ProGhosttyWindowSizing.pluginManagerMinimumContentWidth >= 680)
-    #expect(ProGhosttyWindowSizing.pluginManagerMinimumContentHeight >= 520)
-  }
-
   @Test func workspaceSwitcherOverlayFitsSmallMainWindow() {
     let width = ProGhosttyOverlaySizing.workspaceSwitcherWidth(
       containerWidth: ProGhosttyWindowSizing.minimumContentWidth

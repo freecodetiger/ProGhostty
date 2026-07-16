@@ -281,22 +281,8 @@ struct SettingsView: View {
             Toggle(text.notifyWithDesktop, isOn: $model.settings.notifyOnCommandFinishDesktopEnabled)
           }
 
-          SettingsSection(text.shellEnhancements) {
+          SettingsSection(text.pgControlSection) {
             Toggle(text.pgControlCommands, isOn: $model.settings.pgControlCommandsEnabled)
-
-            HStack(spacing: 12) {
-              VStack(alignment: .leading, spacing: 4) {
-                Text(text.shellTools)
-                  .font(.system(size: 13, weight: .medium))
-                Text(text.shellToolsCaption)
-                  .font(.system(size: 12))
-                  .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
-              }
-              Spacer()
-              Button(text.open) {
-                model.openPlugins()
-              }
-            }
           }
 
           SettingsSection(text.about) {

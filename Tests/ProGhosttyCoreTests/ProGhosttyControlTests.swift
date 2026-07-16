@@ -50,7 +50,6 @@ struct ProGhosttyControlTests {
   @Test func pgMapperMapsAliasesAndArguments() {
     #expect(PGCommandMapper.map(arguments: ["ws"])?.command == .workspaceOpen)
     #expect(PGCommandMapper.map(arguments: ["workspace"])?.command == .workspaceOpen)
-    #expect(PGCommandMapper.map(arguments: ["plugins"])?.command == .pluginsOpen)
     #expect(PGCommandMapper.map(arguments: ["settings"])?.command == .settingsOpen)
     #expect(PGCommandMapper.map(arguments: ["split", "right"])?.command == .splitRight)
     #expect(PGCommandMapper.map(arguments: ["split", "down"])?.command == .splitDown)
@@ -60,10 +59,6 @@ struct ProGhosttyControlTests {
     let switchWorkspace = PGCommandMapper.map(arguments: ["ws", "switch", "Client", "A"])
     #expect(switchWorkspace?.command == .workspaceSwitch)
     #expect(switchWorkspace?.args == ["name": "Client A"])
-
-    let pluginPlan = PGCommandMapper.map(arguments: ["plugins", "plan", "zsh-autosuggestions"])
-    #expect(pluginPlan?.command == .pluginsPlan)
-    #expect(pluginPlan?.args == ["pack": "zsh-autosuggestions"])
   }
 
   @Test func pgMapperPlansNotificationWithoutControlSession() throws {
