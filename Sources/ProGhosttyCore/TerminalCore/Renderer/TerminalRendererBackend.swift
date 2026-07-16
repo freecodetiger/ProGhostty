@@ -64,6 +64,23 @@ public struct TerminalRenderFrame: Sendable, Equatable {
     presentation = .scrollFrame
     self.generation = generation
   }
+
+  /// The frame to draw, with any overscan rows flattened into a single cell
+  /// grid. For scroll frames this stitches `overscanTop + viewport +
+  /// overscanBottom` into one frame and offsets the cursor accordingly; for
+  /// plain frames it is just `frame`.
+  public var expandedFrame: GhosttyTerminalFrame {
+    guard let scrollFrame else {
+      return frame
+    }
+    var expanded = scrollFrame.viewport
+    expanded.rows = scrollFrame.overscanTop.count + scrollFrame.viewport.rows + scrollFrame.overscanBottom.count
+    expanded.cursorY += scrollFrame.overscanTop.count
+    expanded.cells = scrollFrame.overscanTop.flatMap(\.cells)
+      + scrollFrame.viewport.cells
+      + scrollFrame.overscanBottom.flatMap(\.cells)
+    return expanded
+  }
 }
 
 public enum RendererDebug {
@@ -263,37 +280,7 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
   public var lastResizeVTDuration: TimeInterval
   public var lastResizeSnapshotDuration: TimeInterval
   public var pendingResize: Bool
-  public var metalDirectPlanRows: Int
-  public var metalDirectPlanCols: Int
-  public var metalDirectUploadedRowCount: Int
-  public var metalDirectUploadedCellCount: Int
-  public var metalDirectDirtyCellCount: Int
-  public var metalDirectGlyphAtlasEntryCount: Int
-  public var metalDirectPresentedFrameCount: Int
-  public var metalDirectDrawPassCount: Int
-  public var metalDirectPipelineReady: Bool
-  public var metalDirectDrawnRowCount: Int
-  public var metalDirectDrawnCellCount: Int
-  public var metalDirectDrawRunCount: Int
-  public var metalDirectRenderPassLoadAction: String
-  public var metalDirectWaitedForCompletion: Bool
-  public var metalDirectGPUWaitReason: String
-  public var metalDirectStaleCompletionCount: Int
-  public var metalDirectLatestRenderGeneration: Int
-  public var metalDirectLatestSubmittedGeneration: Int
-  public var metalDirectLatestPresentedGeneration: Int
-  public var metalDirectFullRedrawReason: String
-  public var metalDirectExpandedFrameCellCount: Int
-  public var metalDirectGlyphTextureHitCount: Int
-  public var metalDirectGlyphTextureMissCount: Int
-  public var metalDirectTextureCacheHitRate: Double
-  public var metalDirectGlyphScanRowCount: Int
-  public var metalDirectGlyphScanCellCount: Int
-  public var metalDirectStyleScanRowCount: Int
-  public var metalDirectStyleScanCellCount: Int
-  public var metalDirectResizeSensitivityScanRowCount: Int
-  public var metalDirectResizeSensitivityScanCellCount: Int
-  public var metalDirectStyleAggregateRowCount: Int
+  public var metalDirect: MetalDirectDiagnostics
   public var renderStyleScanRowCount: Int
   public var renderStyleScanCellCount: Int
   public var renderResizeSensitivityScanRowCount: Int
@@ -338,37 +325,7 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
     lastResizeVTDuration: TimeInterval = 0,
     lastResizeSnapshotDuration: TimeInterval = 0,
     pendingResize: Bool = false,
-    metalDirectPlanRows: Int = 0,
-    metalDirectPlanCols: Int = 0,
-    metalDirectUploadedRowCount: Int = 0,
-    metalDirectUploadedCellCount: Int = 0,
-    metalDirectDirtyCellCount: Int = 0,
-    metalDirectGlyphAtlasEntryCount: Int = 0,
-    metalDirectPresentedFrameCount: Int = 0,
-    metalDirectDrawPassCount: Int = 0,
-    metalDirectPipelineReady: Bool = false,
-    metalDirectDrawnRowCount: Int = 0,
-    metalDirectDrawnCellCount: Int = 0,
-    metalDirectDrawRunCount: Int = 0,
-    metalDirectRenderPassLoadAction: String = "none",
-    metalDirectWaitedForCompletion: Bool = false,
-    metalDirectGPUWaitReason: String = "none",
-    metalDirectStaleCompletionCount: Int = 0,
-    metalDirectLatestRenderGeneration: Int = 0,
-    metalDirectLatestSubmittedGeneration: Int = 0,
-    metalDirectLatestPresentedGeneration: Int = 0,
-    metalDirectFullRedrawReason: String = "none",
-    metalDirectExpandedFrameCellCount: Int = 0,
-    metalDirectGlyphTextureHitCount: Int = 0,
-    metalDirectGlyphTextureMissCount: Int = 0,
-    metalDirectTextureCacheHitRate: Double = 0,
-    metalDirectGlyphScanRowCount: Int = 0,
-    metalDirectGlyphScanCellCount: Int = 0,
-    metalDirectStyleScanRowCount: Int = 0,
-    metalDirectStyleScanCellCount: Int = 0,
-    metalDirectResizeSensitivityScanRowCount: Int = 0,
-    metalDirectResizeSensitivityScanCellCount: Int = 0,
-    metalDirectStyleAggregateRowCount: Int = 0,
+    metalDirect: MetalDirectDiagnostics = MetalDirectDiagnostics(),
     renderStyleScanRowCount: Int = 0,
     renderStyleScanCellCount: Int = 0,
     renderResizeSensitivityScanRowCount: Int = 0,
@@ -412,37 +369,7 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
     self.lastResizeVTDuration = lastResizeVTDuration
     self.lastResizeSnapshotDuration = lastResizeSnapshotDuration
     self.pendingResize = pendingResize
-    self.metalDirectPlanRows = metalDirectPlanRows
-    self.metalDirectPlanCols = metalDirectPlanCols
-    self.metalDirectUploadedRowCount = metalDirectUploadedRowCount
-    self.metalDirectUploadedCellCount = metalDirectUploadedCellCount
-    self.metalDirectDirtyCellCount = metalDirectDirtyCellCount
-    self.metalDirectGlyphAtlasEntryCount = metalDirectGlyphAtlasEntryCount
-    self.metalDirectPresentedFrameCount = metalDirectPresentedFrameCount
-    self.metalDirectDrawPassCount = metalDirectDrawPassCount
-    self.metalDirectPipelineReady = metalDirectPipelineReady
-    self.metalDirectDrawnRowCount = metalDirectDrawnRowCount
-    self.metalDirectDrawnCellCount = metalDirectDrawnCellCount
-    self.metalDirectDrawRunCount = metalDirectDrawRunCount
-    self.metalDirectRenderPassLoadAction = metalDirectRenderPassLoadAction
-    self.metalDirectWaitedForCompletion = metalDirectWaitedForCompletion
-    self.metalDirectGPUWaitReason = metalDirectGPUWaitReason
-    self.metalDirectStaleCompletionCount = metalDirectStaleCompletionCount
-    self.metalDirectLatestRenderGeneration = metalDirectLatestRenderGeneration
-    self.metalDirectLatestSubmittedGeneration = metalDirectLatestSubmittedGeneration
-    self.metalDirectLatestPresentedGeneration = metalDirectLatestPresentedGeneration
-    self.metalDirectFullRedrawReason = metalDirectFullRedrawReason
-    self.metalDirectExpandedFrameCellCount = metalDirectExpandedFrameCellCount
-    self.metalDirectGlyphTextureHitCount = metalDirectGlyphTextureHitCount
-    self.metalDirectGlyphTextureMissCount = metalDirectGlyphTextureMissCount
-    self.metalDirectTextureCacheHitRate = metalDirectTextureCacheHitRate
-    self.metalDirectGlyphScanRowCount = metalDirectGlyphScanRowCount
-    self.metalDirectGlyphScanCellCount = metalDirectGlyphScanCellCount
-    self.metalDirectStyleScanRowCount = metalDirectStyleScanRowCount
-    self.metalDirectStyleScanCellCount = metalDirectStyleScanCellCount
-    self.metalDirectResizeSensitivityScanRowCount = metalDirectResizeSensitivityScanRowCount
-    self.metalDirectResizeSensitivityScanCellCount = metalDirectResizeSensitivityScanCellCount
-    self.metalDirectStyleAggregateRowCount = metalDirectStyleAggregateRowCount
+    self.metalDirect = metalDirect
     self.renderStyleScanRowCount = renderStyleScanRowCount
     self.renderStyleScanCellCount = renderStyleScanCellCount
     self.renderResizeSensitivityScanRowCount = renderResizeSensitivityScanRowCount
@@ -451,7 +378,9 @@ public struct TerminalRendererDiagnostics: Equatable, Sendable {
   }
 
   public var debugSummary: String {
-    "backend=\(backend.rawValue) requestedBackend=\(requestedBackend?.rawValue ?? "none") fallbackReason=\"\(backendFallbackReason ?? "none")\" usesBitmapCapture=\(usesBitmapCapture) dirtyRows=\(dirtyRowCount) visibleRows=\(visibleRowCount) cacheHitRate=\(String(format: "%.3f", cacheHitRate)) avgDrawMs=\(String(format: "%.3f", averageDrawTime * 1000)) maxDrawMs=\(String(format: "%.3f", maxDrawTime * 1000)) redraw=\(redrawMode.rawValue) scrollMode=\(scrollMode.rawValue) overscanTop=\(overscanTopRows) overscanBottom=\(overscanBottomRows) pixelSmoothScroll=\(pixelSmoothScroll.rawValue) pixelSmoothScrollReason=\"\(pixelSmoothScrollReason)\" pixelRemainderY=\(String(format: "%.2f", pixelRemainderY)) committedRowDelta=\(committedRowDelta) coalescedWheelEvents=\(coalescedWheelEvents) scrollCommitMode=\(scrollCommitMode.rawValue) pendingScrollRowDelta=\(pendingScrollRowDelta) pendingScrollWheelEvents=\(pendingScrollWheelEvents) scrollCommitMs=\(String(format: "%.3f", lastScrollCommitDuration * 1000)) scrollRenderMs=\(String(format: "%.3f", lastScrollRenderDuration * 1000)) bridgeScrollViewportMs=\(String(format: "%.3f", bridgeScrollViewportDuration * 1000)) bridgeScrollbarSnapshotMs=\(String(format: "%.3f", bridgeScrollbarSnapshotDuration * 1000)) bridgeFrameSnapshotMs=\(String(format: "%.3f", bridgeFrameSnapshotDuration * 1000)) bridgeScrollFrameSnapshotMs=\(String(format: "%.3f", bridgeScrollFrameSnapshotDuration * 1000)) bridgeSnapshotCells=\(bridgeSnapshotCellCount) resizePending=\(pendingResize) resizeTotalMs=\(String(format: "%.3f", lastResizeTotalDuration * 1000)) resizeVTMs=\(String(format: "%.3f", lastResizeVTDuration * 1000)) resizeSnapshotMs=\(String(format: "%.3f", lastResizeSnapshotDuration * 1000)) scrollOffset=\(String(format: "%.2f", smoothScrollOffset)) coalesced=\(coalescedFrames) dropped=\(droppedFrames) alt=\(alternateScreenActive) resizeSensitive=\(resizeSensitiveScreen) metalDirectPlanRows=\(metalDirectPlanRows) metalDirectPlanCols=\(metalDirectPlanCols) metalDirectUploadedRows=\(metalDirectUploadedRowCount) metalDirectUploadedCells=\(metalDirectUploadedCellCount) metalDirectDirtyCells=\(metalDirectDirtyCellCount) metalDirectDrawnRows=\(metalDirectDrawnRowCount) metalDirectDrawnCells=\(metalDirectDrawnCellCount) metalDirectDrawRuns=\(metalDirectDrawRunCount) metalDirectLoadAction=\(metalDirectRenderPassLoadAction) metalDirectWaited=\(metalDirectWaitedForCompletion) metalDirectGPUWaitReason=\"\(metalDirectGPUWaitReason)\" metalDirectStaleCompletions=\(metalDirectStaleCompletionCount) metalDirectLatestRenderGeneration=\(metalDirectLatestRenderGeneration) metalDirectLatestSubmittedGeneration=\(metalDirectLatestSubmittedGeneration) metalDirectLatestPresentedGeneration=\(metalDirectLatestPresentedGeneration) metalDirectFullRedrawReason=\"\(metalDirectFullRedrawReason)\" metalDirectExpandedFrameCells=\(metalDirectExpandedFrameCellCount) metalDirectGlyphTextureHits=\(metalDirectGlyphTextureHitCount) metalDirectGlyphTextureMisses=\(metalDirectGlyphTextureMissCount) metalDirectTextureHitRate=\(String(format: "%.3f", metalDirectTextureCacheHitRate)) metalDirectGlyphScanRows=\(metalDirectGlyphScanRowCount) metalDirectGlyphScanCells=\(metalDirectGlyphScanCellCount) metalDirectStyleScanRows=\(metalDirectStyleScanRowCount) metalDirectStyleScanCells=\(metalDirectStyleScanCellCount) metalDirectResizeSensitivityScanRows=\(metalDirectResizeSensitivityScanRowCount) metalDirectResizeSensitivityScanCells=\(metalDirectResizeSensitivityScanCellCount) metalDirectStyleAggregateRows=\(metalDirectStyleAggregateRowCount) renderStyleScanRows=\(renderStyleScanRowCount) renderStyleScanCells=\(renderStyleScanCellCount) renderResizeSensitivityScanRows=\(renderResizeSensitivityScanRowCount) renderResizeSensitivityScanCells=\(renderResizeSensitivityScanCellCount) metalDirectGlyphs=\(metalDirectGlyphAtlasEntryCount) metalDirectPresented=\(metalDirectPresentedFrameCount) metalDirectDrawPasses=\(metalDirectDrawPassCount) metalDirectPipelineReady=\(metalDirectPipelineReady) styleFg=\(styleStats.explicitForegroundCells) styleBg=\(styleStats.explicitBackgroundCells) styleBold=\(styleStats.boldCells) styleFaint=\(styleStats.faintCells) styleUnderline=\(styleStats.underlineCells) styleInverse=\(styleStats.inverseCells)"
+    let shared = "backend=\(backend.rawValue) requestedBackend=\(requestedBackend?.rawValue ?? "none") fallbackReason=\"\(backendFallbackReason ?? "none")\" usesBitmapCapture=\(usesBitmapCapture) dirtyRows=\(dirtyRowCount) visibleRows=\(visibleRowCount) cacheHitRate=\(String(format: "%.3f", cacheHitRate)) avgDrawMs=\(String(format: "%.3f", averageDrawTime * 1000)) maxDrawMs=\(String(format: "%.3f", maxDrawTime * 1000)) redraw=\(redrawMode.rawValue) scrollMode=\(scrollMode.rawValue) overscanTop=\(overscanTopRows) overscanBottom=\(overscanBottomRows) pixelSmoothScroll=\(pixelSmoothScroll.rawValue) pixelSmoothScrollReason=\"\(pixelSmoothScrollReason)\" pixelRemainderY=\(String(format: "%.2f", pixelRemainderY)) committedRowDelta=\(committedRowDelta) coalescedWheelEvents=\(coalescedWheelEvents) scrollCommitMode=\(scrollCommitMode.rawValue) pendingScrollRowDelta=\(pendingScrollRowDelta) pendingScrollWheelEvents=\(pendingScrollWheelEvents) scrollCommitMs=\(String(format: "%.3f", lastScrollCommitDuration * 1000)) scrollRenderMs=\(String(format: "%.3f", lastScrollRenderDuration * 1000)) bridgeScrollViewportMs=\(String(format: "%.3f", bridgeScrollViewportDuration * 1000)) bridgeScrollbarSnapshotMs=\(String(format: "%.3f", bridgeScrollbarSnapshotDuration * 1000)) bridgeFrameSnapshotMs=\(String(format: "%.3f", bridgeFrameSnapshotDuration * 1000)) bridgeScrollFrameSnapshotMs=\(String(format: "%.3f", bridgeScrollFrameSnapshotDuration * 1000)) bridgeSnapshotCells=\(bridgeSnapshotCellCount) resizePending=\(pendingResize) resizeTotalMs=\(String(format: "%.3f", lastResizeTotalDuration * 1000)) resizeVTMs=\(String(format: "%.3f", lastResizeVTDuration * 1000)) resizeSnapshotMs=\(String(format: "%.3f", lastResizeSnapshotDuration * 1000)) scrollOffset=\(String(format: "%.2f", smoothScrollOffset)) coalesced=\(coalescedFrames) dropped=\(droppedFrames) alt=\(alternateScreenActive) resizeSensitive=\(resizeSensitiveScreen)"
+    let render = "renderStyleScanRows=\(renderStyleScanRowCount) renderStyleScanCells=\(renderStyleScanCellCount) renderResizeSensitivityScanRows=\(renderResizeSensitivityScanRowCount) renderResizeSensitivityScanCells=\(renderResizeSensitivityScanCellCount) styleFg=\(styleStats.explicitForegroundCells) styleBg=\(styleStats.explicitBackgroundCells) styleBold=\(styleStats.boldCells) styleFaint=\(styleStats.faintCells) styleUnderline=\(styleStats.underlineCells) styleInverse=\(styleStats.inverseCells)"
+    return "\(shared) \(metalDirect.debugSummary) \(render)"
   }
 }
 

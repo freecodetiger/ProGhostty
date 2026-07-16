@@ -797,7 +797,7 @@ struct TerminalSurfaceTests {
     let inactiveDiagnostics = try #require(registry.rendererDiagnostics(for: inactiveSession))
     #expect(inactiveDiagnostics.backend == .metalDirect)
     #expect(inactiveDiagnostics.redrawMode == .full)
-    #expect(inactiveDiagnostics.metalDirectDrawnRowCount == 2)
+    #expect(inactiveDiagnostics.metalDirect.drawnRowCount == 2)
   }
 
   @MainActor @Test func textFallbackSurfacePreservesFaintSuggestionStyle() throws {
@@ -3037,7 +3037,7 @@ private final class PaletteRecordingLiveRendererBackend: TerminalLiveRendererBac
     var diagnostics = wrapped.diagnostics
     diagnostics.backend = .metalDirect
     diagnostics.requestedBackend = .metalDirect
-    diagnostics.metalDirectPipelineReady = true
+    diagnostics.metalDirect.pipelineReady = true
     return diagnostics
   }
   var selectedText: String? { wrapped.selectedText }
@@ -3107,14 +3107,6 @@ private final class PipelineFailingDirectRendererBackend: TerminalLiveRendererBa
     lastResizeVTDuration: 0,
     lastResizeSnapshotDuration: 0,
     pendingResize: false,
-    metalDirectPlanRows: 0,
-    metalDirectPlanCols: 0,
-    metalDirectUploadedRowCount: 0,
-    metalDirectUploadedCellCount: 0,
-    metalDirectGlyphAtlasEntryCount: 0,
-    metalDirectPresentedFrameCount: 0,
-    metalDirectDrawPassCount: 0,
-    metalDirectPipelineReady: false,
     styleStats: TerminalCellStyleStats()
   )
 

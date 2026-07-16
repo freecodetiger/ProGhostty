@@ -224,7 +224,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     lastGlyphTextureHitCount = 0
     lastGlyphTextureMissCount = 0
 
-    let drawFrame = expandedFrame(from: renderFrame)
+    let drawFrame = renderFrame.expandedFrame
     let pixelScale = plan.backingScale
     let cellSize = CGSize(
       width: plan.cellSize.width * pixelScale,
@@ -715,18 +715,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     cursorOverlay: MetalMarkedTextOverlay? = nil
   ) -> MetalCursorGlyphLayout? {
     guard !markedTextActive else { return nil }
-    let frame: GhosttyTerminalFrame
-    if let scrollFrame = renderFrame.scrollFrame {
-      var expandedFrame = scrollFrame.viewport
-      expandedFrame.rows = scrollFrame.overscanTop.count + scrollFrame.viewport.rows + scrollFrame.overscanBottom.count
-      expandedFrame.cursorY += scrollFrame.overscanTop.count
-      expandedFrame.cells = scrollFrame.overscanTop.flatMap(\.cells)
-        + scrollFrame.viewport.cells
-        + scrollFrame.overscanBottom.flatMap(\.cells)
-      frame = expandedFrame
-    } else {
-      frame = renderFrame.frame
-    }
+    let frame = renderFrame.expandedFrame
     let cursorRowsOffset = renderFrame.scrollFrame?.overscanTop.count ?? 0
     let cursorRow = cursorOverlay.map { $0.row + cursorRowsOffset } ?? frame.cursorY
     let cursorCol = cursorOverlay?.col ?? frame.cursorX
@@ -1229,19 +1218,6 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
 
   private func drawTranslationY(topOverscanRows: Int, pixelRemainderY: CGFloat, cellHeight: CGFloat) -> CGFloat {
     -CGFloat(topOverscanRows) * cellHeight + pixelRemainderY
-  }
-
-  private func expandedFrame(from renderFrame: TerminalRenderFrame) -> GhosttyTerminalFrame {
-    guard let scrollFrame = renderFrame.scrollFrame else {
-      return renderFrame.frame
-    }
-    var frame = scrollFrame.viewport
-    frame.rows = scrollFrame.overscanTop.count + scrollFrame.viewport.rows + scrollFrame.overscanBottom.count
-    frame.cursorY += scrollFrame.overscanTop.count
-    frame.cells = scrollFrame.overscanTop.flatMap(\.cells)
-      + scrollFrame.viewport.cells
-      + scrollFrame.overscanBottom.flatMap(\.cells)
-    return frame
   }
 
   private static func makePipeline(

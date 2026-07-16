@@ -319,7 +319,7 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
       engine = engineFactory(metalDevice)
     }
     Self.applyBackendSelectionDiagnostics(options: options, to: &diagnosticsState)
-    diagnosticsState.metalDirectPipelineReady = engine?.pipelineReady == true
+    diagnosticsState.metalDirect.pipelineReady = engine?.pipelineReady == true
   }
 
   public var gridView: PTYGridView { directView }
@@ -328,13 +328,13 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
 
   public var diagnostics: TerminalRendererDiagnostics {
     var state = diagnosticsState
-    state.metalDirectPresentedFrameCount = engine?.presentedFrameCount ?? state.metalDirectPresentedFrameCount
-    state.metalDirectDrawPassCount = engine?.drawPassCount ?? state.metalDirectDrawPassCount
-    state.metalDirectPipelineReady = engine?.pipelineReady == true
-    state.metalDirectStaleCompletionCount = engine?.staleCompletionCount ?? state.metalDirectStaleCompletionCount
-    state.metalDirectLatestRenderGeneration = latestRenderGeneration
-    state.metalDirectLatestSubmittedGeneration = engine?.latestSubmittedGeneration ?? state.metalDirectLatestSubmittedGeneration
-    state.metalDirectLatestPresentedGeneration = engine?.latestPresentedGeneration ?? state.metalDirectLatestPresentedGeneration
+    state.metalDirect.presentedFrameCount = engine?.presentedFrameCount ?? state.metalDirect.presentedFrameCount
+    state.metalDirect.drawPassCount = engine?.drawPassCount ?? state.metalDirect.drawPassCount
+    state.metalDirect.pipelineReady = engine?.pipelineReady == true
+    state.metalDirect.staleCompletionCount = engine?.staleCompletionCount ?? state.metalDirect.staleCompletionCount
+    state.metalDirect.latestRenderGeneration = latestRenderGeneration
+    state.metalDirect.latestSubmittedGeneration = engine?.latestSubmittedGeneration ?? state.metalDirect.latestSubmittedGeneration
+    state.metalDirect.latestPresentedGeneration = engine?.latestPresentedGeneration ?? state.metalDirect.latestPresentedGeneration
     directView.applyScrollDiagnostics(to: &state)
     return state
   }
@@ -535,7 +535,7 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
       engine?.resetTextureCache()
       lastGlyphBackingScale = plan.backingScale
     }
-    let drawFrame = expandedFrame(from: renderFrame)
+    let drawFrame = renderFrame.expandedFrame
     let renderCellRanges = MetalDirectRenderEngine.renderCellRanges(for: plan, drawFrameRows: drawFrame.rows)
     let glyphScanRowCount = Set(renderCellRanges.map(\.row)).count
     let glyphScanCellCount = updateGlyphAtlas(from: drawFrame, cellRanges: renderCellRanges)
@@ -567,49 +567,49 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     diagnosticsState.alternateScreenActive = frame.isAlternateScreen
     diagnosticsState.resizeSensitiveScreen = resizeSensitivityUpdate.isResizeSensitive
     diagnosticsState.styleStats = styleStatsUpdate.stats
-    diagnosticsState.metalDirectPlanRows = plan.viewportRows
-    diagnosticsState.metalDirectPlanCols = plan.cols
-    diagnosticsState.metalDirectUploadedRowCount = instanceRanges.count
-    diagnosticsState.metalDirectUploadedCellCount = instanceBuffer.uploadedCellCount(for: instanceRanges)
-    diagnosticsState.metalDirectDirtyCellCount = dirty.dirtyCellCount
-    diagnosticsState.metalDirectGlyphAtlasEntryCount = glyphAtlas.entryCount
-    diagnosticsState.metalDirectGlyphScanRowCount = glyphScanRowCount
-    diagnosticsState.metalDirectGlyphScanCellCount = glyphScanCellCount
-    diagnosticsState.metalDirectStyleScanRowCount = styleStatsUpdate.scannedRows
-    diagnosticsState.metalDirectStyleScanCellCount = styleStatsUpdate.scannedCells
-    diagnosticsState.metalDirectResizeSensitivityScanRowCount = resizeSensitivityUpdate.scannedRows
-    diagnosticsState.metalDirectResizeSensitivityScanCellCount = resizeSensitivityUpdate.scannedCells
-    diagnosticsState.metalDirectStyleAggregateRowCount = styleStatsCache.lastAggregateRowCount
+    diagnosticsState.metalDirect.planRows = plan.viewportRows
+    diagnosticsState.metalDirect.planCols = plan.cols
+    diagnosticsState.metalDirect.uploadedRowCount = instanceRanges.count
+    diagnosticsState.metalDirect.uploadedCellCount = instanceBuffer.uploadedCellCount(for: instanceRanges)
+    diagnosticsState.metalDirect.dirtyCellCount = dirty.dirtyCellCount
+    diagnosticsState.metalDirect.glyphAtlasEntryCount = glyphAtlas.entryCount
+    diagnosticsState.metalDirect.glyphScanRowCount = glyphScanRowCount
+    diagnosticsState.metalDirect.glyphScanCellCount = glyphScanCellCount
+    diagnosticsState.metalDirect.styleScanRowCount = styleStatsUpdate.scannedRows
+    diagnosticsState.metalDirect.styleScanCellCount = styleStatsUpdate.scannedCells
+    diagnosticsState.metalDirect.resizeSensitivityScanRowCount = resizeSensitivityUpdate.scannedRows
+    diagnosticsState.metalDirect.resizeSensitivityScanCellCount = resizeSensitivityUpdate.scannedCells
+    diagnosticsState.metalDirect.styleAggregateRowCount = styleStatsCache.lastAggregateRowCount
     diagnosticsState.renderStyleScanRowCount = styleStatsUpdate.scannedRows
     diagnosticsState.renderStyleScanCellCount = styleStatsUpdate.scannedCells
     diagnosticsState.renderResizeSensitivityScanRowCount = resizeSensitivityUpdate.scannedRows
     diagnosticsState.renderResizeSensitivityScanCellCount = resizeSensitivityUpdate.scannedCells
-    diagnosticsState.metalDirectPresentedFrameCount = didRender ? (engine?.presentedFrameCount ?? 0) : 0
-    diagnosticsState.metalDirectDrawPassCount = didRender ? (engine?.drawPassCount ?? 0) : 0
-    diagnosticsState.metalDirectPipelineReady = engine?.pipelineReady == true
-    diagnosticsState.metalDirectDrawnRowCount = didRender ? (engine?.lastRenderedRowCount ?? 0) : 0
-    diagnosticsState.metalDirectDrawnCellCount = didRender ? (engine?.lastRenderedCellCount ?? 0) : 0
-    diagnosticsState.metalDirectDrawRunCount = didRender ? (engine?.lastRenderedRunCount ?? 0) : 0
-    diagnosticsState.metalDirectRenderPassLoadAction = didRender
+    diagnosticsState.metalDirect.presentedFrameCount = didRender ? (engine?.presentedFrameCount ?? 0) : 0
+    diagnosticsState.metalDirect.drawPassCount = didRender ? (engine?.drawPassCount ?? 0) : 0
+    diagnosticsState.metalDirect.pipelineReady = engine?.pipelineReady == true
+    diagnosticsState.metalDirect.drawnRowCount = didRender ? (engine?.lastRenderedRowCount ?? 0) : 0
+    diagnosticsState.metalDirect.drawnCellCount = didRender ? (engine?.lastRenderedCellCount ?? 0) : 0
+    diagnosticsState.metalDirect.drawRunCount = didRender ? (engine?.lastRenderedRunCount ?? 0) : 0
+    diagnosticsState.metalDirect.renderPassLoadAction = didRender
       ? String(describing: engine?.lastRenderPassLoadPolicy ?? MetalDirectRenderPassLoadPolicy.clear)
       : "none"
-    diagnosticsState.metalDirectWaitedForCompletion = didRender ? (engine?.lastWaitedForCompletion ?? false) : false
-    diagnosticsState.metalDirectGPUWaitReason = didRender ? (engine?.lastGPUWaitReason ?? "none") : "none"
-    diagnosticsState.metalDirectStaleCompletionCount = didRender ? (engine?.staleCompletionCount ?? 0) : 0
-    diagnosticsState.metalDirectFullRedrawReason = dirtyEvaluation.fullRedrawReason
-    diagnosticsState.metalDirectExpandedFrameCellCount = drawFrame.cells.count
-    diagnosticsState.metalDirectGlyphTextureHitCount = didRender ? (engine?.lastGlyphTextureHitCount ?? 0) : 0
-    diagnosticsState.metalDirectGlyphTextureMissCount = didRender ? (engine?.lastGlyphTextureMissCount ?? 0) : 0
-    let textureLookupCount = diagnosticsState.metalDirectGlyphTextureHitCount + diagnosticsState.metalDirectGlyphTextureMissCount
-    diagnosticsState.metalDirectTextureCacheHitRate = textureLookupCount > 0
-      ? Double(diagnosticsState.metalDirectGlyphTextureHitCount) / Double(textureLookupCount)
+    diagnosticsState.metalDirect.waitedForCompletion = didRender ? (engine?.lastWaitedForCompletion ?? false) : false
+    diagnosticsState.metalDirect.gpuWaitReason = didRender ? (engine?.lastGPUWaitReason ?? "none") : "none"
+    diagnosticsState.metalDirect.staleCompletionCount = didRender ? (engine?.staleCompletionCount ?? 0) : 0
+    diagnosticsState.metalDirect.fullRedrawReason = dirtyEvaluation.fullRedrawReason
+    diagnosticsState.metalDirect.expandedFrameCellCount = drawFrame.cells.count
+    diagnosticsState.metalDirect.glyphTextureHitCount = didRender ? (engine?.lastGlyphTextureHitCount ?? 0) : 0
+    diagnosticsState.metalDirect.glyphTextureMissCount = didRender ? (engine?.lastGlyphTextureMissCount ?? 0) : 0
+    let textureLookupCount = diagnosticsState.metalDirect.glyphTextureHitCount + diagnosticsState.metalDirect.glyphTextureMissCount
+    diagnosticsState.metalDirect.textureCacheHitRate = textureLookupCount > 0
+      ? Double(diagnosticsState.metalDirect.glyphTextureHitCount) / Double(textureLookupCount)
       : 0
     if didRender {
       latestPresentedGeneration = renderFrame.generation
     }
-    diagnosticsState.metalDirectLatestRenderGeneration = latestRenderGeneration
-    diagnosticsState.metalDirectLatestSubmittedGeneration = engine?.latestSubmittedGeneration ?? latestPresentedGeneration
-    diagnosticsState.metalDirectLatestPresentedGeneration = engine?.latestPresentedGeneration ?? latestPresentedGeneration
+    diagnosticsState.metalDirect.latestRenderGeneration = latestRenderGeneration
+    diagnosticsState.metalDirect.latestSubmittedGeneration = engine?.latestSubmittedGeneration ?? latestPresentedGeneration
+    diagnosticsState.metalDirect.latestPresentedGeneration = engine?.latestPresentedGeneration ?? latestPresentedGeneration
     if let scrollFrame = renderFrame.scrollFrame {
       updateOverscanDiagnostics(
         topRows: scrollFrame.overscanTop.count,
@@ -701,7 +701,7 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     guard previousPresentation == renderFrame.presentation else {
       return "scroll-presentation-changed"
     }
-    let expanded = expandedFrame(from: renderFrame)
+    let expanded = renderFrame.expandedFrame
     guard previousExpandedFrame.rows == expanded.rows, previousExpandedFrame.cols == expanded.cols else {
       return "scroll-frame-shape-changed"
     }
@@ -747,19 +747,6 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
       }
     }
     return scannedCellCount
-  }
-
-  private func expandedFrame(from renderFrame: TerminalRenderFrame) -> GhosttyTerminalFrame {
-    guard let scrollFrame = renderFrame.scrollFrame else {
-      return renderFrame.frame
-    }
-    var frame = scrollFrame.viewport
-    frame.rows = scrollFrame.overscanTop.count + scrollFrame.viewport.rows + scrollFrame.overscanBottom.count
-    frame.cursorY += scrollFrame.overscanTop.count
-    frame.cells = scrollFrame.overscanTop.flatMap(\.cells)
-      + scrollFrame.viewport.cells
-      + scrollFrame.overscanBottom.flatMap(\.cells)
-    return frame
   }
 
   private static func hasRenderedContentBelowCursor(in frame: GhosttyTerminalFrame) -> Bool {

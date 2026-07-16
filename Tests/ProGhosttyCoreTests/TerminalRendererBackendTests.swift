@@ -165,9 +165,9 @@ struct TerminalRendererBackendTests {
     let diagnostics = backend.diagnostics
     #expect(diagnostics.coalescedFrames == 1)
     #expect(diagnostics.droppedFrames == 1)
-    #expect(diagnostics.metalDirectLatestRenderGeneration == 42)
-    #expect(diagnostics.metalDirectLatestSubmittedGeneration == 42)
-    #expect(diagnostics.metalDirectLatestPresentedGeneration == 42)
+    #expect(diagnostics.metalDirect.latestRenderGeneration == 42)
+    #expect(diagnostics.metalDirect.latestSubmittedGeneration == 42)
+    #expect(diagnostics.metalDirect.latestPresentedGeneration == 42)
   }
 
   @MainActor @Test func metalDirectRendererViewPresentDoesNotRequestAppKitDisplayRedraw() {
@@ -441,11 +441,11 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.backend == .metalDirect)
-    #expect(diagnostics.metalDirectPlanRows == 2)
-    #expect(diagnostics.metalDirectPlanCols == 4)
-    #expect(diagnostics.metalDirectUploadedRowCount == 2)
-    #expect(diagnostics.metalDirectUploadedCellCount == 8)
-    #expect(diagnostics.metalDirectGlyphAtlasEntryCount == 4)
+    #expect(diagnostics.metalDirect.planRows == 2)
+    #expect(diagnostics.metalDirect.planCols == 4)
+    #expect(diagnostics.metalDirect.uploadedRowCount == 2)
+    #expect(diagnostics.metalDirect.uploadedCellCount == 8)
+    #expect(diagnostics.metalDirect.glyphAtlasEntryCount == 4)
   }
 
   @MainActor @Test func metalDirectRendererBackendCachesSameScalarWithDifferentStylesSeparately() {
@@ -456,7 +456,7 @@ struct TerminalRendererBackendTests {
     backend.render(TerminalRenderFrame(frame: styledFrame))
     backend.flushPendingFrame()
 
-    #expect(backend.diagnostics.metalDirectGlyphAtlasEntryCount == 2)
+    #expect(backend.diagnostics.metalDirect.glyphAtlasEntryCount == 2)
   }
 
   @MainActor @Test func metalDirectRendererBackendUploadsOnlyDirtyRowsAfterInitialFrame() {
@@ -468,10 +468,10 @@ struct TerminalRendererBackendTests {
     backend.flushPendingFrame()
 
     let diagnostics = backend.diagnostics
-    #expect(diagnostics.metalDirectUploadedRowCount == 1)
-    #expect(diagnostics.metalDirectUploadedCellCount == 1)
+    #expect(diagnostics.metalDirect.uploadedRowCount == 1)
+    #expect(diagnostics.metalDirect.uploadedCellCount == 1)
     #expect(diagnostics.dirtyRowCount == 1)
-    #expect(diagnostics.metalDirectDirtyCellCount == 1)
+    #expect(diagnostics.metalDirect.dirtyCellCount == 1)
     #expect(diagnostics.redrawMode == .dirty)
   }
 
@@ -489,9 +489,9 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.dirtyRowCount == 1)
-    #expect(diagnostics.metalDirectUploadedRowCount == 1)
-    #expect(diagnostics.metalDirectUploadedCellCount == 2)
-    #expect(diagnostics.metalDirectDirtyCellCount == 2)
+    #expect(diagnostics.metalDirect.uploadedRowCount == 1)
+    #expect(diagnostics.metalDirect.uploadedCellCount == 2)
+    #expect(diagnostics.metalDirect.dirtyCellCount == 2)
   }
 
   @MainActor @Test func metalDirectRendererBackendDrawsOnlyDirtyRowsAfterInitialFrame() {
@@ -504,11 +504,11 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode == .dirty)
-    #expect(diagnostics.metalDirectUploadedRowCount == 1)
-    #expect(diagnostics.metalDirectDrawnRowCount == 1)
-    #expect(diagnostics.metalDirectDrawnCellCount == 1)
-    #expect(diagnostics.metalDirectRenderPassLoadAction == "load")
-    #expect(diagnostics.metalDirectWaitedForCompletion == true)
+    #expect(diagnostics.metalDirect.uploadedRowCount == 1)
+    #expect(diagnostics.metalDirect.drawnRowCount == 1)
+    #expect(diagnostics.metalDirect.drawnCellCount == 1)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "load")
+    #expect(diagnostics.metalDirect.waitedForCompletion == true)
   }
 
   @MainActor @Test func metalDirectRendererBackendFullRedrawsAfterThemeChanges() {
@@ -524,7 +524,7 @@ struct TerminalRendererBackendTests {
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode == .full)
     #expect(diagnostics.dirtyRowCount == 2)
-    #expect(diagnostics.metalDirectDrawnRowCount == 2)
+    #expect(diagnostics.metalDirect.drawnRowCount == 2)
   }
 
   @MainActor @Test func metalDirectRendererBackendUpdatesCursorWithoutDrawingTextRows() {
@@ -541,10 +541,10 @@ struct TerminalRendererBackendTests {
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode == .clean)
     #expect(diagnostics.dirtyRowCount == 0)
-    #expect(diagnostics.metalDirectDrawnRowCount == 0)
-    #expect(diagnostics.metalDirectGlyphScanRowCount == 0)
-    #expect(diagnostics.metalDirectRenderPassLoadAction == "load")
-    #expect(diagnostics.metalDirectWaitedForCompletion == false)
+    #expect(diagnostics.metalDirect.drawnRowCount == 0)
+    #expect(diagnostics.metalDirect.glyphScanRowCount == 0)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "load")
+    #expect(diagnostics.metalDirect.waitedForCompletion == false)
   }
 
   @MainActor @Test func metalDirectRendererBackendRebuildsSceneWhenFocusChanges() {
@@ -558,8 +558,8 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode == .full)
-    #expect(diagnostics.metalDirectDrawnRowCount == 2)
-    #expect(diagnostics.metalDirectRenderPassLoadAction == "clear")
+    #expect(diagnostics.metalDirect.drawnRowCount == 2)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "clear")
   }
 
   @MainActor @Test func metalDirectRendererBackendKeepsBlockCursorRowsDirty() {
@@ -577,8 +577,8 @@ struct TerminalRendererBackendTests {
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode == .dirty)
     #expect(diagnostics.dirtyRowCount == 2)
-    #expect(diagnostics.metalDirectDrawnRowCount == 2)
-    #expect(diagnostics.metalDirectGlyphScanRowCount == 2)
+    #expect(diagnostics.metalDirect.drawnRowCount == 2)
+    #expect(diagnostics.metalDirect.glyphScanRowCount == 2)
   }
 
   @MainActor @Test func metalDirectRenderWaitsForCompletionWhenCursorRowIsDirty() {
@@ -608,10 +608,10 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode == .dirty)
-    #expect(diagnostics.metalDirectDrawRunCount == 2)
-    #expect(diagnostics.metalDirectDrawnRowCount == 1)
-    #expect(diagnostics.metalDirectDrawnCellCount == 1)
-    #expect(diagnostics.metalDirectRenderPassLoadAction == "load")
+    #expect(diagnostics.metalDirect.drawRunCount == 2)
+    #expect(diagnostics.metalDirect.drawnRowCount == 1)
+    #expect(diagnostics.metalDirect.drawnCellCount == 1)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "load")
   }
 
   @MainActor @Test func metalDirectRendererBackendScansGlyphsOnlyForDirtyRowsAfterInitialFrame() {
@@ -624,8 +624,8 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode == .dirty)
-    #expect(diagnostics.metalDirectGlyphScanRowCount == 1)
-    #expect(diagnostics.metalDirectGlyphScanCellCount == 1)
+    #expect(diagnostics.metalDirect.glyphScanRowCount == 1)
+    #expect(diagnostics.metalDirect.glyphScanCellCount == 1)
   }
 
   @MainActor @Test func metalDirectRendererBackendScansStyleStatsOnlyForDirtyRowsAfterInitialFrame() {
@@ -642,8 +642,8 @@ struct TerminalRendererBackendTests {
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode == .dirty)
     #expect(diagnostics.styleStats.boldCells == 1)
-    #expect(diagnostics.metalDirectStyleScanRowCount == 1)
-    #expect(diagnostics.metalDirectStyleScanCellCount == 4)
+    #expect(diagnostics.metalDirect.styleScanRowCount == 1)
+    #expect(diagnostics.metalDirect.styleScanCellCount == 4)
   }
 
   @MainActor @Test func metalDirectRendererBackendAggregatesStyleStatsIncrementallyForDirtyRowsAfterInitialFrame() {
@@ -659,7 +659,7 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.styleStats.italicCells == 1)
-    #expect(diagnostics.metalDirectStyleAggregateRowCount == 1)
+    #expect(diagnostics.metalDirect.styleAggregateRowCount == 1)
   }
 
   @MainActor @Test func metalDirectRendererBackendScansResizeSensitivityOnlyForDirtyRowsBelowCursorAfterInitialFrame() {
@@ -675,8 +675,8 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.resizeSensitiveScreen == true)
-    #expect(diagnostics.metalDirectResizeSensitivityScanRowCount == 0)
-    #expect(diagnostics.metalDirectResizeSensitivityScanCellCount == 0)
+    #expect(diagnostics.metalDirect.resizeSensitivityScanRowCount == 0)
+    #expect(diagnostics.metalDirect.resizeSensitivityScanCellCount == 0)
   }
 
   @MainActor @Test func metalDirectRendererBackendRecordsMetalPresentations() {
@@ -687,10 +687,10 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.backend == .metalDirect)
-    #expect(diagnostics.metalDirectPresentedFrameCount == 1)
-    #expect(diagnostics.metalDirectDrawPassCount == 1)
-    #expect(diagnostics.metalDirectPipelineReady == true)
-    #expect(diagnostics.metalDirectStaleCompletionCount == 0)
+    #expect(diagnostics.metalDirect.presentedFrameCount == 1)
+    #expect(diagnostics.metalDirect.drawPassCount == 1)
+    #expect(diagnostics.metalDirect.pipelineReady == true)
+    #expect(diagnostics.metalDirect.staleCompletionCount == 0)
   }
 
   @MainActor @Test func metalDirectRendererBackendReframesOnViewportChangesWithoutRedrawingText() {
@@ -709,10 +709,10 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.pixelRemainderY == 5)
-    #expect(diagnostics.metalDirectDrawPassCount == 1)
-    #expect(diagnostics.metalDirectLatestSubmittedGeneration == 18)
-    #expect(diagnostics.metalDirectDrawnCellCount == 0)
-    #expect(diagnostics.metalDirectRenderPassLoadAction == "load")
+    #expect(diagnostics.metalDirect.drawPassCount == 1)
+    #expect(diagnostics.metalDirect.latestSubmittedGeneration == 18)
+    #expect(diagnostics.metalDirect.drawnCellCount == 0)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "load")
   }
 
   @MainActor @Test func metalDirectRendererBackendKeepsScrollOverscanChangesDirty() {
@@ -737,9 +737,9 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode != .full)
-    #expect(diagnostics.metalDirectFullRedrawReason == "none")
-    #expect(diagnostics.metalDirectDrawnRowCount < 4)
-    #expect(diagnostics.metalDirectRenderPassLoadAction == "load")
+    #expect(diagnostics.metalDirect.fullRedrawReason == "none")
+    #expect(diagnostics.metalDirect.drawnRowCount < 4)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "load")
   }
 
   @MainActor @Test func metalDirectRendererBackendStagesResizeFramesUntilDiagnosticsComplete() {
@@ -753,9 +753,9 @@ struct TerminalRendererBackendTests {
 
     var diagnostics = backend.diagnostics
     #expect(diagnostics.pendingResize)
-    #expect(diagnostics.metalDirectPlanRows == 1)
-    #expect(diagnostics.metalDirectPlanCols == 4)
-    #expect(diagnostics.metalDirectLatestSubmittedGeneration == 10)
+    #expect(diagnostics.metalDirect.planRows == 1)
+    #expect(diagnostics.metalDirect.planCols == 4)
+    #expect(diagnostics.metalDirect.latestSubmittedGeneration == 10)
 
     backend.applyResizeDiagnostics(TerminalResizeDiagnostics(
       totalDuration: 0.3,
@@ -765,9 +765,9 @@ struct TerminalRendererBackendTests {
 
     diagnostics = backend.diagnostics
     #expect(!diagnostics.pendingResize)
-    #expect(diagnostics.metalDirectPlanRows == 2)
-    #expect(diagnostics.metalDirectPlanCols == 8)
-    #expect(diagnostics.metalDirectLatestSubmittedGeneration == 11)
+    #expect(diagnostics.metalDirect.planRows == 2)
+    #expect(diagnostics.metalDirect.planCols == 8)
+    #expect(diagnostics.metalDirect.latestSubmittedGeneration == 11)
     #expect(diagnostics.lastResizeTotalDuration == 0.3)
   }
 
@@ -781,7 +781,7 @@ struct TerminalRendererBackendTests {
     backend.flushPendingFrame()
 
     let diagnostics = backend.diagnostics
-    #expect(diagnostics.metalDirectLatestPresentedGeneration == 10)
+    #expect(diagnostics.metalDirect.latestPresentedGeneration == 10)
     #expect(diagnostics.droppedFrames >= 1)
     #expect(diagnostics.pendingResize)
   }
@@ -802,10 +802,10 @@ struct TerminalRendererBackendTests {
     ))
 
     let diagnostics = backend.diagnostics
-    #expect(diagnostics.metalDirectPlanRows == 2)
-    #expect(diagnostics.metalDirectPlanCols == 8)
-    #expect(diagnostics.metalDirectLatestSubmittedGeneration == 12)
-    #expect(diagnostics.metalDirectLatestPresentedGeneration == 12)
+    #expect(diagnostics.metalDirect.planRows == 2)
+    #expect(diagnostics.metalDirect.planCols == 8)
+    #expect(diagnostics.metalDirect.latestSubmittedGeneration == 12)
+    #expect(diagnostics.metalDirect.latestPresentedGeneration == 12)
   }
 
   @MainActor @Test func metalDirectRendererBackendDiagnosticsReadLatestEngineCompletionCounters() {
@@ -818,8 +818,8 @@ struct TerminalRendererBackendTests {
     engine.staleCompletionCount = 2
 
     let diagnostics = backend.diagnostics
-    #expect(diagnostics.metalDirectPresentedFrameCount == 3)
-    #expect(diagnostics.metalDirectStaleCompletionCount == 2)
+    #expect(diagnostics.metalDirect.presentedFrameCount == 3)
+    #expect(diagnostics.metalDirect.staleCompletionCount == 2)
   }
 
   @MainActor @Test func metalDirectRendererBackendReportsFullRedrawReasonAndExpandedFrameCellCount() {
@@ -829,8 +829,8 @@ struct TerminalRendererBackendTests {
     backend.flushPendingFrame()
 
     let diagnostics = backend.diagnostics
-    #expect(diagnostics.metalDirectFullRedrawReason == "grid-size-changed")
-    #expect(diagnostics.metalDirectExpandedFrameCellCount == 8)
+    #expect(diagnostics.metalDirect.fullRedrawReason == "grid-size-changed")
+    #expect(diagnostics.metalDirect.expandedFrameCellCount == 8)
     #expect(diagnostics.debugSummary.contains("metalDirectFullRedrawReason=\"grid-size-changed\""))
     #expect(diagnostics.debugSummary.contains("metalDirectExpandedFrameCells=8"))
   }
@@ -846,10 +846,10 @@ struct TerminalRendererBackendTests {
     backend.flushPendingFrame()
 
     let diagnostics = backend.diagnostics
-    #expect(diagnostics.metalDirectGlyphTextureHitCount == 9)
-    #expect(diagnostics.metalDirectGlyphTextureMissCount == 3)
-    #expect(diagnostics.metalDirectTextureCacheHitRate == 0.75)
-    #expect(diagnostics.metalDirectGPUWaitReason == "full-redraw")
+    #expect(diagnostics.metalDirect.glyphTextureHitCount == 9)
+    #expect(diagnostics.metalDirect.glyphTextureMissCount == 3)
+    #expect(diagnostics.metalDirect.textureCacheHitRate == 0.75)
+    #expect(diagnostics.metalDirect.gpuWaitReason == "full-redraw")
     #expect(diagnostics.debugSummary.contains("metalDirectGlyphTextureHits=9"))
     #expect(diagnostics.debugSummary.contains("metalDirectGlyphTextureMisses=3"))
     #expect(diagnostics.debugSummary.contains("metalDirectTextureHitRate=0.750"))
@@ -1880,16 +1880,6 @@ struct TerminalRendererBackendTests {
     }
   }
 
-  @Test func smoothScrollControllerConvertsPixelRemainderIntoStartRow() {
-    var controller = SmoothScrollController()
-
-    let decision = controller.scroll(deltaY: 37, cellHeight: 16, maxStartRow: 20, alternateScreen: false)
-
-    #expect(decision == .consumed(rowDelta: 2))
-    #expect(controller.viewport.startRow == 2)
-    #expect(controller.viewport.visualOffsetY == 5)
-  }
-
   @Test func paneScrollCoordinatorConvertsWheelDeltaIntoCommittedRowsAndSubRowRemainder() {
     var coordinator = PaneScrollCoordinator()
 
@@ -2346,37 +2336,6 @@ struct TerminalRendererBackendTests {
     #expect(backend.gridView.viewport.visualOffsetY == 0)
     #expect(backend.diagnostics.pixelSmoothScroll == .unavailable)
     #expect(backend.diagnostics.pixelSmoothScrollReason == TerminalRendererDiagnostics.alternateScreenScrollReason)
-  }
-
-  @Test func smoothScrollControllerIgnoresScrollPastEdges() {
-    var topController = SmoothScrollController()
-
-    let topDecision = topController.scroll(deltaY: -37, cellHeight: 16, maxStartRow: 20, alternateScreen: false)
-
-    #expect(topDecision == .ignored)
-    #expect(topController.viewport.startRow == 0)
-    #expect(topController.viewport.visualOffsetY == 0)
-
-    var bottomController = SmoothScrollController(
-      viewport: TerminalViewport(startRow: 20),
-      isEnabled: true
-    )
-
-    let bottomDecision = bottomController.scroll(deltaY: 37, cellHeight: 16, maxStartRow: 20, alternateScreen: false)
-
-    #expect(bottomDecision == .ignored)
-    #expect(bottomController.viewport.startRow == 20)
-    #expect(bottomController.viewport.visualOffsetY == 0)
-  }
-
-  @Test func smoothScrollControllerDoesNotScrollNormalScrollbackOnAlternateScreen() {
-    var controller = SmoothScrollController()
-
-    let decision = controller.scroll(deltaY: 37, cellHeight: 16, maxStartRow: 20, alternateScreen: true)
-
-    #expect(decision == .forwardToPTY)
-    #expect(controller.viewport.startRow == 0)
-    #expect(controller.viewport.visualOffsetY == 0)
   }
 
   @Test func viewportControllerDrawsVisibleRowsWithOverscan() {

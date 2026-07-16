@@ -49,7 +49,7 @@ public enum MetalOverlayBuffer {
     contentInset: CGSize = CGSize(width: 14, height: 12),
     pixelRemainderY: CGFloat? = nil
   ) -> [MetalOverlayPrimitive] {
-    let frame = expandedFrame(from: renderFrame)
+    let frame = renderFrame.expandedFrame
     let pixelScale = plan.backingScale
     let cellSize = CGSize(
       width: plan.cellSize.width * pixelScale,
@@ -261,19 +261,6 @@ public enum MetalOverlayBuffer {
     }
 
     return overlays
-  }
-
-  private static func expandedFrame(from renderFrame: TerminalRenderFrame) -> GhosttyTerminalFrame {
-    guard let scrollFrame = renderFrame.scrollFrame else {
-      return renderFrame.frame
-    }
-    var frame = scrollFrame.viewport
-    frame.rows = scrollFrame.overscanTop.count + scrollFrame.viewport.rows + scrollFrame.overscanBottom.count
-    frame.cursorY += scrollFrame.overscanTop.count
-    frame.cells = scrollFrame.overscanTop.flatMap(\.cells)
-      + scrollFrame.viewport.cells
-      + scrollFrame.overscanBottom.flatMap(\.cells)
-    return frame
   }
 
   private static func cellRect(row: Int, col: Int, cellSize: CGSize, inset: CGSize) -> CGRect {
