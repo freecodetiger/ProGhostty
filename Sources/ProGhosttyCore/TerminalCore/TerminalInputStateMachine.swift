@@ -1,4 +1,4 @@
-import AppKit
+import CoreGraphics
 import Foundation
 
 public struct TerminalInputRenderSnapshot: Equatable {

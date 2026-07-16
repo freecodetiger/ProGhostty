@@ -35,6 +35,9 @@ jobs:
             --global-cache-dir ../../.zig-cache-global \
             -Demit-lib-vt=true
 
+      - name: Architecture guard
+        run: scripts/check-architecture.sh
+
       - name: Test
         run: swift test --no-parallel
 

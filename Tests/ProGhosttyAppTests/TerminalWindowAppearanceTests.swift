@@ -1,7 +1,7 @@
 import AppKit
 import Testing
 
-@testable import ProGhosttyCore
+@testable import ProGhosttyApp
 
 @Suite("Terminal window appearance", .serialized)
 struct TerminalWindowAppearanceTests {
