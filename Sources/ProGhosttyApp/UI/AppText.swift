@@ -1,4 +1,5 @@
 import Foundation
+import ProGhosttyCore
 
 struct AppText {
   private let language: String
@@ -73,6 +74,10 @@ struct AppText {
   var dirtyRowRendering: String { text("Dirty row rendering", "脏行增量渲染") }
   var forceFullRedraw: String { text("Force full redraw for debug", "调试时强制全量重绘") }
   var taskCompletionNotifications: String { text("Task Completion Notifications", "任务完成通知") }
+  var notifications: String { text("Notifications", "通知") }
+  var fontAdvanced: String { text("Advanced", "进阶") }
+  var settingsSearchPlaceholder: String { text("Search settings", "搜索设置") }
+  var noSearchResults: String { text("No matching settings", "无匹配设置项") }
   var enableNotifications: String { text("Notify on task completion", "任务完成时通知") }
   var enableNotificationsCaption: String { text("Notifies you when an agent (Claude Code, Codex, …) finishes a task via pg notify.", "当 agent（Claude Code、Codex 等）通过 pg notify 报告任务完成时提醒你。") }
   var notifyWhenFocused: String { text("Notify even when focused", "聚焦时也通知") }
@@ -164,5 +169,18 @@ struct AppText {
 
   private func text(_ english: String, _ simplifiedChinese: String) -> String {
     language == "zh-Hans" ? simplifiedChinese : english
+  }
+
+  static func shortcutActionTitle(_ action: KeyboardShortcutAction, text: AppText) -> String {
+    switch action {
+    case .openSettings: return text.settings
+    case .openWorkspaceSwitcher: return text.openWorkspaceSwitcher
+    case .sideInput: return text.sideInput
+    case .splitRight: return text.splitRight
+    case .splitDown: return text.splitDown
+    case .closePane: return text.closePane
+    case .focusPreviousPane: return text.focusPreviousPane
+    case .focusNextPane: return text.focusNextPane
+    }
   }
 }

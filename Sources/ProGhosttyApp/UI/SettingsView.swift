@@ -9,282 +9,21 @@ struct SettingsView: View {
   @State private var showsAllFonts = false
   @State private var cjkFontSearchText = ""
   @State private var showsAllCJKFonts = false
+  @State private var selectedCategory: SettingsCategory = .terminal
+  @State private var searchText = ""
+  @State private var highlightedItemID: String?
 
   var body: some View {
     let text = model.appText
-    let fontOptions = FontManager.fontOptions(
-      currentFamily: model.settings.fontFamily,
-      searchText: fontSearchText,
-      includeAllFonts: showsAllFonts
-    )
-    let selectedFontOption = FontManager.fontOption(for: model.settings.fontFamily)
-    let cjkFontOptions = FontManager.cjkFallbackOptions(
-      currentFamily: model.settings.cjkFallbackFontFamily,
-      searchText: cjkFontSearchText,
-      includeAllFonts: showsAllCJKFonts
-    )
-    let selectedCJKFontOption = model.settings.cjkFallbackFontFamily.map(FontManager.fontOption(for:))
 
     VStack(spacing: 0) {
-      HStack(alignment: .firstTextBaseline) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(text.settings)
-            .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
-        }
-        Spacer()
+      NavigationSplitView {
+        sidebar(text: text)
+          .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 240)
+      } detail: {
+        detail(text: text)
       }
-      .padding(.horizontal, 24)
-      .padding(.top, 22)
-      .padding(.bottom, 14)
-
-      ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-          SettingsSection(text.terminal) {
-            SettingsRow(text.defaultShell) {
-              TextField("/bin/zsh", text: $model.settings.defaultShell)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
-            }
-
-            SettingsRow(text.workingDirectory) {
-              HStack(spacing: 8) {
-                TextField(text.currentDirectory, text: Binding(
-                  get: { model.settings.defaultWorkingDirectory ?? "" },
-                  set: { model.settings.defaultWorkingDirectory = $0.isEmpty ? nil : $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 13, design: .monospaced))
-                .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
-
-                Button(text.choose) {
-                  chooseWorkingDirectory()
-                }
-              }
-            }
-          }
-
-          SettingsSection(text.appearance) {
-            SettingsRow(text.appLanguage) {
-              Picker("", selection: $model.settings.appLanguage) {
-                Text("System").tag("system")
-                Text("English").tag("en")
-                Text("简体中文").tag("zh-Hans")
-              }
-              .pickerStyle(.segmented)
-              .labelsHidden()
-            }
-
-            SettingsRow(text.theme) {
-              VStack(alignment: .leading, spacing: 8) {
-                Toggle(text.followSystem, isOn: $model.settings.followSystemAppearance)
-                Picker("", selection: $model.settings.themeName) {
-                  Text(text.light).tag("light")
-                  Text(text.dark).tag("dark")
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .settingsSubordinate(enabled: !model.settings.followSystemAppearance)
-              }
-            }
-
-          }
-
-          SettingsSection(text.font) {
-            VStack(alignment: .leading, spacing: 10) {
-              HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                  Text(text.font)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
-
-                  HStack(alignment: .center, spacing: 8) {
-                    TextField(text.fontSearchPlaceholder, text: $fontSearchText)
-                      .textFieldStyle(.roundedBorder)
-                      .font(.system(size: 12))
-                      .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
-
-                    Toggle(text.showAllFonts, isOn: $showsAllFonts)
-                      .toggleStyle(.checkbox)
-                      .font(.system(size: 11))
-                      .fixedSize()
-                  }
-
-                  Picker("", selection: $model.settings.fontFamily) {
-                    ForEach(fontOptions) { option in
-                      Text(fontOptionLabel(option, text: text)).tag(option.familyName)
-                    }
-                  }
-                  .labelsHidden()
-
-                  HStack(spacing: 10) {
-                    Slider(value: $model.settings.fontSize, in: 10...28, step: 1)
-                    Text("\(Int(model.settings.fontSize))")
-                      .font(.system(size: 12, weight: .medium, design: .monospaced))
-                      .frame(width: 28, alignment: .trailing)
-                      .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
-                  }
-
-                  HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    TextField(text.customFontName, text: $model.settings.fontFamily)
-                      .textFieldStyle(.roundedBorder)
-                      .font(.system(size: 12, design: .monospaced))
-                      .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
-
-                    if let status = fontStatusLabel(selectedFontOption, text: text) {
-                      Text(status)
-                        .font(.system(size: 11))
-                        .foregroundStyle(fontStatusColor(selectedFontOption))
-                        .lineLimit(1)
-                        .fixedSize()
-                    }
-                  }
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                Rectangle()
-                  .fill(Color(nsColor: model.configurationSeparatorColor).opacity(0.5))
-                  .frame(width: 1)
-
-                VStack(alignment: .leading, spacing: 8) {
-                  Text(text.cjkFallbackFont)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
-
-                  HStack(alignment: .center, spacing: 8) {
-                    TextField(text.fontSearchPlaceholder, text: $cjkFontSearchText)
-                      .textFieldStyle(.roundedBorder)
-                      .font(.system(size: 12))
-                      .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
-
-                    Toggle(text.showAllFonts, isOn: $showsAllCJKFonts)
-                      .toggleStyle(.checkbox)
-                      .font(.system(size: 11))
-                      .fixedSize()
-                  }
-
-                  Picker("", selection: cjkFallbackSelection) {
-                    Text(text.systemCJKFallback).tag("")
-                    ForEach(cjkFontOptions) { option in
-                      Text(cjkFontOptionLabel(option, text: text)).tag(option.familyName)
-                    }
-                  }
-                  .labelsHidden()
-
-                  HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    TextField(text.customCJKFallbackName, text: cjkFallbackSelection)
-                      .textFieldStyle(.roundedBorder)
-                      .font(.system(size: 12, design: .monospaced))
-                      .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
-
-                    if let status = cjkFontStatusLabel(selectedCJKFontOption, text: text) {
-                      Text(status)
-                        .font(.system(size: 11))
-                        .foregroundStyle(cjkFontStatusColor(selectedCJKFontOption))
-                        .lineLimit(1)
-                        .fixedSize()
-                    }
-                  }
-                }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-              }
-
-              HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(text.installedMonospacedFontsHint)
-                Text(text.cjkFallbackHint)
-              }
-              .font(.system(size: 11))
-              .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
-              .lineLimit(2)
-              .fixedSize(horizontal: false, vertical: true)
-
-              FontPreview(
-                title: text.fontPreview,
-                sample: text.fontPreviewSample,
-                detail: text.fontPreviewDetail,
-                fontFamily: model.settings.fontFamily,
-                cjkFallbackFontFamily: model.settings.cjkFallbackFontFamily,
-                fontSize: model.settings.fontSize
-              )
-            }
-          }
-
-          SettingsSection(text.shortcuts) {
-            ForEach(KeyboardShortcutAction.allCases) { action in
-              ShortcutSettingsRow(
-                title: shortcutTitle(action, text: text),
-                binding: shortcutRecorderState.settings.shortcut(for: action),
-                isRecording: shortcutRecorderState.recordingAction == action,
-                text: text,
-                beginRecording: {
-                  shortcutRecorderState.settings = model.settings.keyboardShortcuts
-                  shortcutRecorderState.beginRecording(action)
-                },
-                reset: {
-                  shortcutRecorderState.settings = model.settings.keyboardShortcuts
-                  shortcutRecorderState.reset(action)
-                  model.settings.keyboardShortcuts = shortcutRecorderState.settings
-                }
-              )
-            }
-
-            if let conflict = shortcutRecorderState.conflictAction {
-              Text("\(text.shortcutConflict) \(shortcutTitle(conflict, text: text))")
-                .font(.system(size: 12))
-                .foregroundStyle(.red)
-            }
-          }
-
-          SettingsSection(text.taskCompletionNotifications) {
-            VStack(alignment: .leading, spacing: 4) {
-              Toggle(text.enableNotifications, isOn: $model.settings.notificationsEnabled)
-              Text(text.enableNotificationsCaption)
-                .font(.system(size: 12))
-                .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
-            }
-
-            // Level-2 toggle: subordinate to the master switch above.
-            VStack(alignment: .leading, spacing: 4) {
-              Toggle(text.notifyWhenFocused, isOn: $model.settings.notifyWhenFocused)
-              Text(text.notifyWhenFocusedCaption)
-                .font(.system(size: 12))
-                .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
-            }
-            .settingsSubordinate(enabled: model.settings.notificationsEnabled)
-
-            if model.settings.notificationsEnabled, !model.systemNotificationsAuthorized {
-              HStack(spacing: 10) {
-                Text(text.notificationsPermissionHint)
-                  .font(.system(size: 12))
-                  .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
-                Spacer()
-                Button(text.openSystemSettings) {
-                  model.openSystemNotificationSettings()
-                }
-              }
-            }
-          }
-
-          SettingsSection(text.about) {
-            SettingsRow(text.version) {
-              HStack(spacing: 10) {
-                Text(model.appVersionString())
-                  .font(.system(size: 13, design: .monospaced))
-                  .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
-                Spacer()
-                Button(model.isCheckingForUpdates ? text.checkingForUpdates : text.checkForUpdates) {
-                  Task { await model.checkForUpdates(manual: true) }
-                }
-                .disabled(model.isCheckingForUpdates)
-              }
-            }
-          }
-        }
-        .padding(.horizontal, 24)
-        .padding(.bottom, 22)
-      }
-      .scrollContentBackground(.hidden)
+      .navigationSplitViewStyle(.balanced)
 
       Divider()
         .overlay(Color(nsColor: model.configurationSeparatorColor).opacity(0.5))
@@ -300,7 +39,7 @@ struct SettingsView: View {
       .padding(.horizontal, 24)
       .padding(.vertical, 12)
     }
-    .frame(minWidth: 560, minHeight: 460)
+    .frame(minWidth: 680, minHeight: 480)
     .preferredColorScheme(model.configurationColorScheme)
     .environment(\.colorScheme, model.configurationColorScheme)
     .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
@@ -308,16 +47,385 @@ struct SettingsView: View {
     .background(SettingsFocusResetHost())
     .background(ShortcutRecorderHost(
       isActive: shortcutRecorderState.recordingAction != nil,
-      onRecord: { binding in
-        commitShortcut(binding)
-      },
-      onCancel: {
-        shortcutRecorderState.cancelRecording()
-      }
+      onRecord: { binding in commitShortcut(binding) },
+      onCancel: { shortcutRecorderState.cancelRecording() }
     ))
     .onAppear {
       shortcutRecorderState = ShortcutRecorderState(settings: model.settings.keyboardShortcuts)
     }
+  }
+
+  // MARK: Sidebar
+
+  @ViewBuilder
+  private func sidebar(text: AppText) -> some View {
+    let results = SettingsIndex.results(query: searchText, text: text)
+    VStack(spacing: 0) {
+      HStack(spacing: 6) {
+        Image(systemName: "magnifyingglass")
+          .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+          .font(.system(size: 12))
+        TextField(text.settingsSearchPlaceholder, text: $searchText)
+          .textFieldStyle(.plain)
+          .font(.system(size: 12))
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 7)
+      .background(Color(nsColor: model.configurationSectionBackgroundColor).opacity(0.6))
+      .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+      .padding(.horizontal, 10)
+      .padding(.top, 10)
+
+      if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        List(SettingsCategory.allCases, selection: $selectedCategory) { category in
+          Label(category.title(text), systemImage: category.systemImage)
+            .tag(category)
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+      } else if results.isEmpty {
+        VStack {
+          Spacer()
+          Text(text.noSearchResults)
+            .font(.system(size: 12))
+            .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+          Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        List {
+          ForEach(results) { item in
+            Button {
+              openSearchResult(item)
+            } label: {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(item.title(text))
+                  .font(.system(size: 13))
+                  .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
+                Text(item.category.title(text))
+                  .font(.system(size: 11))
+                  .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+              }
+            }
+            .buttonStyle(.plain)
+          }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+      }
+    }
+    .background(Color(nsColor: model.configurationWindowBackgroundColor))
+  }
+
+  private func openSearchResult(_ item: SettingsItem) {
+    selectedCategory = item.category
+    searchText = ""
+    highlightedItemID = item.id
+    Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 1_500_000_000)
+      if highlightedItemID == item.id { highlightedItemID = nil }
+    }
+  }
+
+  // MARK: Detail
+
+  @ViewBuilder
+  private func detail(text: AppText) -> some View {
+    ScrollViewReader { proxy in
+      ScrollView {
+        VStack(alignment: .leading, spacing: 18) {
+          switch selectedCategory {
+          case .terminal: terminalPane(text: text)
+          case .appearance: appearancePane(text: text)
+          case .font: fontPane(text: text)
+          case .shortcuts: shortcutsPane(text: text)
+          case .notifications: notificationsPane(text: text)
+          case .about: aboutPane(text: text)
+          }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .scrollContentBackground(.hidden)
+      .onChange(of: highlightedItemID) { id in
+        guard let id else { return }
+        withAnimation { proxy.scrollTo(id, anchor: .center) }
+      }
+    }
+  }
+
+  // MARK: Panes
+
+  @ViewBuilder
+  private func terminalPane(text: AppText) -> some View {
+    SettingsSection(text.terminal) {
+      SettingsRow(text.defaultShell) {
+        TextField("/bin/zsh", text: $model.settings.defaultShell)
+          .textFieldStyle(.roundedBorder)
+          .font(.system(size: 13, design: .monospaced))
+          .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+      }
+      .id("terminal.shell")
+
+      SettingsRow(text.workingDirectory) {
+        HStack(spacing: 8) {
+          TextField(text.currentDirectory, text: Binding(
+            get: { model.settings.defaultWorkingDirectory ?? "" },
+            set: { model.settings.defaultWorkingDirectory = $0.isEmpty ? nil : $0 }
+          ))
+          .textFieldStyle(.roundedBorder)
+          .font(.system(size: 13, design: .monospaced))
+          .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+
+          Button(text.choose) { chooseWorkingDirectory() }
+        }
+      }
+      .id("terminal.cwd")
+    }
+    .settingsHighlight(id: "terminal.shell", current: highlightedItemID)
+  }
+
+  @ViewBuilder
+  private func appearancePane(text: AppText) -> some View {
+    SettingsSection(text.appearance) {
+      SettingsRow(text.appLanguage) {
+        Picker("", selection: $model.settings.appLanguage) {
+          Text("System").tag("system")
+          Text("English").tag("en")
+          Text("简体中文").tag("zh-Hans")
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+      }
+      .id("appearance.language")
+
+      SettingsRow(text.theme) {
+        VStack(alignment: .leading, spacing: 8) {
+          Toggle(text.followSystem, isOn: $model.settings.followSystemAppearance)
+          Picker("", selection: $model.settings.themeName) {
+            Text(text.light).tag("light")
+            Text(text.dark).tag("dark")
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+          .settingsSubordinate(enabled: !model.settings.followSystemAppearance)
+        }
+      }
+      .id("appearance.theme")
+    }
+  }
+
+  @ViewBuilder
+  private func shortcutsPane(text: AppText) -> some View {
+    SettingsSection(text.shortcuts) {
+      ForEach(KeyboardShortcutAction.allCases) { action in
+        ShortcutSettingsRow(
+          title: AppText.shortcutActionTitle(action, text: text),
+          binding: shortcutRecorderState.settings.shortcut(for: action),
+          isRecording: shortcutRecorderState.recordingAction == action,
+          text: text,
+          beginRecording: {
+            shortcutRecorderState.settings = model.settings.keyboardShortcuts
+            shortcutRecorderState.beginRecording(action)
+          },
+          reset: {
+            shortcutRecorderState.settings = model.settings.keyboardShortcuts
+            shortcutRecorderState.reset(action)
+            model.settings.keyboardShortcuts = shortcutRecorderState.settings
+          }
+        )
+        .id("shortcut.\(action.rawValue)")
+      }
+
+      if let conflict = shortcutRecorderState.conflictAction {
+        Text("\(text.shortcutConflict) \(AppText.shortcutActionTitle(conflict, text: text))")
+          .font(.system(size: 12))
+          .foregroundStyle(.red)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func notificationsPane(text: AppText) -> some View {
+    SettingsSection(text.taskCompletionNotifications) {
+      VStack(alignment: .leading, spacing: 4) {
+        Toggle(text.enableNotifications, isOn: $model.settings.notificationsEnabled)
+        Text(text.enableNotificationsCaption)
+          .font(.system(size: 12))
+          .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+      }
+      .id("notifications.enable")
+
+      VStack(alignment: .leading, spacing: 4) {
+        Toggle(text.notifyWhenFocused, isOn: $model.settings.notifyWhenFocused)
+        Text(text.notifyWhenFocusedCaption)
+          .font(.system(size: 12))
+          .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+      }
+      .settingsSubordinate(enabled: model.settings.notificationsEnabled)
+      .id("notifications.focused")
+
+      if model.settings.notificationsEnabled, !model.systemNotificationsAuthorized {
+        HStack(spacing: 10) {
+          Text(text.notificationsPermissionHint)
+            .font(.system(size: 12))
+            .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+          Spacer()
+          Button(text.openSystemSettings) { model.openSystemNotificationSettings() }
+        }
+      }
+    }
+    .settingsHighlight(id: "notifications.enable", current: highlightedItemID)
+  }
+
+  @ViewBuilder
+  private func aboutPane(text: AppText) -> some View {
+    SettingsSection(text.about) {
+      SettingsRow(text.version) {
+        HStack(spacing: 10) {
+          Text(model.appVersionString())
+            .font(.system(size: 13, design: .monospaced))
+            .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+          Spacer()
+          Button(model.isCheckingForUpdates ? text.checkingForUpdates : text.checkForUpdates) {
+            Task { await model.checkForUpdates(manual: true) }
+          }
+          .disabled(model.isCheckingForUpdates)
+        }
+      }
+      .id("about.version")
+    }
+  }
+
+  @ViewBuilder
+  private func fontPane(text: AppText) -> some View {
+    let fontOptions = FontManager.fontOptions(
+      currentFamily: model.settings.fontFamily,
+      searchText: fontSearchText,
+      includeAllFonts: showsAllFonts
+    )
+    let selectedFontOption = FontManager.fontOption(for: model.settings.fontFamily)
+    let cjkFontOptions = FontManager.cjkFallbackOptions(
+      currentFamily: model.settings.cjkFallbackFontFamily,
+      searchText: cjkFontSearchText,
+      includeAllFonts: showsAllCJKFonts
+    )
+    let selectedCJKFontOption = model.settings.cjkFallbackFontFamily.map(FontManager.fontOption(for:))
+
+    SettingsSection(text.font) {
+      // Primary font — the first-class control, always visible.
+      VStack(alignment: .leading, spacing: 8) {
+        Picker("", selection: $model.settings.fontFamily) {
+          ForEach(fontOptions) { option in
+            Text(fontOptionLabel(option, text: text)).tag(option.familyName)
+          }
+        }
+        .labelsHidden()
+
+        HStack(spacing: 10) {
+          Slider(value: $model.settings.fontSize, in: 10...28, step: 1)
+          Text("\(Int(model.settings.fontSize))")
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+            .frame(width: 28, alignment: .trailing)
+            .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+        }
+        .id("font.size")
+
+        FontPreview(
+          title: text.fontPreview,
+          sample: text.fontPreviewSample,
+          detail: text.fontPreviewDetail,
+          fontFamily: model.settings.fontFamily,
+          cjkFallbackFontFamily: model.settings.cjkFallbackFontFamily,
+          fontSize: model.settings.fontSize
+        )
+      }
+      .id("font.family")
+
+      // Advanced — search, show-all, exact name. Collapsed by default.
+      DisclosureGroup(text.fontAdvanced) {
+        VStack(alignment: .leading, spacing: 8) {
+          HStack(alignment: .center, spacing: 8) {
+            TextField(text.fontSearchPlaceholder, text: $fontSearchText)
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 12))
+              .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+            Toggle(text.showAllFonts, isOn: $showsAllFonts)
+              .toggleStyle(.checkbox)
+              .font(.system(size: 11))
+              .fixedSize()
+          }
+
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            TextField(text.customFontName, text: $model.settings.fontFamily)
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 12, design: .monospaced))
+              .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+            if let status = fontStatusLabel(selectedFontOption, text: text) {
+              Text(status)
+                .font(.system(size: 11))
+                .foregroundStyle(fontStatusColor(selectedFontOption))
+                .lineLimit(1)
+                .fixedSize()
+            }
+          }
+
+          Text(text.installedMonospacedFontsHint)
+            .font(.system(size: 11))
+            .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 6)
+      }
+      .id("font.advanced")
+
+      // CJK fallback — advanced, collapsed by default.
+      DisclosureGroup(text.cjkFallbackFont) {
+        VStack(alignment: .leading, spacing: 8) {
+          HStack(alignment: .center, spacing: 8) {
+            TextField(text.fontSearchPlaceholder, text: $cjkFontSearchText)
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 12))
+              .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+            Toggle(text.showAllFonts, isOn: $showsAllCJKFonts)
+              .toggleStyle(.checkbox)
+              .font(.system(size: 11))
+              .fixedSize()
+          }
+
+          Picker("", selection: cjkFallbackSelection) {
+            Text(text.systemCJKFallback).tag("")
+            ForEach(cjkFontOptions) { option in
+              Text(cjkFontOptionLabel(option, text: text)).tag(option.familyName)
+            }
+          }
+          .labelsHidden()
+
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            TextField(text.customCJKFallbackName, text: cjkFallbackSelection)
+              .textFieldStyle(.roundedBorder)
+              .font(.system(size: 12, design: .monospaced))
+              .foregroundColor(Color(nsColor: model.configurationPrimaryTextColor))
+            if let status = cjkFontStatusLabel(selectedCJKFontOption, text: text) {
+              Text(status)
+                .font(.system(size: 11))
+                .foregroundStyle(cjkFontStatusColor(selectedCJKFontOption))
+                .lineLimit(1)
+                .fixedSize()
+            }
+          }
+
+          Text(text.cjkFallbackHint)
+            .font(.system(size: 11))
+            .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 6)
+      }
+      .id("font.cjk")
+    }
+    .settingsHighlight(id: "font.family", current: highlightedItemID)
   }
 
   private func fontOptionLabel(_ option: TerminalFontOption, text: AppText) -> String {
@@ -406,24 +514,21 @@ struct SettingsView: View {
   }
 
   private func shortcutTitle(_ action: KeyboardShortcutAction, text: AppText) -> String {
-    switch action {
-    case .openSettings:
-      return text.settings
-    case .openWorkspaceSwitcher:
-      return text.openWorkspaceSwitcher
-    case .sideInput:
-      return text.sideInput
-    case .splitRight:
-      return text.splitRight
-    case .splitDown:
-      return text.splitDown
-    case .closePane:
-      return text.closePane
-    case .focusPreviousPane:
-      return text.focusPreviousPane
-    case .focusNextPane:
-      return text.focusNextPane
-    }
+    AppText.shortcutActionTitle(action, text: text)
+  }
+}
+
+extension View {
+  /// Briefly highlights a settings group when the user jumps to it from a
+  /// search result (matched by `id`).
+  @ViewBuilder
+  func settingsHighlight(id: String, current: String?) -> some View {
+    overlay(
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .stroke(Color.accentColor, lineWidth: current == id ? 2 : 0)
+        .animation(.easeInOut(duration: 0.25), value: current)
+        .allowsHitTesting(false)
+    )
   }
 }
 
