@@ -31,9 +31,6 @@ struct SettingsView: View {
           Text(text.settings)
             .font(.system(size: 20, weight: .semibold))
             .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
-          Text(text.settingsCaption)
-            .font(.system(size: 12))
-            .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
         }
         Spacer()
       }
@@ -88,8 +85,7 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .disabled(model.settings.followSystemAppearance)
-                .opacity(model.settings.followSystemAppearance ? 0.55 : 1)
+                .settingsSubordinate(enabled: !model.settings.followSystemAppearance)
               }
             }
 
@@ -248,17 +244,14 @@ struct SettingsView: View {
                 .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
             }
 
-            // Level-2 toggle: subordinate to the master switch above. Indented,
-            // and disabled + dimmed until notifications are enabled.
+            // Level-2 toggle: subordinate to the master switch above.
             VStack(alignment: .leading, spacing: 4) {
               Toggle(text.notifyWhenFocused, isOn: $model.settings.notifyWhenFocused)
               Text(text.notifyWhenFocusedCaption)
                 .font(.system(size: 12))
                 .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
             }
-            .padding(.leading, 18)
-            .disabled(!model.settings.notificationsEnabled)
-            .opacity(model.settings.notificationsEnabled ? 1 : 0.45)
+            .settingsSubordinate(enabled: model.settings.notificationsEnabled)
 
             if model.settings.notificationsEnabled, !model.systemNotificationsAuthorized {
               HStack(spacing: 10) {
@@ -271,10 +264,6 @@ struct SettingsView: View {
                 }
               }
             }
-          }
-
-          SettingsSection(text.pgControlSection) {
-            Toggle(text.pgControlCommands, isOn: $model.settings.pgControlCommandsEnabled)
           }
 
           SettingsSection(text.about) {
@@ -290,16 +279,6 @@ struct SettingsView: View {
                 .disabled(model.isCheckingForUpdates)
               }
             }
-
-            HStack {
-              Spacer()
-              Button(text.restoreDefaults, role: .destructive) {
-                if confirmRestoreDefaults(text: text) {
-                  model.resetSettings()
-                  shortcutRecorderState = ShortcutRecorderState(settings: model.settings.keyboardShortcuts)
-                }
-              }
-            }
           }
         }
         .padding(.horizontal, 24)
@@ -307,6 +286,19 @@ struct SettingsView: View {
       }
       .scrollContentBackground(.hidden)
 
+      Divider()
+        .overlay(Color(nsColor: model.configurationSeparatorColor).opacity(0.5))
+      HStack {
+        Spacer()
+        Button(text.restoreDefaults, role: .destructive) {
+          if confirmRestoreDefaults(text: text) {
+            model.resetSettings()
+            shortcutRecorderState = ShortcutRecorderState(settings: model.settings.keyboardShortcuts)
+          }
+        }
+      }
+      .padding(.horizontal, 24)
+      .padding(.vertical, 12)
     }
     .frame(minWidth: 560, minHeight: 460)
     .preferredColorScheme(model.configurationColorScheme)
@@ -717,5 +709,16 @@ private struct SettingsRow<Content: View>: View {
       content
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+  }
+}
+
+extension View {
+  /// Expresses a settings control that is subordinate to a parent toggle:
+  /// indented, and disabled + dimmed when the parent is off. Used to keep the
+  /// "child option depends on parent switch" hierarchy consistent across panes.
+  func settingsSubordinate(enabled: Bool) -> some View {
+    padding(.leading, 18)
+      .disabled(!enabled)
+      .opacity(enabled ? 1 : 0.45)
   }
 }

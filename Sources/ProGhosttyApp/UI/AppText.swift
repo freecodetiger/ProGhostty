@@ -12,7 +12,6 @@ struct AppText {
   }
 
   var settings: String { text("Settings", "设置") }
-  var settingsCaption: String { text("Quiet defaults for terminal behavior and appearance.", "调整终端行为和外观的克制默认值。") }
   var workspaces: String { text("Workspaces...", "工作区...") }
   var copy: String { text("Copy", "复制") }
   var paste: String { text("Paste", "粘贴") }
@@ -80,8 +79,6 @@ struct AppText {
   var notifyWhenFocusedCaption: String { text("By default you are only notified when the pane is not focused.", "默认只在该分屏未聚焦时通知。") }
   var notificationsPermissionHint: String { text("System notifications are not enabled for ProGhostty.", "系统尚未授予 ProGhostty 通知权限。") }
   var openSystemSettings: String { text("Open System Settings", "打开系统设置") }
-  var pgControlCommands: String { text("Enable pg control commands", "启用 pg 控制命令") }
-  var pgControlSection: String { text("pg Control", "pg 控制") }
   var shortcuts: String { text("Shortcuts", "快捷键") }
   var shortcutConflict: String { text("Shortcut is already used.", "快捷键已被占用。") }
   var recordShortcut: String { text("Record", "录制") }
