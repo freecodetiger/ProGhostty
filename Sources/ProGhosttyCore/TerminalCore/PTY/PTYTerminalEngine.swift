@@ -629,6 +629,13 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       data,
       secondsSinceLastInput: secondsSinceLastInput
     ) ? .immediate : .coalesced
+    if delivery == .immediate {
+      // A keystroke grants exactly ONE low-latency immediate echo. Consume the
+      // timestamp so a burst triggered by that keystroke (e.g. pressing Return
+      // to run `seq 1 30000`) doesn't keep matching the echo window and flush
+      // every small read chunk separately — the rest coalesces into big batches.
+      lastInputUptimeBySession[id] = nil
+    }
     let sequences = state.oscParser.parse(data)
     sessions[id] = state
     continuation.yield(.output(session: id, data: data))
