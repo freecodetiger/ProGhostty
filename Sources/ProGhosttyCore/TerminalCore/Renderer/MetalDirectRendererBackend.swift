@@ -315,6 +315,9 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     directView.transientOverlayDidChangeHandler = { [weak self] in
       self?.presentViewportChange()
     }
+    directView.scrollActivityHandler = { [weak self] isScrolling in
+      self?.engine?.prefersAsyncPresent = isScrolling
+    }
     if let metalDevice {
       engine = engineFactory(metalDevice)
     }

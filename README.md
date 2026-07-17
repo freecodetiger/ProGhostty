@@ -1,7 +1,7 @@
 # ProGhostty
 
 [![Release](https://img.shields.io/github/v/release/freecodetiger/ProGhostty?sort=semver)](https://github.com/freecodetiger/ProGhostty/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black)](Package.swift)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-black)](Package.swift)
 [![Swift](https://img.shields.io/badge/Swift-6.1-orange)](Package.swift)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -57,7 +57,7 @@ ProGhostty 仍处于早期阶段，但已经可以用于真实 PTY 会话和日�
 
 要求：
 
-- macOS 13 或更新版本
+- macOS 14 或更新版本
 - Swift 6.1 toolchain
 - Git submodule 支持
 - Zig 0.15.2，用于构建 vendored Ghostty `libghostty-vt`

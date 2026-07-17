@@ -880,6 +880,11 @@ public class PTYGridView: NSView {
   public var viewportCanScrollHandler: ((Int) -> Bool)?
   public var viewportDidChangeHandler: (() -> Void)?
   public var transientOverlayDidChangeHandler: (() -> Void)?
+  /// Fired when smooth-scroll activity starts (true) / stops (false). The
+  /// backend forwards this to the render engine's `prefersAsyncPresent` so the
+  /// display-link tick never blocks the main thread on GPU completion while
+  /// scrolling, and reverts to the low-latency synchronous present when idle.
+  public var scrollActivityHandler: ((Bool) -> Void)?
   public var activationHandler: (() -> Void)?
   public var openURLHandler: ((URL) -> Void)? = { url in
     _ = NSWorkspace.shared.open(url)

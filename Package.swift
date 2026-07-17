@@ -6,7 +6,7 @@ let package = Package(
   name: "ProGhostty",
   defaultLocalization: nil,
   platforms: [
-    .macOS(.v13)
+    .macOS(.v14)
   ],
   pkgConfig: nil,
   providers: nil,

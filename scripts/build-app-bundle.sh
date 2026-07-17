@@ -55,7 +55,7 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
   <key>CFBundleVersion</key>
   <string>${BUILD}</string>
   <key>LSMinimumSystemVersion</key>
-  <string>13.0</string>
+  <string>14.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac</key>
