@@ -251,19 +251,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       height: view.terminalContentInset.height * pixelScale
     )
     let overscanTopRows = renderFrame.scrollFrame?.overscanTop.count ?? 0
-    // New R1 model: draw the whole expanded grid into the (viewport+overscan)-
-    // tall texture at its natural position (scene translation 0, row 0 at
-    // y=inset). The viewport band sits at texel y = overscanTop*cellHeight.
-    let sceneTranslationY: CGFloat = 0
-    // The composite quad shifts the taller texture UP by the overscan-top band
-    // so the viewport lands at the drawable top, plus the (unclamped) scroll
-    // offset. Y is down (shader: clip.y = 1 - 2y/H), so a more-negative
-    // translation reveals content lower in the texture.
-    let presentationTranslationY = (-CGFloat(overscanTopRows) * plan.cellSize.height + plan.pixelRemainderY) * pixelScale
-    let renderSize = Self.renderTargetSize(
-      for: plan,
-      contentInset: view.terminalContentInset
-    )
+    // Pattern 2: draw the expanded grid DIRECTLY to the drawable, shifted by a
+    // single translation — no offscreen texture, no composite pass. This is
+    // exactly equivalent to the old "render into offscreen at translation 0,
+    // then composite the offscreen shifted by presentationTranslationY": row r
+    // lands at y = inset + r*cellHeight + translationY either way. Because a
+    // CAMetalLayer drawable does not retain content across frames, the whole
+    // visible grid is redrawn every frame (cheap on the GPU; ~0.2ms), which also
+    // makes scrolling — where every row shifts by a sub-row remainder — trivial.
+    let translationY = (-CGFloat(overscanTopRows) * plan.cellSize.height + plan.pixelRemainderY) * pixelScale
     let drawableSize = Self.drawableTargetSize(
       forViewBounds: view.bounds.size,
       backingScale: pixelScale
@@ -277,33 +273,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       )
     }
 
-    let plannedRenderRowRuns = Self.renderRowRuns(for: plan, drawFrameRows: drawFrame.rows)
-    let plannedRenderCellRanges = Self.renderCellRanges(for: plan, drawFrameRows: drawFrame.rows)
+    // Pattern 2 redraws the ENTIRE visible grid every frame in a single pass:
+    // the CAMetalLayer drawable does not retain content across frames, and a
+    // sub-row scroll shifts every row, so partial/dirty redraw is neither
+    // possible nor useful here. One coordinate space (the drawable), one
+    // translation, all cells.
+    let renderCellRanges = Self.fullCellRanges(rows: drawFrame.rows, cols: plan.cols)
+    let shouldRenderScene = drawFrame.rows > 0 && plan.cols > 0
+    let redrawMode: TerminalRedrawMode = shouldRenderScene ? .full : .clean
 
-    guard let offscreen = ensureOffscreenTexture(size: renderSize) else {
-      return false
-    }
-    let texture = offscreen.texture
-    let transientOverlayChanged = plan.transientOverlayRevision != 0
-      && plan.transientOverlayRevision != previousTransientOverlayRevision
-    let mustRebuildScene = drawPassCount == 0 || offscreen.didResize || transientOverlayChanged
-    let renderRowRuns = mustRebuildScene && drawFrame.rows > 0
-      ? [0..<drawFrame.rows]
-      : plannedRenderRowRuns
-    let renderCellRanges = mustRebuildScene
-      ? Self.fullCellRanges(rows: drawFrame.rows, cols: plan.cols)
-      : plannedRenderCellRanges
-    let shouldRenderScene = mustRebuildScene || !renderCellRanges.isEmpty
-    let redrawMode: TerminalRedrawMode = renderCellRanges.isEmpty
-      ? .clean
-      : (Self.coversFullDrawFrame(renderRowRuns, drawFrameRows: drawFrame.rows) ? .full : .dirty)
-    let loadPolicy = Self.renderPassLoadPolicy(
-      isFirstFrame: drawPassCount == 0,
-      didResizeTexture: offscreen.didResize,
-      redrawMode: redrawMode,
-      renderRowRuns: renderRowRuns,
-      drawFrameRows: drawFrame.rows
-    )
     let backgroundVertices = buildBackgroundVertices(
       frame: drawFrame,
       cellRanges: renderCellRanges,
@@ -311,51 +289,30 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       isFocused: renderFrame.isFocused,
       cellSize: cellSize,
       inset: inset,
-      translationY: sceneTranslationY
+      translationY: translationY
     )
-    let sceneOverlays = MetalOverlayBuffer.makeOverlays(
+    // A single overlay set drawn to the drawable at the viewport translation.
+    // (Pattern 1 split these across an offscreen scene pass + a drawable pass;
+    // with direct-draw there is only the drawable, so cursor + selection + link +
+    // marked-text all share one translation, matching the old composited result.)
+    let overlays = MetalOverlayBuffer.makeOverlays(
       renderFrame: renderFrame,
       plan: plan,
       palette: palette,
       markedTextActive: view.isComposingMarkedText,
       selectedRows: view.currentSelectionRowSet,
       selectedCellRanges: view.currentSelectionCellRanges,
-      selectionRowsOffset: 0,
+      selectionRowsOffset: overscanTopRows,
       linkHoverRows: [],
       linkHoverCellRanges: view.currentLinkHoverCellRanges,
       cursorOverlay: cursorOverlay,
       markedTextOverlay: markedTextOverlay,
       imeCompositionCursorOverlay: view.currentIMECompositionCursorOverlay,
-      markedTextRowsOffset: renderFrame.scrollFrame?.overscanTop.count ?? 0,
-      pixelRemainderY: 0,
-      translationYOverride: 0
-    )
-    let drawableOverlays = MetalOverlayBuffer.makeOverlays(
-      renderFrame: renderFrame,
-      plan: plan,
-      palette: palette,
-      markedTextActive: view.isComposingMarkedText,
-      selectedRows: view.currentSelectionRowSet,
-      selectedCellRanges: view.currentSelectionCellRanges,
-      selectionRowsOffset: 0,
-      linkHoverRows: [],
-      linkHoverCellRanges: view.currentLinkHoverCellRanges,
-      cursorOverlay: cursorOverlay,
-      markedTextOverlay: markedTextOverlay,
-      imeCompositionCursorOverlay: view.currentIMECompositionCursorOverlay,
-      markedTextRowsOffset: renderFrame.scrollFrame?.overscanTop.count ?? 0,
-      pixelRemainderY: plan.pixelRemainderY
-    )
-    let drawCursorOnDrawable = Self.cursorShouldDrawOnDrawable(shape: renderFrame.frame.cursorShape)
-    let offscreenOverlays = !shouldRenderScene || renderRowRuns.isEmpty
-      ? []
-      : Self.offscreenOverlays(from: sceneOverlays, drawCursorOnDrawable: drawCursorOnDrawable)
-    let drawableTransientOverlays = Self.drawableOverlays(
-      from: drawableOverlays,
-      drawCursorOnDrawable: drawCursorOnDrawable
+      markedTextRowsOffset: overscanTopRows,
+      translationYOverride: translationY
     )
     let overlayBelowVertices = buildOverlayVertices(
-      overlays: offscreenOverlays.filter { $0.phase == .beneathGlyphs }
+      overlays: overlays.filter { $0.phase == .beneathGlyphs }
     )
     let glyphVertices = buildGlyphVertices(
       frame: drawFrame,
@@ -365,16 +322,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       glyphAtlas: glyphAtlas,
       cellSize: cellSize,
       inset: inset,
-      translationY: sceneTranslationY,
+      translationY: translationY,
       cursorRow: renderFrame.scrollFrame.map { $0.overscanTop.count + $0.viewport.cursorY } ?? renderFrame.frame.cursorY,
       cursorCol: renderFrame.frame.cursorX,
       cursorVisible: renderFrame.frame.cursorVisible,
       cursorShape: renderFrame.frame.cursorShape
     )
     let overlayAboveVertices = buildOverlayVertices(
-      overlays: offscreenOverlays.filter { $0.phase == .aboveGlyphs }
+      overlays: overlays.filter { $0.phase == .aboveGlyphs }
     )
-    let drawableOverlayVertices = buildOverlayVertices(overlays: drawableTransientOverlays)
     let markedTextGlyphLayout = Self.markedTextGlyphLayout(
       text: markedTextString ?? "",
       overlay: markedTextOverlay,
@@ -399,43 +355,20 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       palette: palette,
       glyphAtlas: glyphAtlas
     )
-    let hasDrawableTransientOverlays = !drawableOverlayVertices.isEmpty
-      || !markedTextGlyphDraw.vertices.isEmpty
-      || !cursorGlyphDraw.vertices.isEmpty
-    let waitReason = Self.commandCompletionWaitReason(
-      isFirstFrame: drawPassCount == 0,
-      didResizeTexture: offscreen.didResize,
-      redrawMode: redrawMode,
-      loadPolicy: loadPolicy,
-      cursorRowDirty: plan.dirtyRows.contains(renderFrame.frame.cursorY),
-      rendersScene: shouldRenderScene,
-      hasDrawableTransientOverlays: hasDrawableTransientOverlays
-    )
-    // During active scrolling never block the main thread on the GPU — the
-    // display-link tick must stay under its frame budget. The in-flight
-    // semaphore provides back-pressure instead.
-    let shouldWait = waitReason != "none" && !prefersAsyncPresent
+    // Typing / idle presents synchronously for lowest latency; active scrolling
+    // (prefersAsyncPresent) presents async with semaphore back-pressure so the
+    // display-link tick never blocks the main thread on GPU completion.
+    let shouldWait = !prefersAsyncPresent
+    let waitReason = prefersAsyncPresent ? "async-scroll" : "sync-present"
     let glyphSlices = glyphTextureSlices(for: drawFrame, cellRanges: renderCellRanges, glyphAtlas: glyphAtlas)
-    let compositeVertices = quadVertices(
-      rect: CGRect(
-        x: 0,
-        y: presentationTranslationY,
-        width: renderSize.width,
-        height: renderSize.height
-      ),
-      color: SIMD4<Float>(1, 1, 1, 1),
-      texture: true
-    )
 
     guard
       let backgroundBuffer = makeBuffer(vertices: backgroundVertices),
       let overlayBelowBuffer = makeBuffer(vertices: overlayBelowVertices),
       let glyphBuffer = makeBuffer(vertices: glyphVertices),
       let overlayAboveBuffer = makeBuffer(vertices: overlayAboveVertices),
-      let drawableOverlayBuffer = makeBuffer(vertices: drawableOverlayVertices),
       let markedTextGlyphBuffer = makeBuffer(vertices: markedTextGlyphDraw.vertices),
-      let cursorGlyphBuffer = makeBuffer(vertices: cursorGlyphDraw.vertices),
-      let compositeBuffer = makeBuffer(vertices: compositeVertices)
+      let cursorGlyphBuffer = makeBuffer(vertices: cursorGlyphDraw.vertices)
     else {
       return false
     }
@@ -444,73 +377,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       return false
     }
 
-    if shouldRenderScene {
-      let passDescriptor = MTLRenderPassDescriptor()
-      passDescriptor.colorAttachments[0].texture = texture
-      passDescriptor.colorAttachments[0].loadAction = loadPolicy == .clear ? .clear : .load
-      passDescriptor.colorAttachments[0].storeAction = .store
-      passDescriptor.colorAttachments[0].clearColor = MTLClearColor(
-        red: Double(palette.background.metalRed),
-        green: Double(palette.background.metalGreen),
-        blue: Double(palette.background.metalBlue),
-        alpha: 1
-      )
-
-      if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) {
-      var uniforms = Uniforms(drawableSize: SIMD2(Float(renderSize.width), Float(renderSize.height)))
-      encoder.setRenderPipelineState(backgroundPipeline)
-      encoder.setVertexBuffer(backgroundBuffer, offset: 0, index: 0)
-      withUnsafeBytes(of: &uniforms) { bytes in
-        encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
-      }
-      encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: backgroundVertices.count)
-
-      if !overlayBelowVertices.isEmpty {
-        encoder.setVertexBuffer(overlayBelowBuffer, offset: 0, index: 0)
-        withUnsafeBytes(of: &uniforms) { bytes in
-          encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
-        }
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: overlayBelowVertices.count)
-      }
-
-      if !glyphVertices.isEmpty {
-        encoder.setRenderPipelineState(glyphPipeline)
-        encoder.setVertexBuffer(glyphBuffer, offset: 0, index: 0)
-        withUnsafeBytes(of: &uniforms) { bytes in
-          encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
-        }
-        for textureSlice in glyphSlices {
-          encoder.setFragmentTexture(textureSlice.texture, index: 0)
-          encoder.drawPrimitives(type: .triangle, vertexStart: textureSlice.vertexStart, vertexCount: textureSlice.vertexCount)
-        }
-      }
-
-      if !overlayAboveVertices.isEmpty {
-        encoder.setRenderPipelineState(backgroundPipeline)
-        encoder.setVertexBuffer(overlayAboveBuffer, offset: 0, index: 0)
-        withUnsafeBytes(of: &uniforms) { bytes in
-          encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
-        }
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: overlayAboveVertices.count)
-      }
-
-      encoder.endEncoding()
-      }
-    }
-
     var retainedResources: [Any] = [
-      texture,
       backgroundBuffer,
       overlayBelowBuffer,
       glyphBuffer,
       overlayAboveBuffer,
-      drawableOverlayBuffer,
       markedTextGlyphBuffer,
       cursorGlyphBuffer,
-      compositeBuffer,
       backgroundPipeline,
       glyphPipeline,
-      compositePipeline,
     ]
     retainedResources.append(contentsOf: glyphSlices.map(\.texture))
     retainedResources.append(contentsOf: markedTextGlyphDraw.slices.map(\.texture))
@@ -526,80 +401,78 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       if let drawable = metalLayer.nextDrawable() {
         presentedDrawable = true
         retainedResources.append(drawable)
-        let compositePassDescriptor = MTLRenderPassDescriptor()
-        compositePassDescriptor.colorAttachments[0].texture = drawable.texture
-        compositePassDescriptor.colorAttachments[0].loadAction = .clear
-        compositePassDescriptor.colorAttachments[0].storeAction = .store
-        compositePassDescriptor.colorAttachments[0].clearColor = MTLClearColor(
+        // Pattern 2: one render pass, straight to the drawable. Clear to the
+        // background color, then draw the whole shifted grid in z-order:
+        // background quads → beneath-glyph overlays (block cursor) → glyphs →
+        // above-glyph overlays (selection / link / bar+underline cursor) →
+        // marked-text glyphs → block-cursor glyph.
+        let passDescriptor = MTLRenderPassDescriptor()
+        passDescriptor.colorAttachments[0].texture = drawable.texture
+        passDescriptor.colorAttachments[0].loadAction = .clear
+        passDescriptor.colorAttachments[0].storeAction = .store
+        passDescriptor.colorAttachments[0].clearColor = MTLClearColor(
           red: Double(palette.background.metalRed),
           green: Double(palette.background.metalGreen),
           blue: Double(palette.background.metalBlue),
           alpha: 1
         )
-        if let compositeEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: compositePassDescriptor) {
-          var compositeUniforms = Uniforms(drawableSize: SIMD2(Float(drawableSize.width), Float(drawableSize.height)))
-          compositeEncoder.setRenderPipelineState(compositePipeline)
-          compositeEncoder.setVertexBuffer(compositeBuffer, offset: 0, index: 0)
-          withUnsafeBytes(of: &compositeUniforms) { bytes in
-            compositeEncoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
-          }
-          compositeEncoder.setFragmentTexture(texture, index: 0)
-          compositeEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: compositeVertices.count)
-          compositeEncoder.endEncoding()
-        }
-        if !drawableOverlayVertices.isEmpty {
-          let overlayPassDescriptor = MTLRenderPassDescriptor()
-          overlayPassDescriptor.colorAttachments[0].texture = drawable.texture
-          overlayPassDescriptor.colorAttachments[0].loadAction = .load
-          overlayPassDescriptor.colorAttachments[0].storeAction = .store
-          if let overlayEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: overlayPassDescriptor) {
-            var overlayUniforms = Uniforms(drawableSize: SIMD2(Float(drawableSize.width), Float(drawableSize.height)))
-            overlayEncoder.setRenderPipelineState(backgroundPipeline)
-            overlayEncoder.setVertexBuffer(drawableOverlayBuffer, offset: 0, index: 0)
-            withUnsafeBytes(of: &overlayUniforms) { bytes in
-              overlayEncoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
+        if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) {
+          var uniforms = Uniforms(drawableSize: SIMD2(Float(drawableSize.width), Float(drawableSize.height)))
+          func setUniforms() {
+            withUnsafeBytes(of: &uniforms) { bytes in
+              encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
             }
-            overlayEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: drawableOverlayVertices.count)
-            overlayEncoder.endEncoding()
           }
-        }
-        if !markedTextGlyphDraw.vertices.isEmpty {
-          let markedTextPassDescriptor = MTLRenderPassDescriptor()
-          markedTextPassDescriptor.colorAttachments[0].texture = drawable.texture
-          markedTextPassDescriptor.colorAttachments[0].loadAction = .load
-          markedTextPassDescriptor.colorAttachments[0].storeAction = .store
-          if let markedTextEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: markedTextPassDescriptor) {
-            var markedTextUniforms = Uniforms(drawableSize: SIMD2(Float(drawableSize.width), Float(drawableSize.height)))
-            markedTextEncoder.setRenderPipelineState(glyphPipeline)
-            markedTextEncoder.setVertexBuffer(markedTextGlyphBuffer, offset: 0, index: 0)
-            withUnsafeBytes(of: &markedTextUniforms) { bytes in
-              markedTextEncoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
+
+          encoder.setRenderPipelineState(backgroundPipeline)
+          encoder.setVertexBuffer(backgroundBuffer, offset: 0, index: 0)
+          setUniforms()
+          encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: backgroundVertices.count)
+
+          if !overlayBelowVertices.isEmpty {
+            encoder.setVertexBuffer(overlayBelowBuffer, offset: 0, index: 0)
+            setUniforms()
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: overlayBelowVertices.count)
+          }
+
+          if !glyphVertices.isEmpty {
+            encoder.setRenderPipelineState(glyphPipeline)
+            encoder.setVertexBuffer(glyphBuffer, offset: 0, index: 0)
+            setUniforms()
+            for textureSlice in glyphSlices {
+              encoder.setFragmentTexture(textureSlice.texture, index: 0)
+              encoder.drawPrimitives(type: .triangle, vertexStart: textureSlice.vertexStart, vertexCount: textureSlice.vertexCount)
             }
+          }
+
+          if !overlayAboveVertices.isEmpty {
+            encoder.setRenderPipelineState(backgroundPipeline)
+            encoder.setVertexBuffer(overlayAboveBuffer, offset: 0, index: 0)
+            setUniforms()
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: overlayAboveVertices.count)
+          }
+
+          if !markedTextGlyphDraw.vertices.isEmpty {
+            encoder.setRenderPipelineState(glyphPipeline)
+            encoder.setVertexBuffer(markedTextGlyphBuffer, offset: 0, index: 0)
+            setUniforms()
             for textureSlice in markedTextGlyphDraw.slices {
-              markedTextEncoder.setFragmentTexture(textureSlice.texture, index: 0)
-              markedTextEncoder.drawPrimitives(type: .triangle, vertexStart: textureSlice.vertexStart, vertexCount: textureSlice.vertexCount)
+              encoder.setFragmentTexture(textureSlice.texture, index: 0)
+              encoder.drawPrimitives(type: .triangle, vertexStart: textureSlice.vertexStart, vertexCount: textureSlice.vertexCount)
             }
-            markedTextEncoder.endEncoding()
           }
-        }
-        if !cursorGlyphDraw.vertices.isEmpty {
-          let cursorGlyphPassDescriptor = MTLRenderPassDescriptor()
-          cursorGlyphPassDescriptor.colorAttachments[0].texture = drawable.texture
-          cursorGlyphPassDescriptor.colorAttachments[0].loadAction = .load
-          cursorGlyphPassDescriptor.colorAttachments[0].storeAction = .store
-          if let cursorGlyphEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: cursorGlyphPassDescriptor) {
-            var cursorGlyphUniforms = Uniforms(drawableSize: SIMD2(Float(drawableSize.width), Float(drawableSize.height)))
-            cursorGlyphEncoder.setRenderPipelineState(glyphPipeline)
-            cursorGlyphEncoder.setVertexBuffer(cursorGlyphBuffer, offset: 0, index: 0)
-            withUnsafeBytes(of: &cursorGlyphUniforms) { bytes in
-              cursorGlyphEncoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
-            }
+
+          if !cursorGlyphDraw.vertices.isEmpty {
+            encoder.setRenderPipelineState(glyphPipeline)
+            encoder.setVertexBuffer(cursorGlyphBuffer, offset: 0, index: 0)
+            setUniforms()
             for textureSlice in cursorGlyphDraw.slices {
-              cursorGlyphEncoder.setFragmentTexture(textureSlice.texture, index: 0)
-              cursorGlyphEncoder.drawPrimitives(type: .triangle, vertexStart: textureSlice.vertexStart, vertexCount: textureSlice.vertexCount)
+              encoder.setFragmentTexture(textureSlice.texture, index: 0)
+              encoder.drawPrimitives(type: .triangle, vertexStart: textureSlice.vertexStart, vertexCount: textureSlice.vertexCount)
             }
-            cursorGlyphEncoder.endEncoding()
           }
+
+          encoder.endEncoding()
         }
         commandBuffer.present(drawable)
       } else {
@@ -634,8 +507,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
 
     lastRenderedRowCount = shouldRenderScene ? Set(renderCellRanges.map(\.row)).count : 0
     lastRenderedCellCount = shouldRenderScene ? renderCellRanges.reduce(0) { $0 + $1.cols.count } : 0
-    lastRenderedRunCount = shouldRenderScene ? renderRowRuns.count : 0
-    lastRenderPassLoadPolicy = loadPolicy
+    lastRenderedRunCount = shouldRenderScene ? 1 : 0
+    lastRenderPassLoadPolicy = .clear
     lastWaitedForCompletion = shouldWait
     lastGPUWaitReason = waitReason
     if shouldRenderScene {

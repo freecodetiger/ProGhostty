@@ -510,11 +510,15 @@ struct TerminalRendererBackendTests {
     backend.flushPendingFrame()
 
     let diagnostics = backend.diagnostics
+    // Pattern 2: the backend still diffs and scans only the dirty row/cell for
+    // glyph rasterization (uploadedRowCount/dirtyRowCount below), but the GPU
+    // draw itself is always the full grid to a freshly cleared drawable — there
+    // is no retained offscreen to load partial rows into.
     #expect(diagnostics.redrawMode == .dirty)
     #expect(diagnostics.metalDirect.uploadedRowCount == 1)
-    #expect(diagnostics.metalDirect.drawnRowCount == 1)
-    #expect(diagnostics.metalDirect.drawnCellCount == 1)
-    #expect(diagnostics.metalDirect.renderPassLoadAction == "load")
+    #expect(diagnostics.metalDirect.drawnRowCount == 3)
+    #expect(diagnostics.metalDirect.drawnCellCount == 12)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "clear")
     #expect(diagnostics.metalDirect.waitedForCompletion == true)
   }
 
@@ -546,12 +550,14 @@ struct TerminalRendererBackendTests {
     backend.flushPendingFrame()
 
     let diagnostics = backend.diagnostics
+    // The frame diff is still clean (no text row changed) and no glyph is
+    // re-rasterized, but pattern 2 always redraws the full grid to the drawable.
     #expect(diagnostics.redrawMode == .clean)
     #expect(diagnostics.dirtyRowCount == 0)
-    #expect(diagnostics.metalDirect.drawnRowCount == 0)
     #expect(diagnostics.metalDirect.glyphScanRowCount == 0)
-    #expect(diagnostics.metalDirect.renderPassLoadAction == "load")
-    #expect(diagnostics.metalDirect.waitedForCompletion == false)
+    #expect(diagnostics.metalDirect.drawnRowCount == 3)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "clear")
+    #expect(diagnostics.metalDirect.waitedForCompletion == true)
   }
 
   @MainActor @Test func metalDirectRendererBackendRebuildsSceneWhenFocusChanges() {
@@ -584,8 +590,9 @@ struct TerminalRendererBackendTests {
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode == .dirty)
     #expect(diagnostics.dirtyRowCount == 2)
-    #expect(diagnostics.metalDirect.drawnRowCount == 2)
     #expect(diagnostics.metalDirect.glyphScanRowCount == 2)
+    // Pattern 2 always draws the full grid (3 rows) regardless of dirty count.
+    #expect(diagnostics.metalDirect.drawnRowCount == 3)
   }
 
   @MainActor @Test func metalDirectRenderWaitsForCompletionWhenCursorRowIsDirty() {
@@ -614,11 +621,13 @@ struct TerminalRendererBackendTests {
     backend.flushPendingFrame()
 
     let diagnostics = backend.diagnostics
+    // The diff still classifies this as a partial dirty update, but pattern 2's
+    // GPU draw is one full-grid pass to a cleared drawable.
     #expect(diagnostics.redrawMode == .dirty)
-    #expect(diagnostics.metalDirect.drawRunCount == 2)
-    #expect(diagnostics.metalDirect.drawnRowCount == 1)
-    #expect(diagnostics.metalDirect.drawnCellCount == 1)
-    #expect(diagnostics.metalDirect.renderPassLoadAction == "load")
+    #expect(diagnostics.metalDirect.drawRunCount == 1)
+    #expect(diagnostics.metalDirect.drawnRowCount == 3)
+    #expect(diagnostics.metalDirect.drawnCellCount == 12)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "clear")
   }
 
   @MainActor @Test func metalDirectRendererBackendScansGlyphsOnlyForDirtyRowsAfterInitialFrame() {
@@ -716,10 +725,12 @@ struct TerminalRendererBackendTests {
 
     let diagnostics = backend.diagnostics
     #expect(diagnostics.pixelRemainderY == 5)
-    #expect(diagnostics.metalDirect.drawPassCount == 1)
+    #expect(diagnostics.metalDirect.drawPassCount == 2)
     #expect(diagnostics.metalDirect.latestSubmittedGeneration == 18)
-    #expect(diagnostics.metalDirect.drawnCellCount == 0)
-    #expect(diagnostics.metalDirect.renderPassLoadAction == "load")
+    // A reframe on scroll redraws the whole expanded grid (viewport+overscan = 4
+    // rows × 8 cols) shifted by the new pixel remainder.
+    #expect(diagnostics.metalDirect.drawnCellCount == 32)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "clear")
   }
 
   @MainActor @Test func metalDirectRendererBackendKeepsScrollOverscanChangesDirty() {
@@ -745,8 +756,9 @@ struct TerminalRendererBackendTests {
     let diagnostics = backend.diagnostics
     #expect(diagnostics.redrawMode != .full)
     #expect(diagnostics.metalDirect.fullRedrawReason == "none")
-    #expect(diagnostics.metalDirect.drawnRowCount < 4)
-    #expect(diagnostics.metalDirect.renderPassLoadAction == "load")
+    // Pattern 2 draws the full expanded grid (4 rows) every frame with a clear.
+    #expect(diagnostics.metalDirect.drawnRowCount == 4)
+    #expect(diagnostics.metalDirect.renderPassLoadAction == "clear")
   }
 
   @MainActor @Test func metalDirectRendererBackendStagesResizeFramesUntilDiagnosticsComplete() {
@@ -957,8 +969,8 @@ struct TerminalRendererBackendTests {
       palette: .dark,
       glyphAtlas: glyphAtlas
     ))
-    #expect(engine.lastRenderPassLoadPolicy == .load)
-    #expect(engine.lastRenderedRowCount == 0)
+    #expect(engine.lastRenderPassLoadPolicy == .clear)
+    #expect(engine.lastRenderedRowCount == frame.rows)
 
     view.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
     let markedPlan = MetalTerminalFrameEncoder.encode(
