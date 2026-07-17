@@ -179,7 +179,7 @@ struct TerminalRendererBackendTests {
     #expect(view.needsDisplay == false)
   }
 
-  @MainActor @Test func metalDirectRenderTargetUsesViewportRowsNotOverscanRows() {
+  @MainActor @Test func metalDirectRenderTargetIncludesOverscanRows() {
     let plan = MetalTerminalRenderPlan(
       presentation: .scrollFrame,
       viewportRows: 2,
@@ -198,7 +198,14 @@ struct TerminalRendererBackendTests {
       contentInset: CGSize(width: 14, height: 12)
     )
 
-    #expect(size == CGSize(width: 120, height: 112))
+    // R1: the offscreen texture is sized for the FIXED maximum overscan
+    // (pixelScrollOverscanRows = 24) on both sides so it never resizes as the
+    // actual per-frame overscan count fluctuates. The composite quad selects the
+    // viewport band using the actual overscanTop count; unused area stays
+    // off-screen.
+    // width  = (inset 14*2 + cols 4 * cell 8) * scale 2 = 120
+    // height = (inset 12*2 + (24 + viewport 2 + 24) * cell 16) * scale 2 = 1648
+    #expect(size == CGSize(width: 120, height: 1648))
   }
 
   @MainActor @Test func metalDirectDrawableTargetUsesViewBackingSizeNotTerminalContentSize() {
@@ -1822,6 +1829,7 @@ struct TerminalRendererBackendTests {
     var latestSubmittedGeneration = 0
     var latestPresentedGeneration = 0
     let pipelineReady = true
+    var prefersAsyncPresent = false
     let lastRenderedRowCount = 1
     let lastRenderedCellCount = 1
     let lastRenderedRunCount = 1
@@ -1857,6 +1865,7 @@ struct TerminalRendererBackendTests {
     let latestSubmittedGeneration = 0
     let latestPresentedGeneration = 0
     let pipelineReady = true
+    var prefersAsyncPresent = false
     let lastRenderedRowCount = 0
     let lastRenderedCellCount = 0
     let lastRenderedRunCount = 0
@@ -2044,6 +2053,8 @@ struct TerminalRendererBackendTests {
         cellHeight: 16
       ) == 5
     )
+    // Baseline: sub-row offset is clamped to ±cellHeight (event-driven scroll
+    // commits a whole row past that). The unclamp lands with R1.2 display-link.
     #expect(
       PTYGridView.visualScrollTranslationY(
         for: TerminalViewport(visualOffsetY: 24),

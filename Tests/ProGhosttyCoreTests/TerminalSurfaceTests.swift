@@ -3139,6 +3139,7 @@ private final class RuntimeFailingMetalDirectRenderingEngine: MetalDirectRenderi
   let latestSubmittedGeneration = 0
   let latestPresentedGeneration = 0
   let pipelineReady = true
+  var prefersAsyncPresent = false
   let lastRenderedRowCount = 0
   let lastRenderedCellCount = 0
   let lastRenderedRunCount = 0

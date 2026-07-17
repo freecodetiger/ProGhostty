@@ -47,7 +47,8 @@ public enum MetalOverlayBuffer {
     imeCompositionCursorOverlay: MetalMarkedTextOverlay? = nil,
     markedTextRowsOffset: Int = 0,
     contentInset: CGSize = CGSize(width: 14, height: 12),
-    pixelRemainderY: CGFloat? = nil
+    pixelRemainderY: CGFloat? = nil,
+    translationYOverride: CGFloat? = nil
   ) -> [MetalOverlayPrimitive] {
     let frame = renderFrame.expandedFrame
     let pixelScale = plan.backingScale
@@ -60,7 +61,11 @@ public enum MetalOverlayBuffer {
       height: contentInset.height * pixelScale
     )
     let effectivePixelRemainderY = pixelRemainderY ?? plan.pixelRemainderY
-    let translationY = -CGFloat(plan.overscanTopRows) * cellSize.height + effectivePixelRemainderY * pixelScale
+    // R1 model: scene overlays are drawn into the expanded-grid texture at
+    // natural positions (translationY 0, caller passes override 0). Drawable
+    // overlays keep the viewport-relative shift (-overscanTop band + scroll).
+    let translationY = translationYOverride
+      ?? (-CGFloat(plan.overscanTopRows) * cellSize.height + effectivePixelRemainderY * pixelScale)
     let cursorRow = cursorOverlay.map { $0.row + markedTextRowsOffset }
       ?? renderFrame.scrollFrame.map { $0.overscanTop.count + $0.viewport.cursorY }
       ?? frame.cursorY

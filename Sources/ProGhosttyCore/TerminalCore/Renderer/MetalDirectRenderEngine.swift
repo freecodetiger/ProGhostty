@@ -10,6 +10,11 @@ protocol MetalDirectRenderingEngine: AnyObject {
   var latestSubmittedGeneration: Int { get }
   var latestPresentedGeneration: Int { get }
   var pipelineReady: Bool { get }
+  /// While true (active scrolling), the engine never blocks the main thread on
+  /// commandBuffer.waitUntilCompleted — it uses the async completion handler so
+  /// the display-link tick stays under its frame budget. Set false when idle so
+  /// normal typing keeps its low-latency synchronous present.
+  var prefersAsyncPresent: Bool { get set }
   var lastRenderedRowCount: Int { get }
   var lastRenderedCellCount: Int { get }
   var lastRenderedRunCount: Int { get }
@@ -114,11 +119,13 @@ private enum MetalDirectCommandCompletion {
     to commandBuffer: MTLCommandBuffer,
     completionBox: MetalDirectFrameCompletionBox,
     generation: Int,
-    retainedResources: [Any]
+    retainedResources: [Any],
+    onPresented: (@Sendable () -> Void)? = nil
   ) {
     commandBuffer.addCompletedHandler { [completionBox, retainedResources] _ in
       _ = retainedResources.count
       completionBox.complete(generation)
+      onPresented?()
     }
   }
 }
@@ -152,6 +159,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
 
   private let device: MTLDevice
   private let commandQueue: MTLCommandQueue
+  var prefersAsyncPresent: Bool = false
+  /// Back-pressure for the async present path. CAMetalLayer's drawable pool is
+  /// finite (default 3); without a gate the display-link tick keeps calling
+  /// nextDrawable() faster than the compositor drains it, presents pile up, and
+  /// the visible frame lags far behind (freeze-then-catch-up). Limiting
+  /// in-flight presented drawables paces producer to consumer. Exactly one
+  /// signal per successful acquire, in the completion handler / after wait.
+  private static let maxInFlightDrawables = 2
+  private let inFlightSemaphore = DispatchSemaphore(value: maxInFlightDrawables)
   private let textureLoader: MTKTextureLoader
   private let backgroundPipeline: MTLRenderPipelineState
   private let glyphPipeline: MTLRenderPipelineState
@@ -234,12 +250,16 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       width: view.terminalContentInset.width * pixelScale,
       height: view.terminalContentInset.height * pixelScale
     )
-    let sceneTranslationY = drawTranslationY(
-      topOverscanRows: renderFrame.scrollFrame?.overscanTop.count ?? 0,
-      pixelRemainderY: 0,
-      cellHeight: cellSize.height
-    )
-    let presentationTranslationY = plan.pixelRemainderY * pixelScale
+    let overscanTopRows = renderFrame.scrollFrame?.overscanTop.count ?? 0
+    // New R1 model: draw the whole expanded grid into the (viewport+overscan)-
+    // tall texture at its natural position (scene translation 0, row 0 at
+    // y=inset). The viewport band sits at texel y = overscanTop*cellHeight.
+    let sceneTranslationY: CGFloat = 0
+    // The composite quad shifts the taller texture UP by the overscan-top band
+    // so the viewport lands at the drawable top, plus the (unclamped) scroll
+    // offset. Y is down (shader: clip.y = 1 - 2y/H), so a more-negative
+    // translation reveals content lower in the texture.
+    let presentationTranslationY = (-CGFloat(overscanTopRows) * plan.cellSize.height + plan.pixelRemainderY) * pixelScale
     let renderSize = Self.renderTargetSize(
       for: plan,
       contentInset: view.terminalContentInset
@@ -307,7 +327,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       markedTextOverlay: markedTextOverlay,
       imeCompositionCursorOverlay: view.currentIMECompositionCursorOverlay,
       markedTextRowsOffset: renderFrame.scrollFrame?.overscanTop.count ?? 0,
-      pixelRemainderY: 0
+      pixelRemainderY: 0,
+      translationYOverride: 0
     )
     let drawableOverlays = MetalOverlayBuffer.makeOverlays(
       renderFrame: renderFrame,
@@ -390,7 +411,10 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       rendersScene: shouldRenderScene,
       hasDrawableTransientOverlays: hasDrawableTransientOverlays
     )
-    let shouldWait = waitReason != "none"
+    // During active scrolling never block the main thread on the GPU — the
+    // display-link tick must stay under its frame budget. The in-flight
+    // semaphore provides back-pressure instead.
+    let shouldWait = waitReason != "none" && !prefersAsyncPresent
     let glyphSlices = glyphTextureSlices(for: drawFrame, cellRanges: renderCellRanges, glyphAtlas: glyphAtlas)
     let compositeVertices = quadVertices(
       rect: CGRect(
@@ -492,10 +516,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     retainedResources.append(contentsOf: markedTextGlyphDraw.slices.map(\.texture))
     retainedResources.append(contentsOf: cursorGlyphDraw.slices.map(\.texture))
 
+    var presentedDrawable = false
     if let metalLayer = view.layer as? CAMetalLayer {
       retainedResources.append(metalLayer)
       metalLayer.drawableSize = drawableSize
+      // Gate on the in-flight pool BEFORE acquiring a drawable so this tick can't
+      // outrun the compositor. Released once per acquire below / in completion.
+      inFlightSemaphore.wait()
       if let drawable = metalLayer.nextDrawable() {
+        presentedDrawable = true
         retainedResources.append(drawable)
         let compositePassDescriptor = MTLRenderPassDescriptor()
         compositePassDescriptor.colorAttachments[0].texture = drawable.texture
@@ -573,6 +602,9 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
           }
         }
         commandBuffer.present(drawable)
+      } else {
+        // No drawable acquired: release the slot we reserved.
+        inFlightSemaphore.signal()
       }
     }
 
@@ -583,12 +615,19 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       commandBuffer.commit()
       commandBuffer.waitUntilCompleted()
       completionBox.complete(generation)
+      if presentedDrawable { inFlightSemaphore.signal() }
     } else {
+      let semaphore = inFlightSemaphore
+      var onPresented: (@Sendable () -> Void)?
+      if presentedDrawable {
+        onPresented = { _ = semaphore.signal() }
+      }
       MetalDirectCommandCompletion.addHandler(
         to: commandBuffer,
         completionBox: completionBox,
         generation: generation,
-        retainedResources: retainedResources
+        retainedResources: retainedResources,
+        onPresented: onPresented
       )
       commandBuffer.commit()
     }
@@ -658,9 +697,21 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       width: contentInset.width * pixelScale,
       height: contentInset.height * pixelScale
     )
+    // The offscreen texture holds the FULL expanded grid — the viewport plus the
+    // overscan bands above and below — so the display link can translate the
+    // visible band by many rows without a VT commit (R1). Size it for the FIXED
+    // maximum overscan (pixelScrollOverscanRows) on BOTH sides, not the actual
+    // per-frame counts: the returned overscan fluctuates near the scrollback
+    // edge, and letting the texture track it would resize/reallocate every
+    // frame (expensive, forces full redraw, stalls the display link). A stable
+    // over-sized texture is reused across frames; the composite quad selects the
+    // viewport band using the ACTUAL overscanTop count, so unused texture area
+    // stays off-screen.
+    let maxOverscan = GhosttyTerminalScrollFrame.pixelScrollOverscanRows
+    let totalRows = maxOverscan + plan.viewportRows + maxOverscan
     return CGSize(
       width: max(1, ceil(inset.width * 2 + CGFloat(plan.cols) * cellSize.width)),
-      height: max(1, ceil(inset.height * 2 + CGFloat(plan.viewportRows) * cellSize.height))
+      height: max(1, ceil(inset.height * 2 + CGFloat(totalRows) * cellSize.height))
     )
   }
 
