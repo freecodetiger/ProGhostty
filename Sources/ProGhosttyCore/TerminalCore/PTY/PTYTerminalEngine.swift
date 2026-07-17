@@ -896,13 +896,21 @@ public class PTYGridView: NSView {
   private var rendererOptions = TerminalRendererOptions()
   private var scrollController = PaneScrollController()
   private var suppressMomentumScroll = false
+  /// While true, a viewport change updates state but does NOT trigger an
+  /// immediate re-present. Used during a row commit so the offset can be set
+  /// without flashing a frame that pairs the rebased (small) offset with the
+  /// still-un-scrolled old content; the commit renders the correct atomic frame.
+  private var suppressViewportChangePresent = false
+
   private(set) public var viewport = TerminalViewport() {
     didSet {
       guard oldValue != viewport else { return }
       currentInputPresentation = nil
       latestPromptInputCursorRect = nil
-      viewportDidChangeHandler?()
-      needsDisplay = true
+      if !suppressViewportChangePresent {
+        viewportDidChangeHandler?()
+        needsDisplay = true
+      }
       window?.invalidateCursorRects(for: self)
       invalidateIMECharacterCoordinates()
     }
@@ -1377,22 +1385,33 @@ public class PTYGridView: NSView {
     switch decision {
     case .consumed(let rowDelta, let pixelRemainderY):
       if rowDelta != 0 {
+        // Suppress the intermediate present: set the rebased offset for the
+        // overscan/commit checks below, but don't flash a frame pairing it with
+        // the still-old content. The commit re-renders the correct atomic frame
+        // (new content + rebased offset) with suppression lifted.
+        suppressViewportChangePresent = true
         viewport = TerminalViewport(visualOffsetY: pixelRemainderY)
         if pixelRemainderY != 0, !canRenderPixelScroll(for: pixelRemainderY) {
+          suppressViewportChangePresent = false
           scrollController.resetPhysics(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
           viewport = TerminalViewport()
           scrollController.resetAll()
           return
         }
         if scrollController.shouldCommitAccumulatedRowImmediately(rowDelta: rowDelta) {
-          if !commitViewportScroll(rowDelta: rowDelta) {
+          let committed = commitViewportScroll(rowDelta: rowDelta)
+          suppressViewportChangePresent = false
+          if !committed {
             scrollController.resetPhysics(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
             viewport = TerminalViewport()
             scrollController.resetAll()
             return
           }
-        } else if scrollController.enqueueCommit(rowDelta: rowDelta) {
-          schedulePendingScrollCommit()
+        } else {
+          suppressViewportChangePresent = false
+          if scrollController.enqueueCommit(rowDelta: rowDelta) {
+            schedulePendingScrollCommit()
+          }
         }
         needsDisplay = true
       } else {
