@@ -33,11 +33,19 @@ tar -xf .tools/zig-aarch64-macos-0.15.2.tar.xz -C .tools
 
 Run from `Vendor/ghostty`:
 
+> `-Doptimize=ReleaseFast` is required. Without it the VT library builds in
+> Zig's Debug mode (full runtime safety checks, no optimization), which makes
+> `ghostty_terminal_vt_write` thousands of times slower — a bulk burst like
+> `seq 1 30000` then stalls the UI for seconds. `-Demit-xcframework=false`
+> skips the xcodebuild-only packaging we don't link against (Package.swift uses
+> the `.a` directly).
+
 ```bash
 ../../.tools/zig-aarch64-macos-0.15.2/zig build \
   --global-cache-dir ../../.zig-cache-global \
   -Demit-lib-vt=true \
-  -Demit-xcframework=true
+  -Demit-xcframework=false \
+  -Doptimize=ReleaseFast
 ```
 
 With Command Line Tools only, the static/dynamic VT library build succeeds and installs:

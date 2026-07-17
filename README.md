@@ -75,7 +75,9 @@ git submodule update --init --recursive
 cd Vendor/ghostty
 ../../.tools/zig-aarch64-macos-0.15.2/zig build \
   --global-cache-dir ../../.zig-cache-global \
-  -Demit-lib-vt=true
+  -Demit-lib-vt=true \
+  -Demit-xcframework=false \
+  -Doptimize=ReleaseFast
 ```
 
 构建并运行：
