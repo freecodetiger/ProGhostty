@@ -644,6 +644,81 @@ void proghostty_vt_scroll_snapshot_free(ProGhosttyVTScrollSnapshot *snapshot) {
   snapshot->overscan_bottom_rows = 0;
 }
 
+int proghostty_vt_rows_at(
+  ProGhosttyVT *vt,
+  uint64_t start_row,
+  size_t row_count,
+  ProGhosttyVTRows *out
+) {
+  if (vt == NULL || vt->terminal == NULL || vt->render_state == NULL || out == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+
+  memset(out, 0, sizeof(ProGhosttyVTRows));
+
+  // Refresh render state so cols/colors reflect the current terminal. This does
+  // not move the viewport; pattern-2 browsing never scrolls the VT viewport.
+  GhosttyResult result = ghostty_render_state_update(vt->render_state, vt->terminal);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+
+  uint16_t cols = 0;
+  ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_COLS, &cols);
+  if (cols == 0) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+
+  ProGhosttyVTScrollbar scrollbar = {0};
+  result = proghostty_vt_scrollbar(vt, &scrollbar);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+  uint64_t total = scrollbar.total;
+
+  out->cols = cols;
+  out->total = total;
+
+  // Clamp the requested window into [0, total). An out-of-range request yields
+  // zero rows rather than an error so callers can ask optimistically.
+  if (total == 0 || row_count == 0 || start_row >= total) {
+    out->start_row = start_row < total ? start_row : total;
+    return GHOSTTY_SUCCESS;
+  }
+
+  uint64_t available = total - start_row;
+  size_t clamped = row_count;
+  if ((uint64_t)clamped > available) {
+    clamped = (size_t)available;
+  }
+  out->start_row = start_row;
+
+  GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
+  result = ghostty_render_state_colors_get(vt->render_state, &colors);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+
+  ProGhosttyVTCell *cells = NULL;
+  result = copy_screen_rows(vt, &colors, start_row, clamped, cols, &cells);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+
+  out->cells = cells;
+  out->rows = clamped;
+  return GHOSTTY_SUCCESS;
+}
+
+void proghostty_vt_rows_free(ProGhosttyVTRows *rows) {
+  if (rows == NULL) {
+    return;
+  }
+  free_cells(rows->cells, rows->rows * (size_t)rows->cols);
+  rows->cells = NULL;
+  rows->rows = 0;
+}
+
 static int proghostty_vt_format(ProGhosttyVT *vt, GhosttyFormatterFormat format, uint8_t **out, size_t *out_len) {
   if (vt == NULL || vt->terminal == NULL || out == NULL || out_len == NULL) {
     return GHOSTTY_INVALID_VALUE;

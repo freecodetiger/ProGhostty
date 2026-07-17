@@ -98,6 +98,28 @@ public struct GhosttyTerminalCellRow: Sendable, Equatable {
   }
 }
 
+/// A bare window of rows fetched directly by absolute scrollback row number.
+/// This is the pattern-2 primitive: the renderer asks for exactly the rows it
+/// needs to draw at a scroll position `(topAbsoluteRow, P)`, with no
+/// viewport/overscan geometry. The returned `rows` may be fewer than requested
+/// when the window runs past the end of scrollback (clamped to `[startRow, total)`).
+public struct GhosttyTerminalRowWindow: Sendable, Equatable {
+  /// Absolute scrollback row number of `rows[0]` (clamped into `[0, total]`).
+  public var startRow: UInt64
+  /// Total rows currently in scrollback (history + screen).
+  public var total: UInt64
+  /// Column count these rows were fetched at.
+  public var cols: Int
+  public var rows: [GhosttyTerminalCellRow]
+
+  public init(startRow: UInt64, total: UInt64, cols: Int, rows: [GhosttyTerminalCellRow]) {
+    self.startRow = startRow
+    self.total = total
+    self.cols = cols
+    self.rows = rows
+  }
+}
+
 public struct GhosttyTerminalScrollFrame: Sendable, Equatable {
   /// Overscan rows requested above/below the viewport for pixel-smooth
   /// scrolling. The display link translates the visible band within this
@@ -281,6 +303,37 @@ public final class GhosttyVTBridge {
         requestedOverscanTop: Int(snapshot.requested_overscan_top),
         requestedOverscanBottom: Int(snapshot.requested_overscan_bottom),
         viewportStartRow: snapshot.viewport_start_row
+      )
+    }
+  }
+
+  /// Fetch a window of `count` rows starting at absolute scrollback row
+  /// `startRow`. The pattern-2 rendering primitive: browsing never moves the VT
+  /// viewport, so this reads arbitrary rows directly. The result is clamped to
+  /// `[startRow, total)` and may contain fewer rows than requested near the end.
+  public func rows(at startRow: UInt64, count: Int) throws -> GhosttyTerminalRowWindow {
+    try locked {
+      guard let handle, count > 0 else {
+        return GhosttyTerminalRowWindow(startRow: startRow, total: 0, cols: 0, rows: [])
+      }
+
+      var window = ProGhosttyVTRows()
+      let result = proghostty_vt_rows_at(handle, startRow, count, &window)
+      guard result == 0 else {
+        throw BridgeError.formatFailed(result)
+      }
+      defer { proghostty_vt_rows_free(&window) }
+
+      let cols = Int(window.cols)
+      return GhosttyTerminalRowWindow(
+        startRow: window.start_row,
+        total: window.total,
+        cols: cols,
+        rows: Self.rows(
+          from: window.cells,
+          rowCount: Int(window.rows),
+          cols: cols
+        )
       )
     }
   }

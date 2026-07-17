@@ -269,6 +269,73 @@ struct GhosttyVTBridgeTests {
     let text = try bridge.frame().cells.map { String($0.scalar) }.joined()
     #expect(text.contains("writer-"))
   }
+
+  // MARK: rows(at:count:) — pattern-2 absolute-row window primitive
+
+  @Test func rowsAtReturnsRequestedWindowByAbsoluteRow() throws {
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 500)
+    // 6 logical lines pushed into a 3-row screen leaves rows 0..2 in scrollback
+    // history and rows 3..5 on screen, for a total of 6 absolute rows.
+    bridge.write(Data("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix".utf8))
+
+    let window = try bridge.rows(at: 0, count: 6)
+
+    #expect(window.startRow == 0)
+    #expect(window.total == 6)
+    #expect(window.cols == 20)
+    #expect(window.rows.count == 6)
+    #expect(window.rows.first?.text(cols: window.cols).contains("one") == true)
+    #expect(window.rows.last?.text(cols: window.cols).contains("six") == true)
+  }
+
+  @Test func rowsAtReadsAMidHistorySliceWithoutMovingViewport() throws {
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 500)
+    bridge.write(Data("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix".utf8))
+
+    // Fetch just the two history rows above the screen; the VT viewport must not
+    // move (browsing is decoupled from the viewport in pattern 2).
+    let before = try bridge.scrollbar()
+    let window = try bridge.rows(at: 1, count: 2)
+    let after = try bridge.scrollbar()
+
+    #expect(window.startRow == 1)
+    #expect(window.rows.count == 2)
+    #expect(window.rows.first?.text(cols: window.cols).contains("two") == true)
+    #expect(window.rows.last?.text(cols: window.cols).contains("three") == true)
+    #expect(before.offset == after.offset)
+  }
+
+  @Test func rowsAtClampsWindowRunningPastEndOfScrollback() throws {
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 500)
+    bridge.write(Data("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix".utf8))
+
+    // Ask for more rows than remain from row 4; expect truncation to [4, total).
+    let window = try bridge.rows(at: 4, count: 10)
+
+    #expect(window.total == 6)
+    #expect(window.startRow == 4)
+    #expect(window.rows.count == 2)
+    #expect(window.rows.first?.text(cols: window.cols).contains("five") == true)
+  }
+
+  @Test func rowsAtReturnsEmptyWindowForOutOfRangeStart() throws {
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 500)
+    bridge.write(Data("one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix".utf8))
+
+    let window = try bridge.rows(at: 100, count: 4)
+
+    #expect(window.total == 6)
+    #expect(window.rows.isEmpty)
+  }
+
+  @Test func rowsAtReturnsEmptyForZeroCount() throws {
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 500)
+    bridge.write(Data("one\r\ntwo\r\nthree".utf8))
+
+    let window = try bridge.rows(at: 0, count: 0)
+
+    #expect(window.rows.isEmpty)
+  }
 }
 
 private extension GhosttyTerminalCellRow {

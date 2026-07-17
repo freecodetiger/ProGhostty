@@ -57,6 +57,19 @@ typedef struct {
   uint64_t viewport_start_row;
 } ProGhosttyVTScrollSnapshot;
 
+// A bare window of rows fetched directly by absolute scrollback row number,
+// with no viewport/overscan geometry. This is the pattern-2 primitive: the
+// renderer asks for exactly the rows it needs to draw at a given scroll
+// position. `start_row` is clamped into [0, total) and `row_count` truncated so
+// `start_row + row_count <= total`; `rows` reflects what was actually copied.
+typedef struct {
+  ProGhosttyVTCell *cells;
+  size_t rows;
+  uint16_t cols;
+  uint64_t start_row;
+  uint64_t total;
+} ProGhosttyVTRows;
+
 int proghostty_vt_new(uint16_t cols, uint16_t rows, size_t max_scrollback, ProGhosttyVT **out);
 void proghostty_vt_free(ProGhosttyVT *vt);
 void proghostty_vt_write(ProGhosttyVT *vt, const uint8_t *data, size_t len);
@@ -71,6 +84,12 @@ int proghostty_vt_scroll_snapshot(
   uint16_t overscan_bottom,
   ProGhosttyVTScrollSnapshot *out);
 void proghostty_vt_scroll_snapshot_free(ProGhosttyVTScrollSnapshot *snapshot);
+int proghostty_vt_rows_at(
+  ProGhosttyVT *vt,
+  uint64_t start_row,
+  size_t row_count,
+  ProGhosttyVTRows *out);
+void proghostty_vt_rows_free(ProGhosttyVTRows *rows);
 int proghostty_vt_format_plain(ProGhosttyVT *vt, uint8_t **out, size_t *out_len);
 int proghostty_vt_format_html(ProGhosttyVT *vt, uint8_t **out, size_t *out_len);
 int proghostty_vt_encode_paste(ProGhosttyVT *vt, const uint8_t *data, size_t len, uint8_t **out, size_t *out_len);
