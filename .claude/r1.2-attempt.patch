@@ -1,0 +1,563 @@
+diff --git a/Package.swift b/Package.swift
+index 61f9a5f..e18d9bd 100644
+--- a/Package.swift
++++ b/Package.swift
+@@ -6,7 +6,7 @@ let package = Package(
+   name: "ProGhostty",
+   defaultLocalization: nil,
+   platforms: [
+-    .macOS(.v13)
++    .macOS(.v14)
+   ],
+   pkgConfig: nil,
+   providers: nil,
+diff --git a/README.md b/README.md
+index 62dbba9..3956726 100644
+--- a/README.md
++++ b/README.md
+@@ -1,7 +1,7 @@
+ # ProGhostty
+ 
+ [![Release](https://img.shields.io/github/v/release/freecodetiger/ProGhostty?sort=semver)](https://github.com/freecodetiger/ProGhostty/releases/latest)
+-[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black)](Package.swift)
++[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-black)](Package.swift)
+ [![Swift](https://img.shields.io/badge/Swift-6.1-orange)](Package.swift)
+ [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+ 
+@@ -57,7 +57,7 @@ ProGhostty 仍处于早期阶段，但已经可以用于真实 PTY 会话和日
+ 
+ 要求：
+ 
+-- macOS 13 或更新版本
++- macOS 14 或更新版本
+ - Swift 6.1 toolchain
+ - Git submodule 支持
+ - Zig 0.15.2，用于构建 vendored Ghostty `libghostty-vt`
+diff --git a/Sources/ProGhosttyCore/TerminalCore/PTY/PTYTerminalEngine.swift b/Sources/ProGhosttyCore/TerminalCore/PTY/PTYTerminalEngine.swift
+index 5f545f5..28d473b 100644
+--- a/Sources/ProGhosttyCore/TerminalCore/PTY/PTYTerminalEngine.swift
++++ b/Sources/ProGhosttyCore/TerminalCore/PTY/PTYTerminalEngine.swift
+@@ -880,6 +880,9 @@ public class PTYGridView: NSView {
+   public var viewportCanScrollHandler: ((Int) -> Bool)?
+   public var viewportDidChangeHandler: (() -> Void)?
+   public var transientOverlayDidChangeHandler: (() -> Void)?
++  /// Notifies when display-link-paced scrolling starts (true) / stops (false),
++  /// so the renderer can switch to non-blocking async present during scroll.
++  public var scrollActivityHandler: ((Bool) -> Void)?
+   public var activationHandler: (() -> Void)?
+   public var openURLHandler: ((URL) -> Void)? = { url in
+     _ = NSWorkspace.shared.open(url)
+@@ -903,6 +906,14 @@ public class PTYGridView: NSView {
+   private var rendererOptions = TerminalRendererOptions()
+   private var scrollController = PaneScrollController()
+   private var suppressMomentumScroll = false
++  // R1.2 display-link-paced smooth scroll. The engine owns the continuous
++  // scroll position + inertia; the display link samples it once per refresh and
++  // sets the viewport offset directly (multi-row within the overscan buffer, no
++  // per-row VT commit). VT rows are only committed when the position approaches
++  // the buffer edge, re-centering the band. Active only while scrolling.
++  private var smoothScrollEngine = SmoothScrollEngine()
++  private var scrollDisplayLink: CADisplayLink?
++  private var lastScrollTickTimestamp: TimeInterval?
+   /// While true, a viewport change updates state but does NOT trigger an
+   /// immediate re-present. Used during a row commit so the offset can be set
+   /// without flashing a frame that pairs the rebased (small) offset with the
+@@ -1056,6 +1067,7 @@ public class PTYGridView: NSView {
+ 
+   public func resetPixelScroll(suppressMomentum: Bool = false) {
+     scrollController.resetAll()
++    abortSmoothScroll()
+     viewport = TerminalViewport()
+     suppressMomentumScroll = suppressMomentum
+     needsDisplay = true
+@@ -1213,7 +1225,12 @@ public class PTYGridView: NSView {
+     cellHeight: CGFloat
+   ) -> CGFloat {
+     guard hasOverscanRows, cellHeight > 0 else { return 0 }
+-    return min(max(viewport.visualOffsetY, -cellHeight), cellHeight)
++    // R1: no longer clamped to ±cellHeight. The offscreen texture now holds a
++    // deep overscan band (see GhosttyTerminalScrollFrame.pixelScrollOverscanRows),
++    // so the visible viewport can be translated by many rows within that buffer
++    // without a per-row VT commit. The scroll controller / display link keep the
++    // offset within the available overscan depth (canRenderPixelScroll gate).
++    return viewport.visualOffsetY
+   }
+ 
+   public static func contentDirtyRect(forDrawing dirtyRect: NSRect, viewport: TerminalViewport) -> NSRect {
+@@ -1237,8 +1254,15 @@ public class PTYGridView: NSView {
+   }
+ 
+   public func canRenderPixelScroll(for visualOffsetY: CGFloat) -> Bool {
+-    guard visualOffsetY != 0, let scrollFrameSnapshot else { return false }
+-    return visualOffsetY > 0 ? !scrollFrameSnapshot.overscanTop.isEmpty : !scrollFrameSnapshot.overscanBottom.isEmpty
++    guard visualOffsetY != 0, let scrollFrameSnapshot, cellSize.height > 0 else { return false }
++    // The offset can only be rendered if the required overscan band exists AND
++    // is deep enough to cover it — otherwise translating the content would
++    // expose rows past the buffer (blank). Positive offset reveals history
++    // above (overscanTop); negative reveals content below (overscanBottom).
++    let availableRows = visualOffsetY > 0
++      ? scrollFrameSnapshot.overscanTop.count
++      : scrollFrameSnapshot.overscanBottom.count
++    return CGFloat(availableRows) * cellSize.height >= abs(visualOffsetY)
+   }
+ 
+   public static func terminalContentClipRect(
+@@ -1328,23 +1352,139 @@ public class PTYGridView: NSView {
+   }
+ 
+   public override func scrollWheel(with event: NSEvent) {
+-    if suppressMomentumScroll {
+-      if !event.momentumPhase.isEmpty {
+-        PTYRenderDebugLog.write(
+-          "wheel-ignore reason=suppressed-momentum deltaY=\(String(format: "%.3f", event.scrollingDeltaY)) momentum=\(event.momentumPhase.rawValue)"
+-        )
+-        return
++    // Alternate screen / no frame: no pixel scroll — forward as before.
++    if let frame = frameSnapshot, frame.isAlternateScreen {
++      processScroll(deltaY: event.scrollingDeltaY) { super.scrollWheel(with: event) }
++      return
++    }
++    guard frameSnapshot != nil, rendererOptions.smoothPixelScrollingEnabled else {
++      processScroll(deltaY: event.scrollingDeltaY) { super.scrollWheel(with: event) }
++      return
++    }
++    // OS momentum is dropped: the engine synthesizes its own inertia paced to the
++    // display link; consuming OS momentum (delivered off our render clock) fights it.
++    if !event.momentumPhase.isEmpty { return }
++
++    let now = event.timestamp
++    let delta = event.scrollingDeltaY
++    if event.phase.contains(.began) {
++      smoothScrollEngine.addWheelInput(delta: delta, phase: .began, time: now)
++      startScrollDisplayLink()
++    } else if event.phase.contains(.changed) {
++      smoothScrollEngine.addWheelInput(delta: delta, phase: .changed, time: now)
++      startScrollDisplayLink()
++    } else if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
++      smoothScrollEngine.addWheelInput(delta: 0, phase: .ended, time: now)
++    } else {
++      guard delta != 0 else { return }
++      smoothScrollEngine.addDiscreteScroll(delta: delta, time: now)
++      startScrollDisplayLink()
++    }
++  }
++
++  private func startScrollDisplayLink() {
++    guard scrollDisplayLink == nil else { return }
++    let link = displayLink(target: self, selector: #selector(scrollDisplayLinkTick(_:)))
++    link.add(to: .main, forMode: .common)
++    scrollDisplayLink = link
++    scrollActivityHandler?(true)
++  }
++
++  private func stopScrollDisplayLink() {
++    scrollDisplayLink?.invalidate()
++    scrollDisplayLink = nil
++    lastScrollTickTimestamp = nil
++    scrollActivityHandler?(false)
++  }
++
++  /// Halt smooth scrolling: reset the engine (drops isActive) and stop the link.
++  /// Used at the scrollback edge / when the offset can't be rendered, so the
++  /// engine doesn't keep coasting into a rejected state (busy-spin freeze).
++  private func abortSmoothScroll() {
++    smoothScrollEngine.reset()
++    stopScrollDisplayLink()
++  }
++
++  @objc private func scrollDisplayLinkTick(_ link: CADisplayLink) {
++    let now = link.timestamp
++    let gap = lastScrollTickTimestamp.map { (now - $0) * 1000 } ?? 0
++    lastScrollTickTimestamp = now
++    smoothScrollEngine.tick(now: now)
++    let workStart = CACurrentMediaTime()
++    let committed = applySmoothScrollPosition(smoothScrollEngine.position)
++    let workMs = (CACurrentMediaTime() - workStart) * 1000
++    PTYRenderDebugLog.write("scrolltick gapMs=\(String(format: "%.2f", gap)) workMs=\(String(format: "%.2f", workMs)) pos=\(String(format: "%.1f", smoothScrollEngine.position)) committed=\(committed) phase=\(smoothScrollEngine.phase)")
++    if !smoothScrollEngine.isActive {
++      stopScrollDisplayLink()
++    }
++  }
++
++  /// Maps the engine's continuous scroll position (points) to a viewport offset,
++  /// committing whole VT rows only when the position approaches the overscan
++  /// buffer edge (re-centering the visible band) so most frames are a pure
++  /// pixel translation with no VT round-trip. `position` sign follows
++  /// visualOffsetY (positive = reveal history above, negative = toward bottom).
++  @discardableResult
++  private func applySmoothScrollPosition(_ position: CGFloat) -> Bool {
++    guard cellSize.height > 0 else { return false }
++    // Re-center once the position would leave less than a safety margin of
++    // overscan rows on the leading side. Commit that many whole rows to the VT
++    // and fold them out of the engine so the residual offset stays small.
++    let leadingRows = position > 0
++      ? (scrollFrameSnapshot?.overscanTop.count ?? 0)
++      : (scrollFrameSnapshot?.overscanBottom.count ?? 0)
++    let renderableDepth = CGFloat(max(0, leadingRows)) * cellSize.height
++    if renderableDepth <= 0 {
++      // No overscan on the leading side → at the scrollback edge. Stop.
++      abortSmoothScroll()
++      viewport = TerminalViewport()
++      needsDisplay = true
++      return false
++    }
++
++    var didCommit = false
++    // Keep the residual offset within a fraction of the buffer so the next few
++    // frames can translate freely; commit the excess as whole rows.
++    let safeDepth = renderableDepth * 0.5
++    if abs(position) > safeDepth {
++      let excessRows = Int(((abs(position) - safeDepth) / cellSize.height).rounded(.up))
++      let rowDelta = position > 0 ? excessRows : -excessRows
++      if viewportCanScrollHandler?(rowDelta) == false {
++        // Edge reached mid-glide: settle at the last renderable offset and stop.
++        abortSmoothScroll()
++        viewport = TerminalViewport()
++        needsDisplay = true
++        return false
++      }
++      // Commit rows atomically with the rebased offset: suppress the intermediate
++      // present so no frame pairs the new (small) offset with still-old content.
++      suppressViewportChangePresent = true
++      let committed = commitViewportScroll(rowDelta: rowDelta)
++      suppressViewportChangePresent = false
++      if committed {
++        smoothScrollEngine.rebaseCommittedRows(rowDelta, cellHeight: cellSize.height)
++        didCommit = true
++      } else {
++        abortSmoothScroll()
++        viewport = TerminalViewport()
++        needsDisplay = true
++        return false
+       }
+-      suppressMomentumScroll = false
+     }
+-    PTYRenderDebugLog.write(
+-      "wheel precise=\(event.hasPreciseScrollingDeltas) deltaY=\(String(format: "%.3f", event.scrollingDeltaY)) phase=\(event.phase.rawValue) momentum=\(event.momentumPhase.rawValue)"
+-    )
+-    processScroll(deltaY: event.scrollingDeltaY) {
+-      super.scrollWheel(with: event)
++
++    let offset = smoothScrollEngine.position
++    if canRenderPixelScroll(for: offset) || offset == 0 {
++      viewport = TerminalViewport(visualOffsetY: offset)
++      needsDisplay = true
++    } else {
++      abortSmoothScroll()
++      viewport = TerminalViewport()
++      needsDisplay = true
+     }
++    return didCommit
+   }
+ 
++
+   private func processScroll(deltaY: CGFloat, forwardToPTY: () -> Void = {}) {
+     guard let frame = frameSnapshot else {
+       PTYRenderDebugLog.write("wheel-forward reason=no-frame deltaY=\(String(format: "%.3f", deltaY))")
+@@ -1609,6 +1749,7 @@ public class PTYGridView: NSView {
+       isDraggingSelectionStorage = false
+       selectionDragPoint = nil
+       stopSelectionAutoScroll()
++      abortSmoothScroll()
+     }
+   }
+ 
+diff --git a/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalDirectRenderEngine.swift b/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalDirectRenderEngine.swift
+index 5639370..59f2cdc 100644
+--- a/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalDirectRenderEngine.swift
++++ b/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalDirectRenderEngine.swift
+@@ -10,6 +10,11 @@ protocol MetalDirectRenderingEngine: AnyObject {
+   var latestSubmittedGeneration: Int { get }
+   var latestPresentedGeneration: Int { get }
+   var pipelineReady: Bool { get }
++  /// While true (active scrolling), the engine never blocks the main thread on
++  /// commandBuffer.waitUntilCompleted — it uses the async completion handler so
++  /// the display-link tick stays under its frame budget. Set false when idle so
++  /// normal typing keeps its low-latency synchronous present.
++  var prefersAsyncPresent: Bool { get set }
+   var lastRenderedRowCount: Int { get }
+   var lastRenderedCellCount: Int { get }
+   var lastRenderedRunCount: Int { get }
+@@ -114,11 +119,13 @@ private enum MetalDirectCommandCompletion {
+     to commandBuffer: MTLCommandBuffer,
+     completionBox: MetalDirectFrameCompletionBox,
+     generation: Int,
+-    retainedResources: [Any]
++    retainedResources: [Any],
++    onPresented: (@Sendable () -> Void)? = nil
+   ) {
+     commandBuffer.addCompletedHandler { [completionBox, retainedResources] _ in
+       _ = retainedResources.count
+       completionBox.complete(generation)
++      onPresented?()
+     }
+   }
+ }
+@@ -152,6 +159,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
+ 
+   private let device: MTLDevice
+   private let commandQueue: MTLCommandQueue
++  var prefersAsyncPresent: Bool = false
++  /// Back-pressure for the async present path. CAMetalLayer's drawable pool is
++  /// finite (default 3); without a gate the display-link tick keeps calling
++  /// nextDrawable() faster than the compositor drains it, presents pile up, and
++  /// the visible frame lags far behind (freeze-then-catch-up). Limiting
++  /// in-flight presented drawables paces producer to consumer. Exactly one
++  /// signal per successful acquire, in the completion handler / after wait.
++  private static let maxInFlightDrawables = 2
++  private let inFlightSemaphore = DispatchSemaphore(value: maxInFlightDrawables)
+   private let textureLoader: MTKTextureLoader
+   private let backgroundPipeline: MTLRenderPipelineState
+   private let glyphPipeline: MTLRenderPipelineState
+@@ -234,12 +250,16 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
+       width: view.terminalContentInset.width * pixelScale,
+       height: view.terminalContentInset.height * pixelScale
+     )
+-    let sceneTranslationY = drawTranslationY(
+-      topOverscanRows: renderFrame.scrollFrame?.overscanTop.count ?? 0,
+-      pixelRemainderY: 0,
+-      cellHeight: cellSize.height
+-    )
+-    let presentationTranslationY = plan.pixelRemainderY * pixelScale
++    let overscanTopRows = renderFrame.scrollFrame?.overscanTop.count ?? 0
++    // New R1 model: draw the whole expanded grid into the (viewport+overscan)-
++    // tall texture at its natural position (scene translation 0, row 0 at
++    // y=inset). The viewport band sits at texel y = overscanTop*cellHeight.
++    let sceneTranslationY: CGFloat = 0
++    // The composite quad shifts the taller texture UP by the overscan-top band
++    // so the viewport lands at the drawable top, plus the (unclamped) scroll
++    // offset. Y is down (shader: clip.y = 1 - 2y/H), so a more-negative
++    // translation reveals content lower in the texture.
++    let presentationTranslationY = (-CGFloat(overscanTopRows) * plan.cellSize.height + plan.pixelRemainderY) * pixelScale
+     let renderSize = Self.renderTargetSize(
+       for: plan,
+       contentInset: view.terminalContentInset
+@@ -307,7 +327,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
+       markedTextOverlay: markedTextOverlay,
+       imeCompositionCursorOverlay: view.currentIMECompositionCursorOverlay,
+       markedTextRowsOffset: renderFrame.scrollFrame?.overscanTop.count ?? 0,
+-      pixelRemainderY: 0
++      pixelRemainderY: 0,
++      translationYOverride: 0
+     )
+     let drawableOverlays = MetalOverlayBuffer.makeOverlays(
+       renderFrame: renderFrame,
+@@ -390,7 +411,10 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
+       rendersScene: shouldRenderScene,
+       hasDrawableTransientOverlays: hasDrawableTransientOverlays
+     )
+-    let shouldWait = waitReason != "none"
++    // During active scrolling never block the main thread on the GPU — the
++    // display-link tick must stay under its frame budget. The in-flight
++    // semaphore provides back-pressure instead.
++    let shouldWait = waitReason != "none" && !prefersAsyncPresent
+     let glyphSlices = glyphTextureSlices(for: drawFrame, cellRanges: renderCellRanges, glyphAtlas: glyphAtlas)
+     let compositeVertices = quadVertices(
+       rect: CGRect(
+@@ -492,10 +516,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
+     retainedResources.append(contentsOf: markedTextGlyphDraw.slices.map(\.texture))
+     retainedResources.append(contentsOf: cursorGlyphDraw.slices.map(\.texture))
+ 
++    var presentedDrawable = false
+     if let metalLayer = view.layer as? CAMetalLayer {
+       retainedResources.append(metalLayer)
+       metalLayer.drawableSize = drawableSize
++      // Gate on the in-flight pool BEFORE acquiring a drawable so this tick can't
++      // outrun the compositor. Released once per acquire below / in completion.
++      inFlightSemaphore.wait()
+       if let drawable = metalLayer.nextDrawable() {
++        presentedDrawable = true
+         retainedResources.append(drawable)
+         let compositePassDescriptor = MTLRenderPassDescriptor()
+         compositePassDescriptor.colorAttachments[0].texture = drawable.texture
+@@ -573,6 +602,9 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
+           }
+         }
+         commandBuffer.present(drawable)
++      } else {
++        // No drawable acquired: release the slot we reserved.
++        inFlightSemaphore.signal()
+       }
+     }
+ 
+@@ -583,12 +615,19 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
+       commandBuffer.commit()
+       commandBuffer.waitUntilCompleted()
+       completionBox.complete(generation)
++      if presentedDrawable { inFlightSemaphore.signal() }
+     } else {
++      let semaphore = inFlightSemaphore
++      var onPresented: (@Sendable () -> Void)?
++      if presentedDrawable {
++        onPresented = { _ = semaphore.signal() }
++      }
+       MetalDirectCommandCompletion.addHandler(
+         to: commandBuffer,
+         completionBox: completionBox,
+         generation: generation,
+-        retainedResources: retainedResources
++        retainedResources: retainedResources,
++        onPresented: onPresented
+       )
+       commandBuffer.commit()
+     }
+@@ -658,9 +697,21 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
+       width: contentInset.width * pixelScale,
+       height: contentInset.height * pixelScale
+     )
++    // The offscreen texture holds the FULL expanded grid — the viewport plus the
++    // overscan bands above and below — so the display link can translate the
++    // visible band by many rows without a VT commit (R1). Size it for the FIXED
++    // maximum overscan (pixelScrollOverscanRows) on BOTH sides, not the actual
++    // per-frame counts: the returned overscan fluctuates near the scrollback
++    // edge, and letting the texture track it would resize/reallocate every
++    // frame (expensive, forces full redraw, stalls the display link). A stable
++    // over-sized texture is reused across frames; the composite quad selects the
++    // viewport band using the ACTUAL overscanTop count, so unused texture area
++    // stays off-screen.
++    let maxOverscan = GhosttyTerminalScrollFrame.pixelScrollOverscanRows
++    let totalRows = maxOverscan + plan.viewportRows + maxOverscan
+     return CGSize(
+       width: max(1, ceil(inset.width * 2 + CGFloat(plan.cols) * cellSize.width)),
+-      height: max(1, ceil(inset.height * 2 + CGFloat(plan.viewportRows) * cellSize.height))
++      height: max(1, ceil(inset.height * 2 + CGFloat(totalRows) * cellSize.height))
+     )
+   }
+ 
+diff --git a/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalDirectRendererBackend.swift b/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalDirectRendererBackend.swift
+index 69200a5..c1a8cf5 100644
+--- a/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalDirectRendererBackend.swift
++++ b/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalDirectRendererBackend.swift
+@@ -315,6 +315,12 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
+     directView.transientOverlayDidChangeHandler = { [weak self] in
+       self?.presentViewportChange()
+     }
++    directView.scrollActivityHandler = { [weak self] isScrolling in
++      // During display-link scrolling, present asynchronously so the tick never
++      // blocks the main thread on the GPU. The in-flight semaphore bounds the
++      // pool so presents can't pile up.
++      self?.engine?.prefersAsyncPresent = isScrolling
++    }
+     if let metalDevice {
+       engine = engineFactory(metalDevice)
+     }
+diff --git a/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalOverlayBuffer.swift b/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalOverlayBuffer.swift
+index 8988daa..31fb6fc 100644
+--- a/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalOverlayBuffer.swift
++++ b/Sources/ProGhosttyCore/TerminalCore/Renderer/MetalOverlayBuffer.swift
+@@ -47,7 +47,8 @@ public enum MetalOverlayBuffer {
+     imeCompositionCursorOverlay: MetalMarkedTextOverlay? = nil,
+     markedTextRowsOffset: Int = 0,
+     contentInset: CGSize = CGSize(width: 14, height: 12),
+-    pixelRemainderY: CGFloat? = nil
++    pixelRemainderY: CGFloat? = nil,
++    translationYOverride: CGFloat? = nil
+   ) -> [MetalOverlayPrimitive] {
+     let frame = renderFrame.expandedFrame
+     let pixelScale = plan.backingScale
+@@ -60,7 +61,11 @@ public enum MetalOverlayBuffer {
+       height: contentInset.height * pixelScale
+     )
+     let effectivePixelRemainderY = pixelRemainderY ?? plan.pixelRemainderY
+-    let translationY = -CGFloat(plan.overscanTopRows) * cellSize.height + effectivePixelRemainderY * pixelScale
++    // R1 model: scene overlays are drawn into the expanded-grid texture at
++    // natural positions (translationY 0, caller passes override 0). Drawable
++    // overlays keep the viewport-relative shift (-overscanTop band + scroll).
++    let translationY = translationYOverride
++      ?? (-CGFloat(plan.overscanTopRows) * cellSize.height + effectivePixelRemainderY * pixelScale)
+     let cursorRow = cursorOverlay.map { $0.row + markedTextRowsOffset }
+       ?? renderFrame.scrollFrame.map { $0.overscanTop.count + $0.viewport.cursorY }
+       ?? frame.cursorY
+diff --git a/Tests/ProGhosttyCoreTests/TerminalRendererBackendTests.swift b/Tests/ProGhosttyCoreTests/TerminalRendererBackendTests.swift
+index 3d9e39c..1e62a9e 100644
+--- a/Tests/ProGhosttyCoreTests/TerminalRendererBackendTests.swift
++++ b/Tests/ProGhosttyCoreTests/TerminalRendererBackendTests.swift
+@@ -179,7 +179,7 @@ struct TerminalRendererBackendTests {
+     #expect(view.needsDisplay == false)
+   }
+ 
+-  @MainActor @Test func metalDirectRenderTargetUsesViewportRowsNotOverscanRows() {
++  @MainActor @Test func metalDirectRenderTargetIncludesOverscanRows() {
+     let plan = MetalTerminalRenderPlan(
+       presentation: .scrollFrame,
+       viewportRows: 2,
+@@ -198,7 +198,14 @@ struct TerminalRendererBackendTests {
+       contentInset: CGSize(width: 14, height: 12)
+     )
+ 
+-    #expect(size == CGSize(width: 120, height: 112))
++    // R1: the offscreen texture is sized for the FIXED maximum overscan
++    // (pixelScrollOverscanRows = 24) on both sides so it never resizes as the
++    // actual per-frame overscan count fluctuates. The composite quad selects the
++    // viewport band using the actual overscanTop count; unused area stays
++    // off-screen.
++    // width  = (inset 14*2 + cols 4 * cell 8) * scale 2 = 120
++    // height = (inset 12*2 + (24 + viewport 2 + 24) * cell 16) * scale 2 = 1648
++    #expect(size == CGSize(width: 120, height: 1648))
+   }
+ 
+   @MainActor @Test func metalDirectDrawableTargetUsesViewBackingSizeNotTerminalContentSize() {
+@@ -1822,6 +1829,7 @@ struct TerminalRendererBackendTests {
+     var latestSubmittedGeneration = 0
+     var latestPresentedGeneration = 0
+     let pipelineReady = true
++    var prefersAsyncPresent = false
+     let lastRenderedRowCount = 1
+     let lastRenderedCellCount = 1
+     let lastRenderedRunCount = 1
+@@ -1857,6 +1865,7 @@ struct TerminalRendererBackendTests {
+     let latestSubmittedGeneration = 0
+     let latestPresentedGeneration = 0
+     let pipelineReady = true
++    var prefersAsyncPresent = false
+     let lastRenderedRowCount = 0
+     let lastRenderedCellCount = 0
+     let lastRenderedRunCount = 0
+@@ -2044,12 +2053,21 @@ struct TerminalRendererBackendTests {
+         cellHeight: 16
+       ) == 5
+     )
++    // R1: no longer clamped to ±cellHeight — a deep overscan band lets the
++    // viewport translate many rows within the buffer without a VT commit.
+     #expect(
+       PTYGridView.visualScrollTranslationY(
+         for: TerminalViewport(visualOffsetY: 24),
+         hasOverscanRows: true,
+         cellHeight: 16
+-      ) == 16
++      ) == 24
++    )
++    #expect(
++      PTYGridView.visualScrollTranslationY(
++        for: TerminalViewport(visualOffsetY: -100),
++        hasOverscanRows: true,
++        cellHeight: 16
++      ) == -100
+     )
+   }
+ 
+diff --git a/Tests/ProGhosttyCoreTests/TerminalSurfaceTests.swift b/Tests/ProGhosttyCoreTests/TerminalSurfaceTests.swift
+index 307d16f..89deb68 100644
+--- a/Tests/ProGhosttyCoreTests/TerminalSurfaceTests.swift
++++ b/Tests/ProGhosttyCoreTests/TerminalSurfaceTests.swift
+@@ -3139,6 +3139,7 @@ private final class RuntimeFailingMetalDirectRenderingEngine: MetalDirectRenderi
+   let latestSubmittedGeneration = 0
+   let latestPresentedGeneration = 0
+   let pipelineReady = true
++  var prefersAsyncPresent = false
+   let lastRenderedRowCount = 0
+   let lastRenderedCellCount = 0
+   let lastRenderedRunCount = 0
+diff --git a/scripts/build-app-bundle.sh b/scripts/build-app-bundle.sh
+index 463a668..2e5d880 100755
+--- a/scripts/build-app-bundle.sh
++++ b/scripts/build-app-bundle.sh
+@@ -55,7 +55,7 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
+   <key>CFBundleVersion</key>
+   <string>${BUILD}</string>
+   <key>LSMinimumSystemVersion</key>
+-  <string>13.0</string>
++  <string>14.0</string>
+   <key>NSHighResolutionCapable</key>
+   <true/>
+   <key>NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac</key>
