@@ -585,7 +585,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     let rendererSelection = rendererSelection(for: frame)
     if let frame, rendererSelection.presentation == .liveCellGrid {
       let scrollFrameStart = Self.now()
-      let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2)
+      let scrollFrame = try? bridge.scrollFrame(overscanTop: GhosttyTerminalScrollFrame.pixelScrollOverscanRows, overscanBottom: GhosttyTerminalScrollFrame.pixelScrollOverscanRows)
       surface.bridgeDiagnostics.scrollFrameSnapshotDuration = Self.now() - scrollFrameStart
       surface.bridgeDiagnostics.snapshotCellCount = Self.snapshotCellCount(
         frame: frame,
@@ -644,7 +644,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     surface.bridge = bridge
     surface.bridgeDiagnostics.frameSnapshotDuration = 0
     let scrollFrameStart = Self.now()
-    let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2)
+    let scrollFrame = try? bridge.scrollFrame(overscanTop: GhosttyTerminalScrollFrame.pixelScrollOverscanRows, overscanBottom: GhosttyTerminalScrollFrame.pixelScrollOverscanRows)
     surface.bridgeDiagnostics.scrollFrameSnapshotDuration = Self.now() - scrollFrameStart
     guard let scrollFrame else {
       surface.bridgeDiagnostics.snapshotCellCount = 0
@@ -788,7 +788,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     in backend: any TerminalLiveRendererBackend,
     isFocused: Bool
   ) {
-    guard let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2) else {
+    guard let scrollFrame = try? bridge.scrollFrame(overscanTop: GhosttyTerminalScrollFrame.pixelScrollOverscanRows, overscanBottom: GhosttyTerminalScrollFrame.pixelScrollOverscanRows) else {
       backend.render(TerminalRenderFrame(frame: frame, isFocused: isFocused))
       backend.updateOverscanDiagnostics(topRows: 0, bottomRows: 0)
       return

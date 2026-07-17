@@ -195,14 +195,31 @@ struct GhosttyVTBridgeTests {
   }
 
   @Test func scrollFrameClampsOverscanRowsToBridgeMaximum() throws {
-    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 100)
-    bridge.write(Data((1...12).map { "line-\($0)" }.joined(separator: "\r\n").utf8))
-    bridge.scrollViewport(deltaRows: -4)
+    // Request more overscan than the C shim's hard cap
+    // (PROGHOSTTY_VT_MAX_OVERSCAN_ROWS = 32) with ample scrollback above the
+    // viewport, and confirm the shim never materializes more than the cap.
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 500)
+    bridge.write(Data((1...200).map { "line-\($0)" }.joined(separator: "\r\n").utf8))
+    bridge.scrollViewport(deltaRows: -100)
 
-    let frame = try bridge.scrollFrame(overscanTop: 10, overscanBottom: 10)
+    let frame = try bridge.scrollFrame(overscanTop: 64, overscanBottom: 64)
 
-    #expect(frame.overscanTop.count <= 4)
-    #expect(frame.overscanBottom.count <= 4)
+    #expect(frame.overscanTop.count <= 32)
+    #expect(frame.overscanBottom.count <= 32)
+  }
+
+  @Test func scrollFrameHonorsLargeOverscanRequestWithinCap() throws {
+    // A request within the cap should be honored in full when enough history
+    // exists on that side — this is the capacity R1 relies on to translate
+    // many rows per frame without a synchronous VT commit.
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 500)
+    bridge.write(Data((1...200).map { "line-\($0)" }.joined(separator: "\r\n").utf8))
+    bridge.scrollViewport(deltaRows: -100)
+
+    let frame = try bridge.scrollFrame(overscanTop: 24, overscanBottom: 24)
+
+    #expect(frame.overscanTop.count == 24)
+    #expect(frame.overscanBottom.count == 24)
   }
 
   @Test func seqLikeOutputAtBottomIncludesFinalLineAndPrompt() throws {

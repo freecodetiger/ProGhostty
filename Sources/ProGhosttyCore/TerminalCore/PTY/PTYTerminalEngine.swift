@@ -153,7 +153,7 @@ public struct ResizeRenderSnapshot: Sendable {
   public var scrollbar: GhosttyTerminalScrollbar?
 
   public static func capture(from bridge: GhosttyVTBridge) -> ResizeRenderSnapshot {
-    let scrollFrame = try? bridge.scrollFrame(overscanTop: 2, overscanBottom: 2)
+    let scrollFrame = try? bridge.scrollFrame(overscanTop: GhosttyTerminalScrollFrame.pixelScrollOverscanRows, overscanBottom: GhosttyTerminalScrollFrame.pixelScrollOverscanRows)
     let frame = scrollFrame?.viewport ?? (try? bridge.frame())
     let html = frame == nil ? try? bridge.htmlText() : nil
     let plainText = frame == nil && html == nil ? try? bridge.plainText() : nil

@@ -99,6 +99,13 @@ public struct GhosttyTerminalCellRow: Sendable, Equatable {
 }
 
 public struct GhosttyTerminalScrollFrame: Sendable, Equatable {
+  /// Overscan rows requested above/below the viewport for pixel-smooth
+  /// scrolling. The display link translates the visible band within this
+  /// buffer without a synchronous VT row commit per row crossed, so this must
+  /// be deep enough to absorb a fast fling's per-frame travel. Bounded by the
+  /// C shim cap (PROGHOSTTY_VT_MAX_OVERSCAN_ROWS); keep the two in sync.
+  public static let pixelScrollOverscanRows = 24
+
   public var viewport: GhosttyTerminalFrame
   public var overscanTop: [GhosttyTerminalCellRow]
   public var overscanBottom: [GhosttyTerminalCellRow]

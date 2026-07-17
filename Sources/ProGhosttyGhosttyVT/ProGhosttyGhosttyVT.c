@@ -4,6 +4,13 @@
 #include <string.h>
 #include <ghostty/vt.h>
 
+// Upper bound on overscan rows the scroll snapshot will materialize on each
+// side of the viewport. Pixel-smooth scrolling renders a viewport + overscan
+// band so the display link can translate the visible content by many rows per
+// frame without a synchronous VT row commit. copy_screen_rows already supports
+// an arbitrary row_count; this cap only bounds worst-case snapshot cost.
+#define PROGHOSTTY_VT_MAX_OVERSCAN_ROWS 32
+
 struct ProGhosttyVT {
   GhosttyTerminal terminal;
   GhosttyRenderState render_state;
@@ -593,8 +600,8 @@ int proghostty_vt_scroll_snapshot(
     return result;
   }
 
-  uint16_t top_request = overscan_top > 4 ? 4 : overscan_top;
-  uint16_t bottom_request = overscan_bottom > 4 ? 4 : overscan_bottom;
+  uint16_t top_request = overscan_top > PROGHOSTTY_VT_MAX_OVERSCAN_ROWS ? PROGHOSTTY_VT_MAX_OVERSCAN_ROWS : overscan_top;
+  uint16_t bottom_request = overscan_bottom > PROGHOSTTY_VT_MAX_OVERSCAN_ROWS ? PROGHOSTTY_VT_MAX_OVERSCAN_ROWS : overscan_bottom;
   uint64_t viewport_start = scrollbar.offset;
   uint64_t viewport_end = scrollbar.offset + scrollbar.length;
   uint64_t total = scrollbar.total;
