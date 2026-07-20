@@ -924,6 +924,13 @@ public class PTYGridView: NSView {
   /// Absolute scrollback row that sat at the viewport top when the current
   /// gesture began. `engine.position == 0` maps here.
   private var browseAnchorRow: UInt64 = 0
+  /// Persistent pattern-2 browse position: the absolute top row the user has
+  /// settled on while viewing history. `nil` means "following the live bottom".
+  /// This is pattern 2's source of truth for "am I viewing history" — the VT
+  /// viewport never moves, so scrollbar.offset always reports the bottom and
+  /// cannot be used for it. A new gesture continues from here; reaching the
+  /// bottom edge clears it back to live-follow.
+  private var browseTopRow: UInt64?
   /// Total scrollback rows captured at gesture start (refreshed each tick from
   /// the metrics handler so live output growth is tracked).
   private var browseTotalRows: UInt64 = 0
@@ -980,7 +987,7 @@ public class PTYGridView: NSView {
   public var isFocusedTerminal: Bool { isFocusedTerminalStorage }
 
   public var isViewingHistory: Bool {
-    viewport != TerminalViewport() || scrollController.hasPendingCommit
+    viewport != TerminalViewport() || scrollController.hasPendingCommit || browseTopRow != nil
   }
 
   public var isDraggingSelection: Bool { isDraggingSelectionStorage }
@@ -1085,6 +1092,13 @@ public class PTYGridView: NSView {
   public func resetPixelScroll(suppressMomentum: Bool = false) {
     scrollController.resetAll()
     viewport = TerminalViewport()
+    // Return to live-follow: drop the persisted pattern-2 browse anchor and stop
+    // any in-flight display-link browsing.
+    browseTopRow = nil
+    if isSmoothScrollBrowsing {
+      smoothScrollEngine.reset()
+      stopSmoothScrollBrowsing()
+    }
     suppressMomentumScroll = suppressMomentum
     needsDisplay = true
   }
@@ -1422,7 +1436,9 @@ public class PTYGridView: NSView {
   private func startSmoothScrollBrowsing() {
     guard let metrics = browseScrollMetricsHandler?() else { return }
     isSmoothScrollBrowsing = true
-    browseAnchorRow = metrics.topAbsoluteRow
+    // Continue from the settled browse position if we're already viewing
+    // history; otherwise anchor at the current live bottom.
+    browseAnchorRow = browseTopRow ?? metrics.topAbsoluteRow
     browseTotalRows = metrics.total
     smoothScrollEngine.reset()
     // Flip the engine to async present BEFORE the first tick so the very first
@@ -1444,38 +1460,59 @@ public class PTYGridView: NSView {
     // Physics steps to the frame we are PRESENTING (targetTimestamp), not the
     // last vsync — smoother on variable-refresh displays (WWDC21).
     smoothScrollEngine.tick(now: link.targetTimestamp)
-
-    // Track live scrollback growth so a tail that keeps producing doesn't shift
-    // the browse content under the user.
-    if let metrics = browseScrollMetricsHandler?() {
-      browseTotalRows = metrics.total
-    }
-
-    let resolved = SmoothScrollBrowseResolver.resolve(
-      position: smoothScrollEngine.position,
-      cellHeight: cellSize.height,
-      anchorRow: browseAnchorRow,
-      total: browseTotalRows,
-      visibleRows: max(1, frameSnapshot?.rows ?? visibleRowCount())
-    )
-
-    // The display-link tick is the SOLE writer of visualOffsetY while browsing.
-    suppressViewportChangePresent = true
-    viewport = TerminalViewport(visualOffsetY: resolved.pixelOffset)
-    suppressViewportChangePresent = false
-
-    browsePresentHandler?(resolved.topAbsoluteRow, max(1, frameSnapshot?.rows ?? visibleRowCount()))
+    let resolved = applyBrowseTick()
 
     // Edge: clamp reached — kill velocity so we settle instead of thrashing.
     if resolved.atTopEdge || resolved.atBottomEdge {
       smoothScrollEngine.reset()
-      viewport = TerminalViewport(visualOffsetY: resolved.pixelOffset)
+      applyBrowsePosition(resolved)
       stopSmoothScrollBrowsing()
       return
     }
 
     if !smoothScrollEngine.isActive {
       stopSmoothScrollBrowsing()
+    }
+  }
+
+  /// Resolve the current physics position to a browse window, apply it (viewport
+  /// offset + persisted browse row), and present. Shared by the display-link
+  /// callback and test hooks. Returns the resolved window.
+  @discardableResult
+  private func applyBrowseTick() -> SmoothScrollBrowseResolver.Resolved {
+    // Track live scrollback growth so a tail that keeps producing doesn't shift
+    // the browse content under the user.
+    if let metrics = browseScrollMetricsHandler?() {
+      browseTotalRows = metrics.total
+    }
+    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
+    let resolved = SmoothScrollBrowseResolver.resolve(
+      position: smoothScrollEngine.position,
+      cellHeight: cellSize.height,
+      anchorRow: browseAnchorRow,
+      total: browseTotalRows,
+      visibleRows: visible
+    )
+    applyBrowsePosition(resolved)
+    browsePresentHandler?(resolved.topAbsoluteRow, visible)
+    return resolved
+  }
+
+  private func applyBrowsePosition(_ resolved: SmoothScrollBrowseResolver.Resolved) {
+    // The display-link tick is the SOLE writer of visualOffsetY while browsing.
+    suppressViewportChangePresent = true
+    viewport = TerminalViewport(visualOffsetY: resolved.pixelOffset)
+    suppressViewportChangePresent = false
+
+    // Persist the browse position so a settled history view survives new output
+    // and the next gesture continues from here. Reaching the bottom edge means
+    // we're back at the live tail → resume follow (nil).
+    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
+    let maxTop = browseTotalRows > UInt64(visible) ? browseTotalRows - UInt64(visible) : 0
+    if resolved.atBottomEdge || resolved.topAbsoluteRow >= maxTop {
+      browseTopRow = nil
+    } else {
+      browseTopRow = resolved.topAbsoluteRow
     }
   }
 
@@ -1711,7 +1748,7 @@ public class PTYGridView: NSView {
     if !isSmoothScrollBrowsing {
       guard let metrics = browseScrollMetricsHandler?() else { return }
       isSmoothScrollBrowsing = true
-      browseAnchorRow = metrics.topAbsoluteRow
+      browseAnchorRow = browseTopRow ?? metrics.topAbsoluteRow
       browseTotalRows = metrics.total
       smoothScrollEngine.reset()
       scrollActivityHandler?(true)
@@ -1724,26 +1761,12 @@ public class PTYGridView: NSView {
   @discardableResult
   func testTickSmoothScroll(now: TimeInterval) -> UInt64 {
     smoothScrollEngine.tick(now: now)
-    if let metrics = browseScrollMetricsHandler?() {
-      browseTotalRows = metrics.total
-    }
-    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
-    let resolved = SmoothScrollBrowseResolver.resolve(
-      position: smoothScrollEngine.position,
-      cellHeight: cellSize.height,
-      anchorRow: browseAnchorRow,
-      total: browseTotalRows,
-      visibleRows: visible
-    )
-    suppressViewportChangePresent = true
-    viewport = TerminalViewport(visualOffsetY: resolved.pixelOffset)
-    suppressViewportChangePresent = false
-    browsePresentHandler?(resolved.topAbsoluteRow, visible)
-    return resolved.topAbsoluteRow
+    return applyBrowseTick().topAbsoluteRow
   }
 
   var testIsSmoothScrollBrowsing: Bool { isSmoothScrollBrowsing }
   var testEngineActiveForTests: Bool { smoothScrollEngine.isActive }
+  var testBrowseTopRow: UInt64? { browseTopRow }
 
   /// Test hook: end the current browse gesture (feeds `.ended`, entering inertia
   /// or settling). Mirror the display link with `testTickSmoothScroll` after.

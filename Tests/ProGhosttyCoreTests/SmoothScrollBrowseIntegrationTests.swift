@@ -104,4 +104,53 @@ struct SmoothScrollBrowseIntegrationTests {
     // Never past the last page.
     #expect(lastTop <= 6)
   }
+
+  @Test func settledHistoryPositionPersistsAndKeepsViewingHistory() {
+    let view = makeView()
+    view.browseScrollMetricsHandler = { (total: 1000, topAbsoluteRow: 976) }
+    view.browsePresentHandler = { _, _ in }
+
+    // Scroll up well into history and settle.
+    view.testBeginSmoothScroll(delta: 200, time: 0)
+    var t = 0.0
+    for _ in 0..<40 { t += 1.0 / 120.0; view.testTickSmoothScroll(now: t) }
+
+    #expect(view.testBrowseTopRow != nil)
+    #expect(view.testBrowseTopRow! < 976)
+    // Persisted browse row keeps the surface "viewing history" even if the
+    // sub-row offset happens to be ~0.
+    #expect(view.isViewingHistory)
+  }
+
+  @Test func reachingBottomClearsBrowsePositionToFollow() {
+    let view = makeView()
+    // Start already settled in history at row 100.
+    view.browseScrollMetricsHandler = { (total: 200, topAbsoluteRow: 176) }
+    view.browsePresentHandler = { _, _ in }
+    view.testBeginSmoothScroll(delta: 100, time: 0)
+    var t = 0.0
+    for _ in 0..<30 { t += 1.0 / 120.0; view.testTickSmoothScroll(now: t) }
+    #expect(view.testBrowseTopRow != nil)
+
+    // Now scroll hard toward the bottom; reaching the last page resumes follow.
+    view.testBeginSmoothScroll(delta: -400, time: t)
+    for _ in 0..<30 { t += 1.0 / 120.0; view.testTickSmoothScroll(now: t) }
+    #expect(view.testBrowseTopRow == nil)
+    #expect(!view.isViewingHistory)
+  }
+
+  @Test func resetPixelScrollReturnsToFollow() {
+    let view = makeView()
+    view.browseScrollMetricsHandler = { (total: 1000, topAbsoluteRow: 976) }
+    view.browsePresentHandler = { _, _ in }
+    view.testBeginSmoothScroll(delta: 200, time: 0)
+    var t = 0.0
+    for _ in 0..<20 { t += 1.0 / 120.0; view.testTickSmoothScroll(now: t) }
+    #expect(view.testBrowseTopRow != nil)
+
+    view.resetPixelScroll()
+    #expect(view.testBrowseTopRow == nil)
+    #expect(!view.isViewingHistory)
+    #expect(!view.testIsSmoothScrollBrowsing)
+  }
 }
