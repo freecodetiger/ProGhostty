@@ -52,11 +52,22 @@ final class AppModel: ObservableObject {
   @Published var isCheckingForUpdates = false
   @Published var systemNotificationsAuthorized = true
   @Published var shellIntegrationState = "partial"
+  @Published var agentNotifyHooksStatus = AgentNotifyHookStatus(
+    scriptsReady: false,
+    codexConfigured: false,
+    claudeConfigured: false,
+    detail: nil
+  )
+  @Published var agentNotifyHookError: String?
+  @Published var isInstallingAgentNotifyHooks = false
+  @Published var showAgentNotifyInstallSheet = false
+  @Published var showAgentNotifyUninstallSheet = false
 
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
   private let terminalNotificationCenter: TerminalNotificationCenter
   private let terminalNotificationSoundPlayer: TerminalNotificationSoundPlaying
+  private let agentNotificationHookManager: AgentNotificationHookManager
   private let paneWorkspaceController: PaneWorkspaceController
   private let updateChecker = AppUpdateChecker()
   private let focusStore = TerminalFocusStore()
@@ -108,10 +119,12 @@ final class AppModel: ObservableObject {
 
   init(
     terminalNotificationCenter: TerminalNotificationCenter = TerminalNotificationCenter(),
-    terminalNotificationSoundPlayer: TerminalNotificationSoundPlaying = TerminalNotificationSoundPlayer()
+    terminalNotificationSoundPlayer: TerminalNotificationSoundPlaying = TerminalNotificationSoundPlayer(),
+    agentNotificationHookManager: AgentNotificationHookManager = AgentNotificationHookManager()
   ) {
     self.terminalNotificationCenter = terminalNotificationCenter
     self.terminalNotificationSoundPlayer = terminalNotificationSoundPlayer
+    self.agentNotificationHookManager = agentNotificationHookManager
     DebugLog.write("AppModel init")
     settingsStore = SettingsStore()
     let loadedSettings = settingsStore.load()
@@ -150,6 +163,7 @@ final class AppModel: ObservableObject {
     restorePersistedWorkspacesOrCreateDefault()
     Task { await checkForUpdates(manual: false) }
     refreshNotificationAuthorization()
+    refreshAgentNotifyHookStatus()
   }
 
   /// Refreshes whether the system has granted notification permission, so
@@ -164,6 +178,87 @@ final class AppModel: ObservableObject {
   func openSystemNotificationSettings() {
     guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") else { return }
     NSWorkspace.shared.open(url)
+  }
+
+  // MARK: Agent notify hooks (Settings gate)
+
+  func refreshAgentNotifyHookStatus() {
+    agentNotifyHooksStatus = agentNotificationHookManager.status()
+  }
+
+  /// Settings toggle entry: enabling requires ready hooks or an install sheet.
+  func setNotificationsEnabled(_ enabled: Bool) {
+    if enabled {
+      refreshAgentNotifyHookStatus()
+      if agentNotifyHooksStatus.isReady {
+        settings.notificationsEnabled = true
+        requestNotificationAuthorizationOnEnable()
+      } else {
+        showAgentNotifyInstallSheet = true
+      }
+    } else {
+      refreshAgentNotifyHookStatus()
+      let hadHooks = agentNotifyHooksStatus.isReady
+        || agentNotifyHooksStatus.isPartial
+        || agentNotifyHooksStatus.scriptsReady
+      settings.notificationsEnabled = false
+      if hadHooks {
+        showAgentNotifyUninstallSheet = true
+      }
+    }
+  }
+
+  func confirmInstallAgentNotifyHooks() {
+    guard !isInstallingAgentNotifyHooks else { return }
+    isInstallingAgentNotifyHooks = true
+    agentNotifyHookError = nil
+    defer { isInstallingAgentNotifyHooks = false }
+    do {
+      try agentNotificationHookManager.install()
+      refreshAgentNotifyHookStatus()
+      showAgentNotifyInstallSheet = false
+      if agentNotifyHooksStatus.isReady {
+        settings.notificationsEnabled = true
+        requestNotificationAuthorizationOnEnable()
+      } else {
+        agentNotifyHookError = agentNotifyHooksStatus.detail
+          ?? "Hooks installed but not detected as ready"
+      }
+    } catch {
+      agentNotifyHookError = error.localizedDescription
+    }
+  }
+
+  func cancelInstallAgentNotifyHooks() {
+    showAgentNotifyInstallSheet = false
+  }
+
+  func confirmUninstallAgentNotifyHooks(removeHooks: Bool) {
+    showAgentNotifyUninstallSheet = false
+    guard removeHooks else {
+      refreshAgentNotifyHookStatus()
+      return
+    }
+    do {
+      try agentNotificationHookManager.uninstall(removeScripts: true)
+      agentNotifyHookError = nil
+    } catch {
+      agentNotifyHookError = error.localizedDescription
+    }
+    refreshAgentNotifyHookStatus()
+  }
+
+  func cancelUninstallAgentNotifyHooks() {
+    showAgentNotifyUninstallSheet = false
+  }
+
+  func repairAgentNotifyHooks() {
+    showAgentNotifyInstallSheet = true
+  }
+
+  private func requestNotificationAuthorizationOnEnable() {
+    terminalNotificationCenter.requestAuthorizationForEnable()
+    refreshNotificationAuthorization()
   }
 
   func createAndActivateWorkspace(workspace: Workspace? = nil) {

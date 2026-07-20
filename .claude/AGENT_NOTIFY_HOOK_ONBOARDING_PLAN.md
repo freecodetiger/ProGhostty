@@ -286,13 +286,16 @@ toggle notificationsEnabled:
 
 ---
 
-## 10. 验收
+## 10. 验收 / 实现进度
 
-- [ ] 未同意安装无法保持「已生效」通知  
-- [ ] 同意后 Codex **或** Claude 至少一侧可 Stop 通知  
-- [ ] 卸载只移除我们的 handler  
-- [ ] 架构守卫绿；相关单测绿  
-- [ ] 设置文案中英齐全  
+- [x] 默认 `notificationsEnabled = false`
+- [x] `AgentNotificationHookManager` install / status / uninstall + 单测
+- [x] 设置开关门控 + 安装/卸载 sheet + 状态行
+- [x] 未同意安装无法保持 ON  
+- [ ] 手测：同意后 Codex **或** Claude Stop 真通知  
+- [x] 卸载只移除我们的 handler（单测）  
+- [x] 相关单测绿  
+- [x] 设置文案中英齐全  
 
 ---
 

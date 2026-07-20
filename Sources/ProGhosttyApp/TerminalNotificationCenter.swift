@@ -9,6 +9,14 @@ protocol TerminalNotificationSending: AnyObject {
   func fetchAuthorizationGranted(_ completion: @escaping @Sendable (Bool) -> Void)
 }
 
+extension TerminalNotificationCenter {
+  /// Prompt for system notification permission without tying it to a real agent event.
+  func requestAuthorizationForEnable() {
+    sender.requestAuthorizationIfNeeded()
+    refreshAuthorizationStatus { _ in }
+  }
+}
+
 protocol TerminalNotificationSoundPlaying: AnyObject {
   func playNotificationSound()
 }
