@@ -66,6 +66,12 @@ public struct SmoothScrollEngine: Sendable {
   public private(set) var phase: Phase = .idle
   private let config: Config
   private var lastTickTime: TimeInterval?
+  /// Rolling window of the most recent per-tick velocities during tracking. The
+  /// fling is seeded from the PEAK of this window, not the single last tick — a
+  /// gesture often ends with one slow settling tick whose velocity is near zero,
+  /// which would otherwise kill inertia instantly (best-practices review).
+  private var recentVelocities: [CGFloat] = []
+  private static let velocityWindow = 4
 
   public init(config: Config = Config()) {
     self.config = config
@@ -84,6 +90,7 @@ public struct SmoothScrollEngine: Sendable {
     case .began:
       phase = .tracking
       lastTickTime = time
+      recentVelocities.removeAll(keepingCapacity: true)
       target += delta * config.wheelScale
     case .changed, .discrete:
       if phase != .tracking {
@@ -92,10 +99,21 @@ public struct SmoothScrollEngine: Sendable {
       }
       target += delta * config.wheelScale
     case .ended:
-      // Leave `target` where it is; enter inertia if moving fast enough,
-      // otherwise ease to rest.
-      phase = velocity.magnitude >= config.minInertiaVelocity ? .inertia : .settling
+      // Seed the fling from the fastest of the last few tracking ticks, not the
+      // single most recent one (a gesture often ends with a near-still tick).
+      let seed = seedVelocity()
+      velocity = seed
+      phase = seed.magnitude >= config.minInertiaVelocity ? .inertia : .settling
     }
+  }
+
+  /// The inertia seed: the signed velocity with the largest magnitude across the
+  /// recent tracking window, falling back to the current `velocity`.
+  private func seedVelocity() -> CGFloat {
+    guard let peak = recentVelocities.max(by: { $0.magnitude < $1.magnitude }) else {
+      return velocity
+    }
+    return peak.magnitude >= velocity.magnitude ? peak : velocity
   }
 
   /// A discrete wheel scroll (mouse wheel, no gesture phases): nudge target and
@@ -124,6 +142,12 @@ public struct SmoothScrollEngine: Sendable {
       let alpha = 1 - exp(-config.trackingResponse * CGFloat(dt))
       position += (target - position) * alpha
       velocity = CGFloat(dt) > 0 ? (position - previous) / CGFloat(dt) : 0
+      if phase == .tracking {
+        recentVelocities.append(velocity)
+        if recentVelocities.count > Self.velocityWindow {
+          recentVelocities.removeFirst(recentVelocities.count - Self.velocityWindow)
+        }
+      }
       if phase == .settling, (target - position).magnitude < 0.5 {
         position = target
         velocity = 0
@@ -163,6 +187,7 @@ public struct SmoothScrollEngine: Sendable {
     velocity = 0
     phase = .idle
     lastTickTime = nil
+    recentVelocities.removeAll(keepingCapacity: true)
   }
 
   /// Rebase after `rows` whole rows were committed to the VT: subtract them from

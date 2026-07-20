@@ -129,6 +129,25 @@ struct SmoothScrollEngineTests {
     #expect(abs(after.offsetY - before.offsetY) < 0.001)  // remainder preserved
   }
 
+  @Test func inertiaSeedsFromPeakNotLastSlowTick() {
+    // A fast fling that ends with one near-still settling tick must still enter
+    // inertia — the seed comes from the peak of the recent window, not the last
+    // tick's tiny velocity.
+    var engine = SmoothScrollEngine(config: .init(minInertiaVelocity: 6))
+    engine.addWheelInput(delta: 0, phase: .began, time: 0)
+    // Several fast tracking ticks build real velocity.
+    for i in 1...4 {
+      engine.addWheelInput(delta: 60, phase: .changed, time: Double(i) / 120.0)
+      _ = engine.tick(now: Double(i) / 120.0)
+    }
+    // One more tick with NO new target delta: position nearly catches target, so
+    // this tick's own velocity is small.
+    _ = engine.tick(now: 5.0 / 120.0)
+    engine.addWheelInput(delta: 0, phase: .ended, time: 5.0 / 120.0)
+    #expect(engine.phase == .inertia)
+    #expect(engine.velocity.magnitude >= 6)
+  }
+
   @Test func resetReturnsToIdle() {
     var engine = SmoothScrollEngine()
     engine.addDiscreteScroll(delta: 50, time: 0)
