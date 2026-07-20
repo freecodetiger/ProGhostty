@@ -110,6 +110,14 @@ scripts/check-architecture.sh   # 分层守卫：Core 无 SwiftUI；AppKit 仅�
 
 改动后：`swift build` + `swift test` + `check-architecture.sh` 三者全绿再收工。首次构建 libghostty-vt 见 `docs/libghostty-vt.md`。
 
+### Git · Commit / Push
+
+**必须遵循** `docs/git-workflow.md`（Conventional Commits、拆分粒度、不擅自 push、勿提交 `.zig-cache*`）。
+
+- message：`<type>(<scope>): <summary>`，与 `git log` 现有风格一致（`feat(scroll): …` / `fix(ci): …`）
+- 一个意图一个 commit；改代码先绿再 commit
+- **只有用户明确要求时才 push**；release 用 `v*` tag 走 CI
+
 > ⚠️ **libghostty-vt 必须用 `-Doptimize=ReleaseFast` 构建**（`Vendor/ghostty/zig-out/lib/libghostty-vt.a`，Package.swift 直接链接）。缺了它 Zig 默认 Debug 模式，`ghostty_terminal_vt_write` 慢上千倍，`seq 1 30000` 会长时间卡住 UI。`swift build` **不会**重建这个 `.a`（vendored 手工产物）。排查"输出/scrollback 慢"时，先确认这个 `.a` 是 ReleaseFast。重建命令见 `docs/libghostty-vt.md`。
 
 ### 🔁 在应用里手测改动的标准流程（每次照做，别跳步）
