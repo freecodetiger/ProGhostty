@@ -199,11 +199,27 @@ struct AgentNotificationHookManager {
 
   printf '%s\\n' "$now" >"$dedupe_file" 2>/dev/null || true
 
+  # Prefer concrete slave path. /dev/tty often fails inside agent Stop hooks.
+  tty_path="${PROGHOSTTY_NOTIFY_TTY:-}"
+  if [ -z "$tty_path" ] || [ "$tty_path" = "/dev/tty" ] || [ ! -w "$tty_path" ]; then
+    tty_path=$(tty 2>/dev/null || true)
+  fi
+  if [ -z "$tty_path" ] || [ ! -w "$tty_path" ]; then
+    tty_path=
+  fi
+
   pg_helper=$(cat "$hook_dir/pg-helper-path" 2>/dev/null || true)
+  run_pg() {
+    if [ -n "$tty_path" ]; then
+      "$@" notify --title "$title" --body "$body" --tty "$tty_path"
+    else
+      "$@" notify --title "$title" --body "$body"
+    fi
+  }
   if command -v pg >/dev/null 2>&1; then
-    pg notify --title "$title" --body "$body" >/dev/null 2>&1 || true
+    run_pg pg >/dev/null 2>&1 || true
   elif [ -n "$pg_helper" ] && [ -x "$pg_helper" ]; then
-    "$pg_helper" notify --title "$title" --body "$body" >/dev/null 2>&1 || true
+    run_pg "$pg_helper" >/dev/null 2>&1 || true
   fi
   """
 
