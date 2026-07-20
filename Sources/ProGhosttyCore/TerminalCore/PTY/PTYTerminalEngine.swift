@@ -1768,6 +1768,30 @@ public class PTYGridView: NSView {
   var testEngineActiveForTests: Bool { smoothScrollEngine.isActive }
   var testBrowseTopRow: UInt64? { browseTopRow }
 
+  /// Test hook: the hit-testing geometry the view currently reports. The
+  /// pattern-2 red line is that this must describe the SAME `(topAbsoluteRow, P)`
+  /// the renderer draws — i.e. the absolute row at viewport row 0 equals
+  /// `absoluteBaseRow + overscanTop.count`, and translation matches the engine's.
+  func testRenderedGeometry() -> (absoluteBaseRow: Int, translationY: CGFloat, rows: Int)? {
+    guard let g = renderedGeometry() else { return nil }
+    return (g.absoluteBaseRow, g.translationY, g.frame.rows)
+  }
+
+  /// Test hook: the absolute row a click at viewport-local `(row, col)` maps to.
+  func testAbsoluteRow(forViewportRow row: Int) -> Int? {
+    guard let g = renderedGeometry() else { return nil }
+    let overscanTop = scrollFrameSnapshot?.overscanTop.count ?? 0
+    return g.absoluteBaseRow + overscanTop + row
+  }
+
+  /// Test hook: set the sub-row viewport offset (as the display-link tick would)
+  /// without a real gesture, so geometry/present can be exercised together.
+  func testSetViewportOffsetForTests(_ offset: CGFloat) {
+    suppressViewportChangePresent = true
+    viewport = TerminalViewport(visualOffsetY: offset)
+    suppressViewportChangePresent = false
+  }
+
   /// Test hook: end the current browse gesture (feeds `.ended`, entering inertia
   /// or settling). Mirror the display link with `testTickSmoothScroll` after.
   func testEndSmoothScroll(time: TimeInterval) {

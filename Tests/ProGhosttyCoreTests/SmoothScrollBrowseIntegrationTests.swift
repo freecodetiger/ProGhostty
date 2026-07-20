@@ -153,4 +153,59 @@ struct SmoothScrollBrowseIntegrationTests {
     #expect(!view.isViewingHistory)
     #expect(!view.testIsSmoothScrollBrowsing)
   }
+
+  // MARK: Hit-testing red line
+
+  /// A browse present builds a scroll frame with one overscan row above
+  /// `topAbsoluteRow` and `viewportStartRow == topAbsoluteRow`. The geometry the
+  /// view reports for hit-testing must place absolute row `topAbsoluteRow` at
+  /// viewport row 0 and shift it down by the sub-row offset P — the same
+  /// `(topAbsoluteRow, P)` the renderer draws.
+  @Test func geometryMatchesBrowsePresentTopRowAndOffset() {
+    let view = makeView()
+    let cols = 8
+    let topAbsoluteRow: UInt64 = 300
+    let visible = 24
+    let pixelOffset: CGFloat = 7
+
+    // Mirror presentBrowseWindow's scroll-frame shape: 1 overscan row above
+    // (absolute topAbsoluteRow-1), visible viewport rows, 1 overscan below.
+    let scrollFrame = GhosttyTerminalScrollFrame(
+      viewport: frame(rows: Array(repeating: "row", count: visible), cols: cols, cursorY: 0),
+      overscanTop: [cellRow("above", cols: cols)],
+      overscanBottom: [cellRow("below", cols: cols)],
+      requestedOverscanTop: 1,
+      requestedOverscanBottom: 1,
+      viewportStartRow: topAbsoluteRow
+    )
+    // The display-link tick sets the sub-row offset before the present lands.
+    view.testSetViewportOffsetForTests(pixelOffset)
+    view.render(scrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<visible)))
+
+    guard let geo = view.testRenderedGeometry() else {
+      Issue.record("no geometry")
+      return
+    }
+    // absoluteBaseRow is the overscan row (topAbsoluteRow - 1).
+    #expect(geo.absoluteBaseRow == Int(topAbsoluteRow) - 1)
+    // Viewport row 0 (first visible row, after the overscan row) is topAbsoluteRow.
+    #expect(view.testAbsoluteRow(forViewportRow: 0) == Int(topAbsoluteRow))
+    #expect(view.testAbsoluteRow(forViewportRow: 5) == Int(topAbsoluteRow) + 5)
+    // Translation = -overscanTop(1)*cellH + P (the same the renderer applies).
+    let expected = -view.terminalCellSize.height + pixelOffset
+    #expect(abs(geo.translationY - expected) < 0.001)
+  }
+
+  private func cellRow(_ text: String, cols: Int) -> GhosttyTerminalCellRow {
+    let padded = text.padding(toLength: cols, withPad: " ", startingAt: 0)
+    return GhosttyTerminalCellRow(cells: padded.unicodeScalars.prefix(cols).map {
+      GhosttyTerminalFrame.Cell(
+        scalar: $0,
+        foreground: .init(r: 255, g: 255, b: 255),
+        background: .init(r: 0, g: 0, b: 0),
+        bold: false, italic: false, faint: false, underline: false, inverse: false,
+        usesDefaultForeground: true, usesDefaultBackground: true
+      )
+    })
+  }
 }
