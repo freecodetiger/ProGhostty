@@ -893,6 +893,11 @@ public class PTYGridView: NSView {
   /// at `topAbsoluteRow` directly from scrollback and present them, shifted by
   /// the view's current `viewport.visualOffsetY`. The VT viewport does NOT move.
   public var browsePresentHandler: ((_ topAbsoluteRow: UInt64, _ visibleRows: Int) -> Void)?
+  /// Pattern-2 resume-follow: the user scrolled back to the live tail, so stop
+  /// presenting a history window and render the LIVE frame (with cursor, tracking
+  /// new output). Fired instead of `browsePresentHandler` when the tick resolves
+  /// to the bottom edge.
+  public var browseFollowResumeHandler: (() -> Void)?
   public var activationHandler: (() -> Void)?
   public var openURLHandler: ((URL) -> Void)? = { url in
     _ = NSWorkspace.shared.open(url)
@@ -952,9 +957,9 @@ public class PTYGridView: NSView {
       if !suppressViewportChangePresent {
         viewportDidChangeHandler?()
         needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+        invalidateIMECharacterCoordinates()
       }
-      window?.invalidateCursorRects(for: self)
-      invalidateIMECharacterCoordinates()
     }
   }
   private(set) public var lastDrawDuration: TimeInterval = 0
@@ -989,6 +994,18 @@ public class PTYGridView: NSView {
   public var isViewingHistory: Bool {
     viewport != TerminalViewport() || scrollController.hasPendingCommit || browseTopRow != nil
   }
+
+  /// The absolute scrollback row the user has settled on while browsing history
+  /// via pattern-2 smooth scroll, or nil when following the live bottom. The
+  /// registry reads this to re-present the SAME browse window when new output
+  /// arrives, instead of freezing the display (pattern-1 behavior) or snapping
+  /// to the tail. See `.claude/UNFREEZE_HISTORY_PLAN.md`.
+  public var browseTopAbsoluteRow: UInt64? { browseTopRow }
+
+  /// True while a pattern-2 display-link browse gesture/inertia is in flight.
+  /// During this window the display link re-presents every tick, so the output
+  /// path must not present concurrently.
+  public var isSmoothScrollBrowsingActive: Bool { isSmoothScrollBrowsing }
 
   public var isDraggingSelection: Bool { isDraggingSelectionStorage }
 
@@ -1436,10 +1453,17 @@ public class PTYGridView: NSView {
   private func startSmoothScrollBrowsing() {
     guard let metrics = browseScrollMetricsHandler?() else { return }
     isSmoothScrollBrowsing = true
-    // Continue from the settled browse position if we're already viewing
-    // history; otherwise anchor at the current live bottom.
-    browseAnchorRow = browseTopRow ?? metrics.topAbsoluteRow
     browseTotalRows = metrics.total
+    // `position == 0` maps to this anchor. If already parked in history, continue
+    // from that absolute row. If following the live tail, anchor at the current
+    // bottom page so scrolling down (position → 0) always returns to the LIVE
+    // bottom no matter how much output arrives while browsing.
+    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
+    if let parked = browseTopRow {
+      browseAnchorRow = parked
+    } else {
+      browseAnchorRow = metrics.total > UInt64(visible) ? metrics.total - UInt64(visible) : 0
+    }
     smoothScrollEngine.reset()
     // Flip the engine to async present BEFORE the first tick so the very first
     // scroll frame already avoids blocking the main thread on GPU completion.
@@ -1449,6 +1473,9 @@ public class PTYGridView: NSView {
 
   private func startScrollDisplayLink() {
     guard scrollDisplayLink == nil else { return }
+    // A display link requires a hosting window; without one (e.g. unit tests)
+    // NSView.displayLink is invalid. Callers drive ticks manually in that case.
+    guard window != nil else { return }
     let link = displayLink(target: self, selector: #selector(handleScrollDisplayLink(_:)))
     // Allow the full ProMotion range; without this the link is capped at 60Hz.
     link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
@@ -1475,6 +1502,7 @@ public class PTYGridView: NSView {
     }
   }
 
+
   /// Resolve the current physics position to a browse window, apply it (viewport
   /// offset + persisted browse row), and present. Shared by the display-link
   /// callback and test hooks. Returns the resolved window.
@@ -1494,26 +1522,29 @@ public class PTYGridView: NSView {
       visibleRows: visible
     )
     applyBrowsePosition(resolved)
-    browsePresentHandler?(resolved.topAbsoluteRow, visible)
+    if resolved.atBottomEdge {
+      // Back at the live tail: render the live frame (cursor + new output),
+      // not a history window. viewport offset was cleared in applyBrowsePosition.
+      browseFollowResumeHandler?()
+    } else {
+      browsePresentHandler?(resolved.topAbsoluteRow, visible)
+    }
     return resolved
   }
 
   private func applyBrowsePosition(_ resolved: SmoothScrollBrowseResolver.Resolved) {
     // The display-link tick is the SOLE writer of visualOffsetY while browsing.
+    // At the bottom edge we resume follow, so the offset must return to 0 (the
+    // live frame is drawn un-shifted).
     suppressViewportChangePresent = true
-    viewport = TerminalViewport(visualOffsetY: resolved.pixelOffset)
+    viewport = TerminalViewport(visualOffsetY: resolved.atBottomEdge ? 0 : resolved.pixelOffset)
     suppressViewportChangePresent = false
 
     // Persist the browse position so a settled history view survives new output
-    // and the next gesture continues from here. Reaching the bottom edge means
-    // we're back at the live tail → resume follow (nil).
-    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
-    let maxTop = browseTotalRows > UInt64(visible) ? browseTotalRows - UInt64(visible) : 0
-    if resolved.atBottomEdge || resolved.topAbsoluteRow >= maxTop {
-      browseTopRow = nil
-    } else {
-      browseTopRow = resolved.topAbsoluteRow
-    }
+    // and the next gesture continues from here. atBottomEdge means the user
+    // scrolled back to the live tail (position ≤ 0) → resume follow (nil). This
+    // is decoupled from `total`, so a growing tail can't strand us in history.
+    browseTopRow = resolved.atBottomEdge ? nil : resolved.topAbsoluteRow
   }
 
   private func stopSmoothScrollBrowsing() {
@@ -1521,6 +1552,11 @@ public class PTYGridView: NSView {
     scrollDisplayLink?.invalidate()
     scrollDisplayLink = nil
     scrollActivityHandler?(false)
+    // Per-frame cursor-rect / IME invalidation is skipped during browsing (it is
+    // O(rows×cols) and would run every tick). Refresh once now that we've
+    // settled so hit regions match the final scroll position.
+    window?.invalidateCursorRects(for: self)
+    invalidateIMECharacterCoordinates()
   }
 
   private func processScroll(deltaY: CGFloat, forwardToPTY: () -> Void = {}) {
@@ -1746,12 +1782,10 @@ public class PTYGridView: NSView {
   func testBeginSmoothScroll(delta: CGFloat, time: TimeInterval) {
     guard browseScrollMetricsHandler != nil, browsePresentHandler != nil else { return }
     if !isSmoothScrollBrowsing {
-      guard let metrics = browseScrollMetricsHandler?() else { return }
-      isSmoothScrollBrowsing = true
-      browseAnchorRow = browseTopRow ?? metrics.topAbsoluteRow
-      browseTotalRows = metrics.total
-      smoothScrollEngine.reset()
-      scrollActivityHandler?(true)
+      startSmoothScrollBrowsing()
+      // Tests drive ticks manually; drop the real display link the start created.
+      scrollDisplayLink?.invalidate()
+      scrollDisplayLink = nil
     }
     smoothScrollEngine.addWheelInput(delta: delta, phase: .began, time: time)
   }
@@ -1894,7 +1928,11 @@ public class PTYGridView: NSView {
     guard let geometry = renderedGeometry() else { return }
     let frame = geometry.frame
     let clipRect = geometry.clipRect
-    let urlHitsByRow = Self.urlHitsByRow(in: frame)
+    // Full-screen link detection (urlHitsByRow) is only needed to carve out
+    // pointing-hand regions when ⌘ is held. Running it every time cursor rects
+    // are invalidated — which happens on every scroll tick — is pure waste and,
+    // on a full screen of path-like text, heavy enough to stall the main thread.
+    let urlHitsByRow = commandLinkMode ? Self.urlHitsByRow(in: frame) : [:]
     if commandLinkMode {
       for rect in Self.urlCursorRects(
         urlHitsByRow: urlHitsByRow,

@@ -18,9 +18,15 @@ import Foundation
 /// `pixelOffset` is normalized to `[0, cellHeight)` using floor semantics, so it
 /// maps directly onto the renderer's existing presentation: present a window
 /// with ONE overscan row above `topAbsoluteRow` and set `viewport.visualOffsetY
-/// = pixelOffset`. The engine then draws `topAbsoluteRow` shifted DOWN by
-/// `pixelOffset`, with the bottom `pixelOffset` pixels of `topAbsoluteRow - 1`
-/// peeking in at the top — for both scroll directions.
+/// = pixelOffset`.
+///
+/// IMPORTANT — anchor + bottom semantics (see `.claude/BROWSE_ANCHOR_FIX_PLAN.md`):
+/// the caller chooses `anchorRow` as the row that `position == 0` maps to. When
+/// FOLLOWING the live tail, the caller anchors at the current bottom page
+/// (`total - visibleRows`), so `position == 0` means "at the bottom". Scrolling
+/// DOWN drives `position` negative; `atBottomEdge` is therefore keyed on
+/// `position <= 0` — decoupled from `total`, so a tail that keeps growing can
+/// never make "return to bottom" unreachable.
 public enum SmoothScrollBrowseResolver {
   public struct Resolved: Equatable, Sendable {
     /// Absolute scrollback row that should sit at the top of the viewport.
@@ -29,7 +35,8 @@ public enum SmoothScrollBrowseResolver {
     public let pixelOffset: CGFloat
     /// True when the user tried to scroll above row 0 (cannot go further up).
     public let atTopEdge: Bool
-    /// True when the user tried to scroll past the last page (cannot go down).
+    /// True when the user has scrolled back to (or below) the anchor — i.e. the
+    /// bottom when the caller anchored at the live tail. Signals "resume follow".
     public let atBottomEdge: Bool
 
     public init(topAbsoluteRow: UInt64, pixelOffset: CGFloat, atTopEdge: Bool, atBottomEdge: Bool) {
@@ -42,9 +49,11 @@ public enum SmoothScrollBrowseResolver {
 
   /// - Parameters:
   ///   - position: continuous scroll position in points (engine.position).
+  ///     Positive = scrolled up into history from the anchor; ≤ 0 = at/below it.
   ///   - cellHeight: row height in points (> 0).
-  ///   - anchorRow: absolute row that sat at the viewport top when the gesture
-  ///     began (position == 0 maps here).
+  ///   - anchorRow: absolute row that `position == 0` maps to. Callers anchor at
+  ///     the live bottom page when following, or at the parked row when already
+  ///     in history.
   ///   - total: total rows currently in scrollback (history + screen).
   ///   - visibleRows: number of rows the viewport shows.
   public static func resolve(
@@ -58,29 +67,37 @@ public enum SmoothScrollBrowseResolver {
       return Resolved(topAbsoluteRow: anchorRow, pixelOffset: 0, atTopEdge: true, atBottomEdge: true)
     }
 
+    let maxTop = max(0, Int64(total) - Int64(visibleRows))
+
+    // Scrolled down to or past the anchor: this is the "bottom" when the caller
+    // anchored at the live tail. Keyed on position (gesture-relative), NOT on a
+    // total-derived comparison, so a growing tail never makes it unreachable.
+    if position <= 0 {
+      let topRow = min(Int64(anchorRow), maxTop)
+      return Resolved(
+        topAbsoluteRow: UInt64(max(0, topRow)),
+        pixelOffset: 0,
+        atTopEdge: false,
+        atBottomEdge: true
+      )
+    }
+
     // Floor semantics: rowDelta whole rows climbed into history, pixelOffset the
     // fractional remainder always in [0, cellHeight). Positive position climbs
     // into history (fewer absolute rows), so subtract rowDelta from the anchor.
     let rowDelta = (position / cellHeight).rounded(.down)
     var pixelOffset = position - rowDelta * cellHeight  // in [0, cellHeight)
-
-    // Top row cannot exceed the last full page (bottom row pinned to the floor).
-    let maxTop = max(0, Int64(total) - Int64(visibleRows))
     let rawTop = Int64(anchorRow) - Int64(rowDelta)
 
     var atTopEdge = false
-    var atBottomEdge = false
     var topRow = rawTop
-
     if rawTop < 0 || (rawTop == 0 && pixelOffset > 0) {
-      // At/above the very top: pin to row 0, drop the upward sub-row peek (no
-      // row above 0 to reveal).
+      // At/above the very top: pin to row 0, drop the upward sub-row peek.
       atTopEdge = true
       topRow = 0
       pixelOffset = 0
     } else if rawTop > maxTop {
-      // Below the last page: pin to the last page, no further downward travel.
-      atBottomEdge = true
+      // Anchor deeper than the last page can show: pin to the last page.
       topRow = maxTop
       pixelOffset = 0
     }
@@ -89,7 +106,7 @@ public enum SmoothScrollBrowseResolver {
       topAbsoluteRow: UInt64(max(0, topRow)),
       pixelOffset: pixelOffset,
       atTopEdge: atTopEdge,
-      atBottomEdge: atBottomEdge
+      atBottomEdge: false
     )
   }
 }

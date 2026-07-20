@@ -8,13 +8,15 @@ import Testing
 struct SmoothScrollBrowseResolverTests {
   private let cellHeight: CGFloat = 22
 
-  @Test func zeroPositionSitsOnAnchorWithNoOffset() {
+  @Test func zeroPositionSitsAtAnchorAndReportsBottom() {
+    // position == 0 means "at the anchor". When the caller anchored at the live
+    // tail, that is the bottom → atBottomEdge signals resume-follow.
     let r = SmoothScrollBrowseResolver.resolve(
       position: 0, cellHeight: cellHeight, anchorRow: 100, total: 500, visibleRows: 24)
     #expect(r.topAbsoluteRow == 100)
     #expect(r.pixelOffset == 0)
     #expect(!r.atTopEdge)
-    #expect(!r.atBottomEdge)
+    #expect(r.atBottomEdge)
   }
 
   @Test func positivePositionClimbsIntoHistory() {
@@ -38,12 +40,15 @@ struct SmoothScrollBrowseResolverTests {
     }
   }
 
-  @Test func negativePositionMovesTowardBottom() {
-    // Anchor mid-history, scroll DOWN 3 rows → top row increases by 3.
+  @Test func negativePositionIsBottomFollow() {
+    // Any position ≤ 0 means the user scrolled back to/below the anchor. When
+    // anchored at the live tail this is "at bottom" → resume follow, top pinned
+    // to the anchor (clamped to the last page).
     let r = SmoothScrollBrowseResolver.resolve(
       position: -3 * cellHeight, cellHeight: cellHeight, anchorRow: 100, total: 500, visibleRows: 24)
-    #expect(r.topAbsoluteRow == 103)
+    #expect(r.topAbsoluteRow == 100)
     #expect(r.pixelOffset == 0)
+    #expect(r.atBottomEdge)
   }
 
   @Test func clampsAtTopEdgeAndDropsUpwardPeek() {
@@ -56,11 +61,12 @@ struct SmoothScrollBrowseResolverTests {
     #expect(!r.atBottomEdge)
   }
 
-  @Test func clampsAtBottomEdgeToLastPage() {
-    // total 500, visible 24 → maxTop = 476. Anchor at 470, scroll down 20 rows.
+  @Test func negativePositionClampsToLastPageAndFollows() {
+    // Scroll down (position < 0) with anchor already near the tail: report the
+    // anchor clamped to the last page, atBottomEdge (follow), decoupled from total.
     let r = SmoothScrollBrowseResolver.resolve(
       position: -20 * cellHeight, cellHeight: cellHeight, anchorRow: 470, total: 500, visibleRows: 24)
-    #expect(r.topAbsoluteRow == 476)
+    #expect(r.topAbsoluteRow == 470)
     #expect(r.pixelOffset == 0)
     #expect(r.atBottomEdge)
     #expect(!r.atTopEdge)
@@ -75,6 +81,24 @@ struct SmoothScrollBrowseResolverTests {
     #expect(r.topAbsoluteRow == 1)
     #expect(abs(r.pixelOffset - 0.5 * cellHeight) < 0.001)
     #expect(!r.atTopEdge)
+  }
+
+  @Test func returnToBottomReachableUnderGrowingTail() {
+    // Regression: anchored at the live tail, the user scrolls up into history
+    // while a flood of output grows `total` far past the anchor. Scrolling back
+    // down (position → 0) must still report atBottomEdge (follow) — the old
+    // total-derived bottom test made this unreachable and stranded the view in
+    // history with the live cursor off-screen.
+    let anchor: UInt64 = 1976  // total 2000 - visible 24 at gesture start
+    // Up into history:
+    let up = SmoothScrollBrowseResolver.resolve(
+      position: 30 * cellHeight, cellHeight: cellHeight, anchorRow: anchor, total: 5000, visibleRows: 24)
+    #expect(!up.atBottomEdge)
+    #expect(up.topAbsoluteRow == anchor - 30)
+    // Back down to the anchor, even though total ballooned to 5000:
+    let down = SmoothScrollBrowseResolver.resolve(
+      position: -1, cellHeight: cellHeight, anchorRow: anchor, total: 5000, visibleRows: 24)
+    #expect(down.atBottomEdge)
   }
 
   @Test func degenerateInputsAreSafe() {

@@ -266,7 +266,6 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     // translation, all cells.
     let renderCellRanges = Self.fullCellRanges(rows: drawFrame.rows, cols: plan.cols)
     let shouldRenderScene = drawFrame.rows > 0 && plan.cols > 0
-    let redrawMode: TerminalRedrawMode = shouldRenderScene ? .full : .clean
 
     let backgroundVertices = buildBackgroundVertices(
       frame: drawFrame,
@@ -384,7 +383,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       // Gate on the in-flight pool BEFORE acquiring a drawable so this tick can't
       // outrun the compositor. Released once per acquire below / in completion.
       inFlightSemaphore.wait()
-      if let drawable = metalLayer.nextDrawable() {
+      let drawable = metalLayer.nextDrawable()
+      if let drawable {
         presentedDrawable = true
         retainedResources.append(drawable)
         // Pattern 2: one render pass, straight to the drawable. Clear to the
@@ -872,6 +872,13 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
         let index = rowStart + col
         guard col >= 0, col < frame.cols, index < rowEnd else { continue }
         let cell = frame.cells[index]
+        // The drawable is already cleared to the palette background every frame,
+        // so a default-background, non-inverse cell needs no quad. Skipping these
+        // is the difference between emitting a quad + a per-cell NSColor→deviceRGB
+        // conversion for every one of ~1900 screen cells vs only the few with an
+        // explicit background — the dominant per-frame cost under pattern-2's
+        // full redraw.
+        guard cell.inverse || !cell.usesDefaultBackground else { continue }
         let colors = TerminalColorResolver.resolvedColors(for: cell, palette: palette, isFocused: isFocused)
         let rect = CGRect(
           x: inset.width + CGFloat(col) * cellSize.width,
@@ -879,10 +886,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
           width: cellSize.width,
           height: cellSize.height
         )
-        let background = (cell.inverse || !cell.usesDefaultBackground)
-          ? colors.background
-          : palette.background
-        vertices.append(contentsOf: quadVertices(rect: rect, color: background.metalRGBA, texture: false))
+        vertices.append(contentsOf: quadVertices(rect: rect, color: colors.background.metalRGBA, texture: false))
       }
     }
     return vertices

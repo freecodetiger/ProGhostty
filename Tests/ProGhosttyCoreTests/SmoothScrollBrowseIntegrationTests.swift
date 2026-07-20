@@ -43,8 +43,8 @@ struct SmoothScrollBrowseIntegrationTests {
 
   @Test func tickDrivesPresentWithResolvedTopRowAndSetsSubRowOffset() {
     let view = makeView()
-    // Anchor mid-history at row 200, plenty of scrollback below and above.
-    view.browseScrollMetricsHandler = { (total: 1000, topAbsoluteRow: 200) }
+    // Following the live tail: total 1000, visible 24 → anchor at bottom page 976.
+    view.browseScrollMetricsHandler = { (total: 1000, topAbsoluteRow: 976) }
     var presented: [(top: UInt64, visible: Int)] = []
     view.browsePresentHandler = { top, visible in presented.append((top, visible)) }
 
@@ -56,8 +56,8 @@ struct SmoothScrollBrowseIntegrationTests {
     for _ in 0..<30 { t += 1.0 / 120.0; view.testTickSmoothScroll(now: t) }
 
     #expect(!presented.isEmpty)
-    // Climbing into history moves the top row below the anchor (200).
-    #expect(presented.last!.top < 200)
+    // Climbing into history moves the top row below the bottom-page anchor (976).
+    #expect(presented.last!.top < 976)
     #expect(presented.last!.visible == 24)
     // The sub-row offset the tick set is in [0, cellHeight).
     #expect(view.viewport.visualOffsetY >= 0)
@@ -90,19 +90,24 @@ struct SmoothScrollBrowseIntegrationTests {
     #expect(activity.last == false)
   }
 
-  @Test func bottomEdgeClampDoesNotOvershoot() {
+  @Test func scrollingDownAtBottomResumesFollowInsteadOfPresentingHistory() {
     let view = makeView()
-    // total 30, visible 24 → maxTop 6. Anchor at 6 (already bottom), scroll down.
+    // total 30, visible 24 → already following near the tail. Scroll DOWN.
     view.browseScrollMetricsHandler = { (total: 30, topAbsoluteRow: 6) }
-    var lastTop: UInt64 = .max
-    view.browsePresentHandler = { top, _ in lastTop = top }
+    var presentedHistory = false
+    var resumedFollow = false
+    view.browsePresentHandler = { _, _ in presentedHistory = true }
+    view.browseFollowResumeHandler = { resumedFollow = true }
 
     view.testBeginSmoothScroll(delta: -80, time: 0)
     var t = 0.0
     for _ in 0..<10 { t += 1.0 / 120.0; view.testTickSmoothScroll(now: t) }
 
-    // Never past the last page.
-    #expect(lastTop <= 6)
+    // Scrolling down at the tail resumes follow (renders live frame), never
+    // strands the view in a history window.
+    #expect(resumedFollow)
+    #expect(!presentedHistory)
+    #expect(view.testBrowseTopRow == nil)
   }
 
   @Test func settledHistoryPositionPersistsAndKeepsViewingHistory() {

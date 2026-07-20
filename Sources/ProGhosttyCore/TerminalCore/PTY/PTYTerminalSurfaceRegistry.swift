@@ -170,6 +170,12 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     gridView.browsePresentHandler = { [weak self] topAbsoluteRow, visibleRows in
       self?.presentBrowseWindow(session: id, topAbsoluteRow: topAbsoluteRow, visibleRows: visibleRows)
     }
+    gridView.browseFollowResumeHandler = { [weak self] in
+      // Scrolled back to the live tail: render the live frame (cursor + latest
+      // output) from the VT, replacing the history window.
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return }
+      self.render(bridge, session: id)
+    }
     gridView.activationHandler = { [weak self] in
       self?.activationHandler?(id)
     }
@@ -430,11 +436,40 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     guard var surface = surfaces[id] else { return }
     surface.bridge = bridge
     surface.scrollbar = snapshot.scrollbar
-    if surface.containerView.isShowingLiveGrid,
-      (surface.gridView.isViewingHistory || surface.gridView.isDraggingSelection)
-    {
-      surfaces[id] = surface
-      return
+    if surface.containerView.isShowingLiveGrid {
+      // Dragging a selection: changing content mid-drag would corrupt the
+      // selection anchor, so keep freezing (matches pattern-1).
+      if surface.gridView.isDraggingSelection {
+        surfaces[id] = surface
+        return
+      }
+      // Active gesture/inertia: the display link is running and will re-present
+      // with the latest total on its next tick — don't present concurrently.
+      // (Checked before browseTopAbsoluteRow, which is also set mid-gesture.)
+      if surface.gridView.isSmoothScrollBrowsingActive {
+        surfaces[id] = surface
+        return
+      }
+      // Pattern-2 settled in history: instead of freezing the display, re-present
+      // the SAME browse window against the now-larger scrollback. The anchored
+      // rows are unchanged (new output only appends at the bottom), so the
+      // visible history stays put while the tail keeps flowing below.
+      if let browseTop = surface.gridView.browseTopAbsoluteRow {
+        let visibleRows = snapshot.frame?.rows ?? surface.lastFrame?.rows ?? 0
+        // Persist the refreshed bridge/scrollbar before handing off to
+        // presentBrowseWindow (which reads surfaces[id] fresh and writes it back).
+        surfaces[id] = surface
+        if visibleRows > 0 {
+          presentBrowseWindow(session: id, topAbsoluteRow: browseTop, visibleRows: visibleRows)
+        }
+        return
+      }
+      // Event-driven row-based history view (non-pattern-2 fallback): keep the
+      // legacy freeze so output doesn't fight the row-commit path.
+      if surface.gridView.isViewingHistory {
+        surfaces[id] = surface
+        return
+      }
     }
     if !wasPinnedToBottom, surface.containerView.isShowingLiveGrid {
       surfaces[id] = surface
