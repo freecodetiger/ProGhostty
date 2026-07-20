@@ -19,23 +19,39 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Show Swift toolchain
-        run: swift --version
+      - name: Show toolchain
+        run: |
+          set -euxo pipefail
+          uname -a
+          swift --version
+          xcode-select -p
+          xcrun --show-sdk-path
+          test -f Vendor/ghostty/build.zig
 
       - name: Install Zig
         run: |
+          set -euxo pipefail
           mkdir -p .tools
-          curl -L https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz -o .tools/zig.tar.xz
+          case "$(uname -m)" in
+            arm64) ZIG_ARCH=aarch64 ;;
+            x86_64) ZIG_ARCH=x86_64 ;;
+            *) echo "unsupported arch: $(uname -m)"; exit 1 ;;
+          esac
+          curl -fL "https://ziglang.org/download/0.15.2/zig-${ZIG_ARCH}-macos-0.15.2.tar.xz" -o .tools/zig.tar.xz
           tar -xf .tools/zig.tar.xz -C .tools
+          echo "${GITHUB_WORKSPACE}/.tools/zig-${ZIG_ARCH}-macos-0.15.2" >> "$GITHUB_PATH"
+          ".tools/zig-${ZIG_ARCH}-macos-0.15.2/zig" version
 
       - name: Build Ghostty VT
+        working-directory: Vendor/ghostty
         run: |
-          cd Vendor/ghostty
-          ../../.tools/zig-aarch64-macos-0.15.2/zig build \
-            --global-cache-dir ../../.zig-cache-global \
+          set -euxo pipefail
+          zig build \
+            --global-cache-dir "${GITHUB_WORKSPACE}/.zig-cache-global" \
             -Demit-lib-vt=true \
             -Demit-xcframework=false \
             -Doptimize=ReleaseFast
+          test -f zig-out/lib/libghostty-vt.a
 
       - name: Architecture guard
         run: scripts/check-architecture.sh
