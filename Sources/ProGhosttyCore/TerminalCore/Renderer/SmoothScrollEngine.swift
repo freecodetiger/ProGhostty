@@ -189,15 +189,6 @@ public struct SmoothScrollEngine: Sendable {
     lastTickTime = nil
     recentVelocities.removeAll(keepingCapacity: true)
   }
-
-  /// Rebase after `rows` whole rows were committed to the VT: subtract them from
-  /// the continuous position so the sub-row remainder is preserved and no visual
-  /// jump occurs.
-  public mutating func rebaseCommittedRows(_ rows: Int, cellHeight: CGFloat) {
-    let shift = CGFloat(rows) * cellHeight
-    position -= shift
-    target -= shift
-  }
 }
 
 public enum WheelPhase: Sendable, Equatable {

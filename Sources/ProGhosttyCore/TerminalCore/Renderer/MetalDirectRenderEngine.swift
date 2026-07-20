@@ -152,11 +152,6 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     }
   }
 
-  private struct OffscreenTexture {
-    let texture: MTLTexture
-    let didResize: Bool
-  }
-
   private let device: MTLDevice
   private let commandQueue: MTLCommandQueue
   var prefersAsyncPresent: Bool = false
@@ -171,9 +166,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
   private let textureLoader: MTKTextureLoader
   private let backgroundPipeline: MTLRenderPipelineState
   private let glyphPipeline: MTLRenderPipelineState
-  private let compositePipeline: MTLRenderPipelineState
   private var cachedTextures: [Int: CachedTexture] = [:]
-  private var offscreenTexture: MTLTexture?
   private let completionBox = MetalDirectFrameCompletionBox()
   private var previousTransientOverlayRevision = 0
 
@@ -213,15 +206,8 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       vertexFunctionName: "metal_direct_vertex",
       fragmentFunctionName: "metal_direct_glyph_fragment"
     )
-    let compositePipeline = try Self.makePipeline(
-      device: device,
-      library: library,
-      vertexFunctionName: "metal_direct_vertex",
-      fragmentFunctionName: "metal_direct_composite_fragment"
-    )
     self.backgroundPipeline = backgroundPipeline
     self.glyphPipeline = glyphPipeline
-    self.compositePipeline = compositePipeline
     pipelineReady = true
   }
 
@@ -541,53 +527,6 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     ]
   }
 
-  private func ensureOffscreenTexture(size: CGSize) -> OffscreenTexture? {
-    let width = max(1, Int(size.width.rounded(.up)))
-    let height = max(1, Int(size.height.rounded(.up)))
-    if let offscreenTexture, offscreenTexture.width == width, offscreenTexture.height == height {
-      return OffscreenTexture(texture: offscreenTexture, didResize: false)
-    }
-    let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
-    descriptor.usage = [.renderTarget, .shaderRead]
-    descriptor.storageMode = .private
-    guard let texture = device.makeTexture(descriptor: descriptor) else {
-      return nil
-    }
-    offscreenTexture = texture
-    return OffscreenTexture(texture: texture, didResize: true)
-  }
-
-  static func renderTargetSize(
-    for plan: MetalTerminalRenderPlan,
-    contentInset: CGSize
-  ) -> CGSize {
-    let pixelScale = plan.backingScale
-    let cellSize = CGSize(
-      width: plan.cellSize.width * pixelScale,
-      height: plan.cellSize.height * pixelScale
-    )
-    let inset = CGSize(
-      width: contentInset.width * pixelScale,
-      height: contentInset.height * pixelScale
-    )
-    // The offscreen texture holds the FULL expanded grid — the viewport plus the
-    // overscan bands above and below — so the display link can translate the
-    // visible band by many rows without a VT commit (R1). Size it for the FIXED
-    // maximum overscan (pixelScrollOverscanRows) on BOTH sides, not the actual
-    // per-frame counts: the returned overscan fluctuates near the scrollback
-    // edge, and letting the texture track it would resize/reallocate every
-    // frame (expensive, forces full redraw, stalls the display link). A stable
-    // over-sized texture is reused across frames; the composite quad selects the
-    // viewport band using the ACTUAL overscanTop count, so unused texture area
-    // stays off-screen.
-    let maxOverscan = GhosttyTerminalScrollFrame.pixelScrollOverscanRows
-    let totalRows = maxOverscan + plan.viewportRows + maxOverscan
-    return CGSize(
-      width: max(1, ceil(inset.width * 2 + CGFloat(plan.cols) * cellSize.width)),
-      height: max(1, ceil(inset.height * 2 + CGFloat(totalRows) * cellSize.height))
-    )
-  }
-
   static func drawableTargetSize(
     forViewBounds bounds: CGSize,
     backingScale: CGFloat
@@ -597,38 +536,6 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       width: max(1, ceil(bounds.width * scale)),
       height: max(1, ceil(bounds.height * scale))
     )
-  }
-
-  static func offscreenOverlays(
-    from overlays: [MetalOverlayPrimitive],
-    drawCursorOnDrawable: Bool
-  ) -> [MetalOverlayPrimitive] {
-    overlays.filter { overlay in
-      switch overlay.kind {
-      case .selection, .linkHover, .markedText:
-        return false
-      case .cursor:
-        return !drawCursorOnDrawable
-      }
-    }
-  }
-
-  static func drawableOverlays(
-    from overlays: [MetalOverlayPrimitive],
-    drawCursorOnDrawable: Bool
-  ) -> [MetalOverlayPrimitive] {
-    overlays.filter { overlay in
-      switch overlay.kind {
-      case .selection, .linkHover, .markedText:
-        return true
-      case .cursor:
-        return drawCursorOnDrawable
-      }
-    }
-  }
-
-  static func cursorShouldDrawOnDrawable(shape: TerminalCursorShape) -> Bool {
-    true
   }
 
   static func cursorGlyphLayout(
@@ -1140,10 +1047,6 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     ]
   }
 
-  private func drawTranslationY(topOverscanRows: Int, pixelRemainderY: CGFloat, cellHeight: CGFloat) -> CGFloat {
-    -CGFloat(topOverscanRows) * cellHeight + pixelRemainderY
-  }
-
   private static func makePipeline(
     device: MTLDevice,
     library: MTLLibrary,
@@ -1228,14 +1131,6 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::nearest);
     float alpha = texture0.sample(s, in.texCoord).a;
     return float4(in.color.rgb, in.color.a * alpha);
-  }
-
-  fragment float4 metal_direct_composite_fragment(
-    VertexOut in [[stage_in]],
-    texture2d<float> texture0 [[texture(0)]]
-  ) {
-    constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::nearest);
-    return texture0.sample(s, in.texCoord);
   }
   """#
 }

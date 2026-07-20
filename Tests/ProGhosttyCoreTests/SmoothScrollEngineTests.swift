@@ -117,18 +117,6 @@ struct SmoothScrollEngineTests {
     #expect(r.offsetY == 0)
   }
 
-  @Test func rebaseCommittedRowsPreservesRemainder() {
-    var engine = SmoothScrollEngine()
-    engine.addDiscreteScroll(delta: 50, time: 0)
-    var t = 0.0
-    for _ in 0..<400 { t += 1.0/120.0; _ = engine.tick(now: t) }
-    let before = engine.resolve(cellHeight: 22)
-    engine.rebaseCommittedRows(before.rowDelta, cellHeight: 22)
-    let after = engine.resolve(cellHeight: 22)
-    #expect(after.rowDelta == 0)                       // rows folded into commit
-    #expect(abs(after.offsetY - before.offsetY) < 0.001)  // remainder preserved
-  }
-
   @Test func inertiaSeedsFromPeakNotLastSlowTick() {
     // A fast fling that ends with one near-still settling tick must still enter
     // inertia — the seed comes from the peak of the recent window, not the last

@@ -179,35 +179,6 @@ struct TerminalRendererBackendTests {
     #expect(view.needsDisplay == false)
   }
 
-  @MainActor @Test func metalDirectRenderTargetIncludesOverscanRows() {
-    let plan = MetalTerminalRenderPlan(
-      presentation: .scrollFrame,
-      viewportRows: 2,
-      cols: 4,
-      overscanTopRows: 1,
-      overscanBottomRows: 1,
-      pixelRemainderY: 5,
-      dirtyRows: [0, 1],
-      cellSize: CGSize(width: 8, height: 16),
-      backingScale: 2,
-      isFocused: true
-    )
-
-    let size = MetalDirectRenderEngine.renderTargetSize(
-      for: plan,
-      contentInset: CGSize(width: 14, height: 12)
-    )
-
-    // R1: the offscreen texture is sized for the FIXED maximum overscan
-    // (pixelScrollOverscanRows = 24) on both sides so it never resizes as the
-    // actual per-frame overscan count fluctuates. The composite quad selects the
-    // viewport band using the actual overscanTop count; unused area stays
-    // off-screen.
-    // width  = (inset 14*2 + cols 4 * cell 8) * scale 2 = 120
-    // height = (inset 12*2 + (24 + viewport 2 + 24) * cell 16) * scale 2 = 1648
-    #expect(size == CGSize(width: 120, height: 1648))
-  }
-
   @MainActor @Test func metalDirectDrawableTargetUsesViewBackingSizeNotTerminalContentSize() {
     let size = MetalDirectRenderEngine.drawableTargetSize(
       forViewBounds: CGSize(width: 503.5, height: 371.25),
@@ -1015,31 +986,6 @@ struct TerminalRendererBackendTests {
     #expect(engine.lastRenderedRowCount == frame.rows)
   }
 
-  @MainActor @Test func metalDirectDrawablePassOwnsTransientOverlays() {
-    let overlays = [
-      MetalOverlayPrimitive(kind: .cursor, phase: .aboveGlyphs, rect: .zero, color: SIMD4<Float>(1, 1, 1, 1)),
-      MetalOverlayPrimitive(kind: .selection, phase: .aboveGlyphs, rect: .zero, color: SIMD4<Float>(1, 1, 1, 1)),
-      MetalOverlayPrimitive(kind: .linkHover, phase: .aboveGlyphs, rect: .zero, color: SIMD4<Float>(1, 1, 1, 1)),
-      MetalOverlayPrimitive(kind: .markedText, phase: .aboveGlyphs, rect: .zero, color: SIMD4<Float>(1, 1, 1, 1)),
-    ]
-
-    let offscreen = MetalDirectRenderEngine.offscreenOverlays(from: overlays, drawCursorOnDrawable: true)
-    let drawable = MetalDirectRenderEngine.drawableOverlays(from: overlays, drawCursorOnDrawable: true)
-
-    #expect(offscreen.isEmpty)
-    #expect(drawable.map(\.kind) == [.cursor, .selection, .linkHover, .markedText])
-  }
-
-  @MainActor @Test func metalDirectDrawsBlockCursorOnDrawableInsteadOfOffscreenTexture() {
-    let overlays = [
-      MetalOverlayPrimitive(kind: .cursor, phase: .beneathGlyphs, rect: .zero, color: SIMD4<Float>(1, 1, 1, 1)),
-    ]
-
-    #expect(MetalDirectRenderEngine.cursorShouldDrawOnDrawable(shape: .block))
-    #expect(MetalDirectRenderEngine.offscreenOverlays(from: overlays, drawCursorOnDrawable: true).isEmpty)
-    #expect(MetalDirectRenderEngine.drawableOverlays(from: overlays, drawCursorOnDrawable: true).map(\.kind) == [.cursor])
-  }
-
   @MainActor @Test func metalDirectBlockCursorGlyphLayoutDrawsCursorCellTextOnDrawable() {
     var snapshot = frame(rows: ["abc"], cols: 3, cursorX: 1, cursorY: 0)
     snapshot.cursorShape = .block
@@ -1601,8 +1547,7 @@ struct TerminalRendererBackendTests {
   @MainActor @Test func metalDirectGlyphShaderSamplesGlyphAtlasWithoutLinearFiltering() throws {
     let source = MetalDirectRenderEngine.shaderSource
     let glyphFragment = try #require(source.range(of: "metal_direct_glyph_fragment"))
-    let compositeFragment = try #require(source.range(of: "metal_direct_composite_fragment"))
-    let fragmentSource = source[glyphFragment.lowerBound..<compositeFragment.lowerBound]
+    let fragmentSource = source[glyphFragment.lowerBound...]
 
     #expect(fragmentSource.contains("filter::nearest"))
     #expect(!fragmentSource.contains("filter::linear"))
