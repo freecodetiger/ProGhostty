@@ -24,7 +24,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     smoothPixelScrollingEnabled: true,
     dirtyRowRenderingEnabled: true,
     forceFullRedrawEnabled: false,
-    notificationsEnabled: true,
+    notificationsEnabled: false,
     notifyWhenFocused: false,
     defaultShell: "/bin/zsh",
     defaultWorkingDirectory: nil,

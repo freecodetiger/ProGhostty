@@ -2,12 +2,58 @@
 
 #include <errno.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 #include <util.h>
+
+// execve uses the provided envp, not process environ — inject the key into a
+// shallow copy (pointers into envp except the one PROGHOSTTY_NOTIFY_TTY entry).
+static char **envp_with_notify_tty(char *const envp[], const char *tty_path) {
+  if (envp == NULL || tty_path == NULL || tty_path[0] == '\0') {
+    return NULL;
+  }
+
+  size_t count = 0;
+  while (envp[count] != NULL) {
+    count += 1;
+  }
+
+  char **copy = calloc(count + 2, sizeof(char *));
+  if (copy == NULL) {
+    return NULL;
+  }
+
+  const char *prefix = "PROGHOSTTY_NOTIFY_TTY=";
+  const size_t prefix_len = strlen(prefix);
+  const size_t entry_len = prefix_len + strlen(tty_path) + 1;
+  char *entry = malloc(entry_len);
+  if (entry == NULL) {
+    free(copy);
+    return NULL;
+  }
+  snprintf(entry, entry_len, "%s%s", prefix, tty_path);
+
+  size_t out = 0;
+  int replaced = 0;
+  for (size_t i = 0; i < count; i++) {
+    if (strncmp(envp[i], prefix, prefix_len) == 0) {
+      copy[out++] = entry;
+      replaced = 1;
+    } else {
+      copy[out++] = envp[i];
+    }
+  }
+  if (!replaced) {
+    copy[out++] = entry;
+  }
+  copy[out] = NULL;
+  return copy;
+}
 
 int proghostty_spawn_pty(
   const char *path,
@@ -29,8 +75,11 @@ int proghostty_spawn_pty(
   size.ws_xpixel = 0;
   size.ws_ypixel = 0;
 
+  char slave_name[128];
+  slave_name[0] = '\0';
   int master = -1;
-  pid_t pid = forkpty(&master, NULL, NULL, &size);
+  // forkpty fills slave_name with the path (e.g. /dev/ttys00N) for both sides.
+  pid_t pid = forkpty(&master, slave_name, NULL, &size);
   if (pid < 0) {
     return errno;
   }
@@ -39,7 +88,9 @@ int proghostty_spawn_pty(
     if (cwd != NULL && cwd[0] != '\0') {
       (void)chdir(cwd);
     }
-    execve(path, argv, envp);
+    // Inject concrete slave path so Stop hooks / `pg notify` need not open /dev/tty.
+    char **owned = envp_with_notify_tty(envp, slave_name);
+    execve(path, argv, owned != NULL ? owned : envp);
     _exit(127);
   }
 

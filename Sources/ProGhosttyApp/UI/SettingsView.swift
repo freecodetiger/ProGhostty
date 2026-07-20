@@ -12,6 +12,7 @@ struct SettingsView: View {
   @State private var selectedCategory: SettingsCategory = .terminal
   @State private var searchText = ""
   @State private var highlightedItemID: String?
+  @State private var notificationsToggle = false
 
   var body: some View {
     let text = model.appText
@@ -52,6 +53,17 @@ struct SettingsView: View {
     ))
     .onAppear {
       shortcutRecorderState = ShortcutRecorderState(settings: model.settings.keyboardShortcuts)
+      notificationsToggle = model.settings.notificationsEnabled
+      model.refreshAgentNotifyHookStatus()
+    }
+    .onChange(of: model.settings.notificationsEnabled) { enabled in
+      notificationsToggle = enabled
+    }
+    .sheet(isPresented: $model.showAgentNotifyInstallSheet) {
+      agentNotifyInstallSheet(text: text)
+    }
+    .sheet(isPresented: $model.showAgentNotifyUninstallSheet) {
+      agentNotifyUninstallSheet(text: text)
     }
   }
 
@@ -250,12 +262,21 @@ struct SettingsView: View {
   private func notificationsPane(text: AppText) -> some View {
     SettingsSection(text.taskCompletionNotifications) {
       VStack(alignment: .leading, spacing: 4) {
-        Toggle(text.enableNotifications, isOn: $model.settings.notificationsEnabled)
+        Toggle(text.enableNotifications, isOn: notificationsEnabledBinding)
         Text(text.enableNotificationsCaption)
           .font(.system(size: 12))
           .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
       }
       .id("notifications.enable")
+
+      agentHooksStatusRow(text: text)
+        .id("notifications.hooks")
+
+      if let error = model.agentNotifyHookError, !error.isEmpty {
+        Text(error)
+          .font(.system(size: 12))
+          .foregroundStyle(.red)
+      }
 
       VStack(alignment: .leading, spacing: 4) {
         Toggle(text.notifyWhenFocused, isOn: $model.settings.notifyWhenFocused)
@@ -263,7 +284,7 @@ struct SettingsView: View {
           .font(.system(size: 12))
           .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
       }
-      .settingsSubordinate(enabled: model.settings.notificationsEnabled)
+      .settingsSubordinate(enabled: model.settings.notificationsEnabled && model.agentNotifyHooksStatus.isReady)
       .id("notifications.focused")
 
       if model.settings.notificationsEnabled, !model.systemNotificationsAuthorized {
@@ -277,6 +298,103 @@ struct SettingsView: View {
       }
     }
     .settingsHighlight(id: "notifications.enable", current: highlightedItemID)
+    .onAppear { model.refreshAgentNotifyHookStatus() }
+  }
+
+  private var notificationsEnabledBinding: Binding<Bool> {
+    Binding(
+      get: { notificationsToggle },
+      set: { newValue in
+        notificationsToggle = newValue
+        model.setNotificationsEnabled(newValue)
+        // If install was cancelled, model leaves settings off — resync toggle.
+        notificationsToggle = model.settings.notificationsEnabled
+      }
+    )
+  }
+
+  @ViewBuilder
+  private func agentHooksStatusRow(text: AppText) -> some View {
+    let status = model.agentNotifyHooksStatus
+    HStack(alignment: .top, spacing: 10) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(agentHooksStatusLabel(status: status, text: text))
+          .font(.system(size: 12))
+          .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+        if let detail = status.detail, !detail.isEmpty {
+          Text(detail)
+            .font(.system(size: 11))
+            .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor).opacity(0.85))
+        }
+      }
+      Spacer()
+      if status.isReady {
+        EmptyView()
+      } else if status.isMissing {
+        Button(text.agentHooksInstall) { model.repairAgentNotifyHooks() }
+          .disabled(model.isInstallingAgentNotifyHooks)
+      } else {
+        Button(text.agentHooksRepair) { model.repairAgentNotifyHooks() }
+          .disabled(model.isInstallingAgentNotifyHooks)
+      }
+    }
+  }
+
+  private func agentHooksStatusLabel(status: AgentNotifyHookStatus, text: AppText) -> String {
+    if status.isReady { return text.agentHooksReady }
+    if status.isMissing { return text.agentHooksMissing }
+    return text.agentHooksPartial
+  }
+
+  @ViewBuilder
+  private func agentNotifyInstallSheet(text: AppText) -> some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text(text.agentHooksInstallTitle)
+        .font(.system(size: 15, weight: .semibold))
+      Text(text.agentHooksInstallMessage)
+        .font(.system(size: 12))
+        .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+        .fixedSize(horizontal: false, vertical: true)
+      if let error = model.agentNotifyHookError, !error.isEmpty {
+        Text(error)
+          .font(.system(size: 12))
+          .foregroundStyle(.red)
+      }
+      HStack {
+        Spacer()
+        Button(text.cancel) { model.cancelInstallAgentNotifyHooks() }
+          .keyboardShortcut(.cancelAction)
+        Button(text.agentHooksInstallConfirm) { model.confirmInstallAgentNotifyHooks() }
+          .keyboardShortcut(.defaultAction)
+          .disabled(model.isInstallingAgentNotifyHooks)
+      }
+    }
+    .padding(20)
+    .frame(minWidth: 420)
+  }
+
+  @ViewBuilder
+  private func agentNotifyUninstallSheet(text: AppText) -> some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text(text.agentHooksUninstallTitle)
+        .font(.system(size: 15, weight: .semibold))
+      Text(text.agentHooksUninstallMessage)
+        .font(.system(size: 12))
+        .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+        .fixedSize(horizontal: false, vertical: true)
+      HStack {
+        Spacer()
+        Button(text.agentHooksUninstallKeep) {
+          model.confirmUninstallAgentNotifyHooks(removeHooks: false)
+        }
+        Button(text.agentHooksUninstallConfirm, role: .destructive) {
+          model.confirmUninstallAgentNotifyHooks(removeHooks: true)
+        }
+        .keyboardShortcut(.defaultAction)
+      }
+    }
+    .padding(20)
+    .frame(minWidth: 400)
   }
 
   @ViewBuilder

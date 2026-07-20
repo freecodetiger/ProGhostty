@@ -79,11 +79,33 @@ struct AppText {
   var settingsSearchPlaceholder: String { text("Search settings", "搜索设置") }
   var noSearchResults: String { text("No matching settings", "无匹配设置项") }
   var enableNotifications: String { text("Notify on task completion", "任务完成时通知") }
-  var enableNotificationsCaption: String { text("Notifies you when an agent (Claude Code, Codex, …) finishes a task via pg notify.", "当 agent（Claude Code、Codex 等）通过 pg notify 报告任务完成时提醒你。") }
+  var enableNotificationsCaption: String { text("When an agent (Claude Code, Codex, …) finishes a task. Requires installing a small Stop hook (you will be asked first).", "当 agent（Claude Code、Codex 等）完成任务时提醒。需先安装 Stop hook（会先征求你同意）。") }
   var notifyWhenFocused: String { text("Notify even when focused", "聚焦时也通知") }
   var notifyWhenFocusedCaption: String { text("By default you are only notified when the pane is not focused.", "默认只在该分屏未聚焦时通知。") }
   var notificationsPermissionHint: String { text("System notifications are not enabled for ProGhostty.", "系统尚未授予 ProGhostty 通知权限。") }
   var openSystemSettings: String { text("Open System Settings", "打开系统设置") }
+  var agentHooksReady: String { text("Agent hooks installed (Codex / Claude Code).", "Agent hook 已安装（Codex / Claude Code）。") }
+  var agentHooksMissing: String { text("Agent hooks not installed. Turn on the switch to install.", "未安装 agent hook。打开开关将引导安装。") }
+  var agentHooksPartial: String { text("Agent hooks incomplete.", "Agent hook 未就绪。") }
+  var agentHooksInstall: String { text("Install…", "安装…") }
+  var agentHooksRepair: String { text("Repair…", "修复…") }
+  var agentHooksInstallTitle: String { text("Install agent notification hooks?", "安装 agent 任务完成通知 hook？") }
+  var agentHooksInstallMessage: String {
+    text(
+      "ProGhostty will write scripts under ~/.proghostty/hooks and add a Stop hook for Codex (~/.codex/hooks.json) and Claude Code (~/.claude/settings.json). On task end they run pg notify. Config files are backed up first. You can remove the hooks when turning this off.",
+      "ProGhostty 将在 ~/.proghostty/hooks 写入脚本，并为 Codex（~/.codex/hooks.json）与 Claude Code（~/.claude/settings.json）添加 Stop hook。任务结束时调用 pg notify。修改前会备份配置。关闭本功能时可移除 hook。"
+    )
+  }
+  var agentHooksInstallConfirm: String { text("Install and Enable", "安装并开启") }
+  var agentHooksUninstallTitle: String { text("Remove agent notification hooks?", "移除 agent 通知 hook？") }
+  var agentHooksUninstallMessage: String {
+    text(
+      "Notifications are off. Also remove the ProGhostty Stop hooks from Codex and Claude Code?",
+      "通知已关闭。是否同时从 Codex / Claude Code 移除 ProGhostty 写入的 Stop hook？"
+    )
+  }
+  var agentHooksUninstallConfirm: String { text("Remove Hooks", "移除 hook") }
+  var agentHooksUninstallKeep: String { text("Keep Hooks", "保留 hook") }
   var shortcuts: String { text("Shortcuts", "快捷键") }
   var shortcutConflict: String { text("Shortcut is already used.", "快捷键已被占用。") }
   var recordShortcut: String { text("Record", "录制") }

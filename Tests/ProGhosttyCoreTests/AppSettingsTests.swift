@@ -98,19 +98,25 @@ struct AppSettingsTests {
 
     let settings = try JSONDecoder().decode(AppSettings.self, from: data)
 
-    #expect(settings.notificationsEnabled)
+    // Missing key uses current default (off until user arms hooks).
+    #expect(!settings.notificationsEnabled)
     #expect(!settings.notifyWhenFocused)
+  }
+
+  @Test func notificationSettingsDefaultToOff() {
+    #expect(!AppSettings.defaults.notificationsEnabled)
+    #expect(!AppSettings.defaults.notifyWhenFocused)
   }
 
   @Test func notificationSettingsRoundTripThroughJSON() throws {
     var settings = AppSettings.defaults
-    settings.notificationsEnabled = false
+    settings.notificationsEnabled = true
     settings.notifyWhenFocused = true
 
     let data = try JSONEncoder().encode(settings)
     let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
 
-    #expect(decoded.notificationsEnabled == false)
+    #expect(decoded.notificationsEnabled == true)
     #expect(decoded.notifyWhenFocused == true)
   }
 
