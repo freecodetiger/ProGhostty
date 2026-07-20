@@ -476,15 +476,15 @@ final class AppModel: ObservableObject {
 
   var appColorScheme: ColorScheme? {
     guard !settings.followSystemAppearance else { return nil }
-    return settings.themeName == "light" ? .light : .dark
+    return ThemeManager.isDarkFamily(settings.themeName) ? .dark : .light
   }
 
   var terminalPalette: TerminalSurfacePalette {
-    effectiveThemeName == "light" ? .light : .dark
+    ThemeManager.terminalPalette(for: effectiveThemeName)
   }
 
   var usesDarkAppearance: Bool {
-    effectiveThemeName == "dark"
+    ThemeManager.isDarkFamily(effectiveThemeName)
   }
 
   var terminalBackgroundColor: NSColor {
@@ -496,7 +496,7 @@ final class AppModel: ObservableObject {
   }
 
   var settingsThemePalette: ProGhosttySettingsThemeColors {
-    usesDarkAppearance ? ProGhosttySettingsThemePalette.dark : ProGhosttySettingsThemePalette.light
+    ProGhosttySettingsThemePalette.palette(for: effectiveThemeName)
   }
 
   var configurationWindowBackgroundColor: NSColor {
@@ -1148,6 +1148,8 @@ final class AppModel: ObservableObject {
       applyConfigurationWindowAppearance(to: window)
       window.makeKeyAndOrderFront(nil)
       NSApp.activate(ignoringOtherApps: true)
+      // show/makeKey can reinstate system title after we hide it; re-apply next turn.
+      reassertSettingsWindowChrome()
       return
     }
 
@@ -1170,6 +1172,19 @@ final class AppModel: ObservableObject {
     settingsWindowController = windowController
     windowController.showWindow(nil)
     NSApp.activate(ignoringOtherApps: true)
+    // Preference-style titlebar materializes on show and can reset titleVisibility.
+    reassertSettingsWindowChrome()
+  }
+
+  /// Sidebar / split layout can briefly restore the system "Settings" title; cheap re-hide.
+  func reassertSettingsWindowChrome() {
+    guard let window = settingsWindowController?.window else { return }
+    applyConfigurationWindowAppearance(to: window)
+    // Cover AppKit applying defaults after the current layout pass.
+    DispatchQueue.main.async { [weak self] in
+      guard let self, let window = self.settingsWindowController?.window else { return }
+      self.applyConfigurationWindowAppearance(to: window)
+    }
   }
 
   private func applyTerminalAppearance() {
@@ -1272,9 +1287,15 @@ final class AppModel: ObservableObject {
   }
 
   private var effectiveThemeName: String {
-    guard settings.followSystemAppearance else { return settings.themeName }
     let appearance = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
-    return appearance == .aqua ? "light" : "dark"
+    let systemIsLight = appearance == .aqua
+    return ThemeManager.effectiveThemeName(
+      themeName: settings.themeName,
+      followSystemAppearance: settings.followSystemAppearance,
+      softDarkPreferred: settings.softDarkPreferred,
+      softLightPreferred: settings.softLightPreferred,
+      systemIsLight: systemIsLight
+    )
   }
 
   func closeUtilityOverlays() {

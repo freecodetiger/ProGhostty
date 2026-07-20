@@ -59,6 +59,10 @@ struct SettingsView: View {
     .onChange(of: model.settings.notificationsEnabled) { enabled in
       notificationsToggle = enabled
     }
+    .onChange(of: selectedCategory) { _ in
+      // NavigationSplitView relayout can reinstate the system window title.
+      model.reassertSettingsWindowChrome()
+    }
     .sheet(isPresented: $model.showAgentNotifyInstallSheet) {
       agentNotifyInstallSheet(text: text)
     }
@@ -213,15 +217,41 @@ struct SettingsView: View {
       .id("appearance.language")
 
       SettingsRow(text.theme) {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
           Toggle(text.followSystem, isOn: $model.settings.followSystemAppearance)
-          Picker("", selection: $model.settings.themeName) {
-            Text(text.light).tag("light")
-            Text(text.dark).tag("dark")
+
+          if model.settings.followSystemAppearance {
+            VStack(alignment: .leading, spacing: 6) {
+              Text(text.darkPreset)
+                .font(.system(size: 12))
+                .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+              Picker("", selection: softDarkPreferredBinding) {
+                Text(text.dark).tag(false)
+                Text(text.softDark).tag(true)
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+
+              Text(text.lightPreset)
+                .font(.system(size: 12))
+                .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+              Picker("", selection: softLightPreferredBinding) {
+                Text(text.light).tag(false)
+                Text(text.softLight).tag(true)
+              }
+              .pickerStyle(.segmented)
+              .labelsHidden()
+            }
+          } else {
+            Picker("", selection: themeNameBinding) {
+              Text(text.dark).tag("dark")
+              Text(text.softDark).tag("soft-dark")
+              Text(text.light).tag("light")
+              Text(text.softLight).tag("soft-light")
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
           }
-          .pickerStyle(.segmented)
-          .labelsHidden()
-          .settingsSubordinate(enabled: !model.settings.followSystemAppearance)
         }
       }
       .id("appearance.theme")
@@ -309,6 +339,53 @@ struct SettingsView: View {
         model.setNotificationsEnabled(newValue)
         // If install was cancelled, model leaves settings off — resync toggle.
         notificationsToggle = model.settings.notificationsEnabled
+      }
+    )
+  }
+
+  /// Manual theme picker: keep Soft family prefs in sync with the chosen id.
+  private var themeNameBinding: Binding<String> {
+    Binding(
+      get: { model.settings.themeName },
+      set: { name in
+        let normalized = ThemeManager.normalizedThemeName(name)
+        model.settings.themeName = normalized
+        switch normalized {
+        case "soft-dark":
+          model.settings.softDarkPreferred = true
+        case "dark":
+          model.settings.softDarkPreferred = false
+        case "soft-light":
+          model.settings.softLightPreferred = true
+        case "light":
+          model.settings.softLightPreferred = false
+        default:
+          break
+        }
+      }
+    )
+  }
+
+  private var softDarkPreferredBinding: Binding<Bool> {
+    Binding(
+      get: { model.settings.softDarkPreferred },
+      set: { preferred in
+        model.settings.softDarkPreferred = preferred
+        if !model.settings.followSystemAppearance, ThemeManager.isDarkFamily(model.settings.themeName) {
+          model.settings.themeName = preferred ? "soft-dark" : "dark"
+        }
+      }
+    )
+  }
+
+  private var softLightPreferredBinding: Binding<Bool> {
+    Binding(
+      get: { model.settings.softLightPreferred },
+      set: { preferred in
+        model.settings.softLightPreferred = preferred
+        if !model.settings.followSystemAppearance, !ThemeManager.isDarkFamily(model.settings.themeName) {
+          model.settings.themeName = preferred ? "soft-light" : "light"
+        }
       }
     )
   }

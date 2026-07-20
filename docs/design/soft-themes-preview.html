@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ProGhostty · Soft themes (Nord + Solarized)</title>
+  <style>
+    :root {
+      --page: #0f1012;
+      --ink: #e8eaed;
+      --muted: #9aa3ad;
+      --card: #17191c;
+      --line: rgba(255,255,255,0.08);
+      --mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+      --sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: radial-gradient(1200px 600px at 20% -10%, #1a2230 0%, var(--page) 55%);
+      color: var(--ink);
+      min-height: 100vh;
+      padding: 32px 24px 64px;
+    }
+    header { max-width: 1180px; margin: 0 auto 28px; }
+    header h1 {
+      font-size: 22px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 8px;
+    }
+    header p {
+      margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; max-width: 78ch;
+    }
+    .note {
+      margin-top: 12px; font-size: 12.5px; color: var(--muted);
+      border-left: 3px solid #88c0d0; padding: 10px 12px;
+      background: rgba(136,192,208,0.08); border-radius: 0 8px 8px 0; line-height: 1.55;
+    }
+    .note strong { color: #d8dee9; }
+    .grid {
+      max-width: 1180px; margin: 0 auto;
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px;
+    }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .theme {
+      background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+      overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,0.28);
+    }
+    .theme.proposed {
+      outline: 1px solid rgba(136,192,208,0.45);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.28), 0 0 0 1px rgba(136,192,208,0.12);
+    }
+    .meta {
+      display: flex; justify-content: space-between; align-items: baseline;
+      gap: 12px; padding: 14px 16px 10px; border-bottom: 1px solid var(--line);
+    }
+    .meta h2 { margin: 0; font-size: 15px; font-weight: 600; }
+    .badge {
+      font-size: 11px; font-weight: 600; letter-spacing: 0.03em;
+      color: var(--muted); background: rgba(255,255,255,0.06);
+      padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+    }
+    .badge.new { color: #d8dee9; background: rgba(136,192,208,0.22); }
+    .swatches {
+      display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 4px;
+    }
+    .swatch {
+      display: flex; align-items: center; gap: 8px; min-width: 128px;
+      font-size: 11px; color: var(--muted); font-family: var(--mono);
+    }
+    .chip {
+      width: 18px; height: 18px; border-radius: 5px;
+      border: 1px solid rgba(255,255,255,0.14); flex: 0 0 auto;
+    }
+    .terminal {
+      margin: 12px 16px 16px; border-radius: 10px; overflow: hidden;
+      border: 1px solid rgba(0,0,0,0.2); font-family: var(--mono);
+      font-size: 12.5px; line-height: 1.55; min-height: 280px;
+    }
+    .titlebar {
+      display: flex; align-items: center; gap: 6px; padding: 9px 12px;
+      font-size: 11px; opacity: 0.92;
+      border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+    }
+    .dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: color-mix(in srgb, currentColor 28%, transparent);
+    }
+    .body { padding: 12px 14px 16px; white-space: pre-wrap; }
+    .dim { opacity: 0.78; }
+    .faint { opacity: 0.92; }
+    .prompt { font-weight: 500; }
+    .selection { border-radius: 3px; padding: 0 2px; }
+    .cursor {
+      display: inline-block; width: 0.6em; height: 1.1em;
+      vertical-align: -0.15em; margin-left: 1px; border-radius: 1px;
+    }
+    .ansi { display: flex; gap: 4px; margin-top: 10px; flex-wrap: wrap; }
+    .ansi span {
+      width: 18px; height: 18px; border-radius: 4px;
+      border: 1px solid rgba(128,128,128,0.25);
+    }
+    .values {
+      padding: 0 16px 14px; font-family: var(--mono); font-size: 11px;
+      color: var(--muted); line-height: 1.65;
+    }
+    .values a { color: #88c0d0; }
+    footer {
+      max-width: 1180px; margin: 28px auto 0; color: var(--muted);
+      font-size: 12.5px; line-height: 1.55;
+    }
+    footer code {
+      font-family: var(--mono); font-size: 11.5px;
+      background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 4px;
+    }
+    table.contrast {
+      width: 100%; border-collapse: collapse; margin-top: 10px;
+      font-family: var(--mono); font-size: 11.5px;
+    }
+    table.contrast th, table.contrast td {
+      text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line);
+    }
+    table.contrast th { color: var(--muted); font-weight: 500; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Soft Dark / Soft Light · 经考验色板评审稿</h1>
+    <p>
+      Soft Dark 按你在 <strong>Ghostty</strong> 里熟悉的那路气质改：
+      <strong>深色带一点蓝</strong>（不是 Nord 那种偏灰），接近 Atom One Dark /
+      Ghostty / One Dark 蓝深气质，底在 <code style="font-family:var(--mono);font-size:12px;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:4px">#282C34</code> 上再压一点 → <code style="font-family:var(--mono);font-size:12px;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:4px">#23272E</code>。
+      Soft Light 仍用 <strong>Solarized Light</strong>。用户选整套预设，不拧单色。
+    </p>
+    <div class="note">
+      <strong>Soft Dark 来源：</strong>
+      经典编辑器/终端深青蓝灰系 ——
+      <a href="https://ghostty.org/docs/config" style="color:#88c0d0">Ghostty</a>
+      / Atom One Dark 气质；底从常用 <strong>#282C34</strong> 再压到
+      <strong>#23272E</strong>，字色/注释仍用 One Dark 惯用对。<br />
+      <strong>Soft Light 来源：</strong>
+      <a href="https://ethanschoonover.com/solarized/" style="color:#88c0d0">Solarized Light</a>。<br />
+      可读性底线 ·
+      <a href="https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum.html" style="color:#88c0d0">WCAG 1.4.3</a>
+      （≥ 4.5:1 AA），可用
+      <a href="https://webaim.org/resources/contrastchecker/" style="color:#88c0d0">WebAIM</a> 复核。
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <!-- Default Dark -->
+    <section class="theme" style="--bg:#131314; --fg:#dbdbdb; --faint:#858585; --cursor:#dbdbdb; --sel-bg:rgba(219,219,219,0.18); --sel-fg:#e0e0e0; --split:rgba(255,255,255,0.10); --chrome:#1a1a1b;">
+      <div class="meta">
+        <h2>Default Dark</h2>
+        <span class="badge">现有</span>
+      </div>
+      <div class="swatches">
+        <div class="swatch"><span class="chip" style="background:#131314"></span>bg ~#131314</div>
+        <div class="swatch"><span class="chip" style="background:#dbdbdb"></span>fg ~#dbdbdb</div>
+        <div class="swatch"><span class="chip" style="background:#858585"></span>faint</div>
+        <div class="swatch"><span class="chip" style="background:#dbdbdb"></span>cursor</div>
+      </div>
+      <div class="terminal" style="background:var(--bg); color:var(--fg);">
+        <div class="titlebar" style="background:var(--chrome); color:var(--faint); border-color:var(--split);">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span style="margin-left:8px">workspace · main</span>
+        </div>
+        <div class="body">
+<span class="dim">zpc@zpc</span> <span class="prompt">ProGhostty</span> <span class="faint" style="color:var(--faint)">%</span> swift test
+<span class="faint" style="color:var(--faint)">◇ Test run started.</span>
+✔ Suite "App settings" passed
+<span class="selection" style="background:var(--sel-bg); color:var(--sel-fg)">selected line for copy</span>
+<span class="prompt">%</span> <span class="cursor" style="background:var(--cursor)"></span>
+<div class="ansi">
+  <span style="background:#000"></span><span style="background:#c44"></span><span style="background:#4a4"></span><span style="background:#bb4"></span>
+  <span style="background:#46a"></span><span style="background:#a4a"></span><span style="background:#4aa"></span><span style="background:#ccc"></span>
+</div>
+        </div>
+      </div>
+      <div class="values">calibratedWhite bg 0.075 · fg 0.86 · 中性近黑，对比偏硬</div>
+    </section>
+
+    <!-- Soft Dark = Ghostty / One Dark blue-black, one step deeper -->
+    <section class="theme proposed" style="--bg:#23272e; --fg:#abb2bf; --faint:#5c6370; --cursor:#abb2bf; --sel-bg:#353b45; --sel-fg:#d7dae0; --split:rgba(171,178,191,0.12); --chrome:#1b1f24;">
+      <div class="meta">
+        <h2>Soft Dark · Ghostty / One Dark</h2>
+        <span class="badge new">提案 · 略深蓝深</span>
+      </div>
+      <div class="swatches">
+        <div class="swatch"><span class="chip" style="background:#23272e"></span>bg #23272E</div>
+        <div class="swatch"><span class="chip" style="background:#abb2bf"></span>fg #ABB2BF</div>
+        <div class="swatch"><span class="chip" style="background:#5c6370"></span>faint #5C6370</div>
+        <div class="swatch"><span class="chip" style="background:#abb2bf"></span>cursor #ABB2BF</div>
+      </div>
+      <div class="terminal" style="background:var(--bg); color:var(--fg);">
+        <div class="titlebar" style="background:var(--chrome); color:var(--faint); border-color:var(--split);">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span style="margin-left:8px">workspace · main</span>
+        </div>
+        <div class="body">
+<span class="dim">zpc@zpc</span> <span class="prompt">ProGhostty</span> <span class="faint" style="color:var(--faint)">%</span> swift test
+<span class="faint" style="color:var(--faint)">◇ Test run started.</span>
+✔ Suite "App settings" passed
+<span class="selection" style="background:var(--sel-bg); color:var(--sel-fg)">selected line for copy</span>
+<span class="prompt">%</span> <span class="cursor" style="background:var(--cursor)"></span>
+<div class="ansi" title="One Dark accent 示意">
+  <span style="background:#23272e"></span><span style="background:#e06c75"></span><span style="background:#98c379"></span><span style="background:#e5c07b"></span>
+  <span style="background:#61afef"></span><span style="background:#c678dd"></span><span style="background:#56b6c2"></span><span style="background:#abb2bf"></span>
+</div>
+        </div>
+      </div>
+      <div class="values">
+        映射（Ghostty / One Dark 气质，底再压一档）：<br />
+        background = <strong style="color:#abb2bf">#23272E</strong>（#282C34 → 更深，仍带蓝）<br />
+        chrome = #1B1F24 · selection = #353B45<br />
+        body text = #ABB2BF · comments/faint = #5C6370 · cursor = #ABB2BF<br />
+        参考：Ghostty default dark · Atom One Dark
+      </div>
+    </section>
+
+    <!-- Default Light -->
+    <section class="theme" style="--bg:#f3f3f3; --fg:#161616; --faint:#7a7a7a; --cursor:#292929; --sel-bg:rgba(22,22,22,0.12); --sel-fg:#1f1f1f; --split:rgba(0,0,0,0.09); --chrome:#ececec;">
+      <div class="meta">
+        <h2>Default Light</h2>
+        <span class="badge">现有</span>
+      </div>
+      <div class="swatches">
+        <div class="swatch"><span class="chip" style="background:#f3f3f3"></span>bg ~#f3f3f3</div>
+        <div class="swatch"><span class="chip" style="background:#161616"></span>fg ~#161616</div>
+        <div class="swatch"><span class="chip" style="background:#7a7a7a"></span>faint</div>
+        <div class="swatch"><span class="chip" style="background:#292929"></span>cursor</div>
+      </div>
+      <div class="terminal" style="background:var(--bg); color:var(--fg);">
+        <div class="titlebar" style="background:var(--chrome); color:var(--faint); border-color:var(--split);">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span style="margin-left:8px">workspace · main</span>
+        </div>
+        <div class="body">
+<span class="dim">zpc@zpc</span> <span class="prompt">ProGhostty</span> <span class="faint" style="color:var(--faint)">%</span> swift test
+<span class="faint" style="color:var(--faint)">◇ Test run started.</span>
+✔ Suite "App settings" passed
+<span class="selection" style="background:var(--sel-bg); color:var(--sel-fg)">selected line for copy</span>
+<span class="prompt">%</span> <span class="cursor" style="background:var(--cursor)"></span>
+<div class="ansi">
+  <span style="background:#000"></span><span style="background:#c44"></span><span style="background:#4a4"></span><span style="background:#bb4"></span>
+  <span style="background:#46a"></span><span style="background:#a4a"></span><span style="background:#4aa"></span><span style="background:#ccc"></span>
+</div>
+        </div>
+      </div>
+      <div class="values">calibratedWhite bg 0.955 · fg 0.085 · 近纸白，偏刺眼</div>
+    </section>
+
+    <!-- Soft Light = Solarized Light -->
+    <section class="theme proposed" style="--bg:#fdf6e3; --fg:#000000; --faint:#657b83; --cursor:#000000; --sel-bg:#eee8d5; --sel-fg:#000000; --split:rgba(88,110,117,0.22); --chrome:#eee8d5;">
+      <div class="meta">
+        <h2>Soft Light · Solarized Light</h2>
+        <span class="badge new">提案 · 官方色</span>
+      </div>
+      <div class="swatches">
+        <div class="swatch"><span class="chip" style="background:#fdf6e3"></span>bg base3 #FDF6E3</div>
+        <div class="swatch"><span class="chip" style="background:#000000"></span>fg #000000</div>
+        <div class="swatch"><span class="chip" style="background:#657b83"></span>faint base00 #657B83</div>
+        <div class="swatch"><span class="chip" style="background:#000000"></span>cursor #000000</div>
+      </div>
+      <div class="terminal" style="background:var(--bg); color:var(--fg);">
+        <div class="titlebar" style="background:var(--chrome); color:var(--faint); border-color:var(--split);">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span style="margin-left:8px">workspace · main</span>
+        </div>
+        <div class="body">
+<span class="dim">zpc@zpc</span> <span class="prompt">ProGhostty</span> <span class="faint" style="color:var(--faint)">%</span> swift test
+<span class="faint" style="color:var(--faint)">◇ Test run started.</span>
+✔ Suite "App settings" passed
+<span class="selection" style="background:var(--sel-bg); color:var(--sel-fg)">selected line for copy</span>
+<span class="prompt">%</span> <span class="cursor" style="background:var(--cursor)"></span>
+<div class="ansi" title="Solarized accent 示意">
+  <span style="background:#073642"></span><span style="background:#dc322f"></span><span style="background:#859900"></span><span style="background:#b58900"></span>
+  <span style="background:#268bd2"></span><span style="background:#d33682"></span><span style="background:#2aa198"></span><span style="background:#657b83"></span>
+</div>
+        </div>
+      </div>
+      <div class="values">
+        映射（Solarized light 推荐配对）：<br />
+        background = base3 · secondary bg / chrome = base2<br />
+        body text = #000000 · faint = base00 · cursor = black · bg 仍 Solarized base3<br />
+        参考：<a href="https://ethanschoonover.com/solarized/">ethanschoonover.com/solarized</a>
+      </div>
+    </section>
+
+  </div>
+
+  <footer>
+    <p><strong>评审点：</strong>气质是否够「Soft」、字是否够清、与 Default 是否拉开；ANSI 彩块仅示意，L2 可不改 16 色。</p>
+    <table class="contrast">
+      <thead>
+        <tr><th>对</th><th>fg / bg</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Soft Dark (Ghostty / One Dark)</td>
+          <td>#ABB2BF on #23272E</td>
+          <td>比 #282C34 略深的蓝深底；WebAIM 核对比</td>
+        </tr>
+        <tr>
+          <td>Soft Light (Solarized)</td>
+          <td>#000000 on #FDF6E3</td>
+          <td>默认字纯黑（用户偏好）；底仍 Solarized cream</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:14px">
+      文件：<code>docs/design/soft-themes-preview.html</code> ·
+      认可后再落到 <code>TerminalSurfacePalette</code> + 设置项。
+    </p>
+  </footer>
+</body>
+</html>

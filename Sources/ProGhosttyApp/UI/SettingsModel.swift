@@ -86,7 +86,13 @@ enum SettingsIndex {
     SettingsItem(
       id: "appearance.theme", category: .appearance,
       title: { $0.theme },
-      keywords: { [$0.theme, $0.followSystem, "theme", "dark", "light", "主题", "深色", "浅色", "外观"] }
+      keywords: {
+        [
+          $0.theme, $0.followSystem, $0.softDark, $0.softLight,
+          "theme", "dark", "light", "soft", "soft-dark", "soft-light",
+          "主题", "深色", "浅色", "柔和", "外观", "solarized",
+        ]
+      }
     ),
     SettingsItem(
       id: "font.family", category: .font,

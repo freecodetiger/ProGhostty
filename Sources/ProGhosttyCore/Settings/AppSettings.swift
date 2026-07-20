@@ -15,6 +15,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
   public var fontSize: Double
   public var themeName: String
   public var followSystemAppearance: Bool
+  /// When following system dark, prefer Soft Dark over Default Dark.
+  public var softDarkPreferred: Bool
+  /// When following system light, prefer Soft Light over Default Light.
+  public var softLightPreferred: Bool
   public var appLanguage: String
   public var pgControlCommandsEnabled: Bool
   public var keyboardShortcuts: KeyboardShortcutSettings
@@ -33,6 +37,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     fontSize: 14,
     themeName: "dark",
     followSystemAppearance: true,
+    softDarkPreferred: false,
+    softLightPreferred: false,
     appLanguage: "system",
     pgControlCommandsEnabled: true,
     keyboardShortcuts: .defaults
@@ -52,6 +58,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     case fontSize
     case themeName
     case followSystemAppearance
+    case softDarkPreferred
+    case softLightPreferred
     case appLanguage
     case pgControlCommandsEnabled
     case keyboardShortcuts
@@ -71,6 +79,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     fontSize: Double,
     themeName: String,
     followSystemAppearance: Bool,
+    softDarkPreferred: Bool = false,
+    softLightPreferred: Bool = false,
     appLanguage: String,
     pgControlCommandsEnabled: Bool,
     keyboardShortcuts: KeyboardShortcutSettings
@@ -88,6 +98,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     self.fontSize = fontSize
     self.themeName = ThemeManager.normalizedThemeName(themeName)
     self.followSystemAppearance = followSystemAppearance
+    self.softDarkPreferred = softDarkPreferred
+    self.softLightPreferred = softLightPreferred
     self.appLanguage = AppLanguageManager.normalizedLanguage(appLanguage)
     self.pgControlCommandsEnabled = pgControlCommandsEnabled
     self.keyboardShortcuts = keyboardShortcuts.mergedWithDefaults()
@@ -112,6 +124,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     let rawThemeName = try container.decodeIfPresent(String.self, forKey: .themeName) ?? Self.defaults.themeName
     themeName = ThemeManager.normalizedThemeName(rawThemeName)
     followSystemAppearance = try container.decodeIfPresent(Bool.self, forKey: .followSystemAppearance) ?? (rawThemeName == "system")
+    softDarkPreferred = try container.decodeIfPresent(Bool.self, forKey: .softDarkPreferred)
+      ?? (themeName == "soft-dark")
+    softLightPreferred = try container.decodeIfPresent(Bool.self, forKey: .softLightPreferred)
+      ?? (themeName == "soft-light")
     appLanguage = AppLanguageManager.normalizedLanguage(
       try container.decodeIfPresent(String.self, forKey: .appLanguage) ?? Self.defaults.appLanguage
     )
@@ -531,10 +547,49 @@ public enum FontManager {
 }
 
 public enum ThemeManager {
-  public static let builtInThemes = ["light", "dark"]
+  public static let builtInThemes = ["light", "dark", "soft-light", "soft-dark"]
 
   public static func normalizedThemeName(_ themeName: String) -> String {
     builtInThemes.contains(themeName) ? themeName : "dark"
+  }
+
+  public static func isDarkFamily(_ themeName: String) -> Bool {
+    switch normalizedThemeName(themeName) {
+    case "light", "soft-light":
+      return false
+    default:
+      return true
+    }
+  }
+
+  public static func terminalPalette(for themeName: String) -> TerminalSurfacePalette {
+    switch normalizedThemeName(themeName) {
+    case "light":
+      return .light
+    case "soft-light":
+      return .softLight
+    case "soft-dark":
+      return .softDark
+    default:
+      return .dark
+    }
+  }
+
+  /// Resolve effective theme under follow-system using family Soft preferences.
+  public static func effectiveThemeName(
+    themeName: String,
+    followSystemAppearance: Bool,
+    softDarkPreferred: Bool,
+    softLightPreferred: Bool,
+    systemIsLight: Bool
+  ) -> String {
+    if !followSystemAppearance {
+      return normalizedThemeName(themeName)
+    }
+    if systemIsLight {
+      return softLightPreferred ? "soft-light" : "light"
+    }
+    return softDarkPreferred ? "soft-dark" : "dark"
   }
 }
 

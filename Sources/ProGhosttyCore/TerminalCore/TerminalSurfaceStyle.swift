@@ -51,6 +51,30 @@ public struct TerminalSurfacePalette: Equatable, Sendable {
     inactiveForegroundBlend: 0.32,
     splitDivider: NSColor(calibratedWhite: 0, alpha: 0.09)
   )
+
+  /// Soft Dark — Ghostty / One Dark blue-black (`#23272E` lineage).
+  public static let softDark = TerminalSurfacePalette(
+    background: NSColor(calibratedRed: 0.137, green: 0.153, blue: 0.180, alpha: 1), // #23272E
+    foreground: NSColor(calibratedRed: 0.671, green: 0.698, blue: 0.749, alpha: 1), // #ABB2BF
+    faintForeground: NSColor(calibratedRed: 0.361, green: 0.388, blue: 0.439, alpha: 1), // #5C6370
+    cursorBackground: NSColor(calibratedRed: 0.671, green: 0.698, blue: 0.749, alpha: 1),
+    cursorForeground: NSColor(calibratedRed: 0.137, green: 0.153, blue: 0.180, alpha: 1),
+    selectionForeground: NSColor(calibratedRed: 0.843, green: 0.855, blue: 0.878, alpha: 1), // #D7DAE0
+    inactiveForegroundBlend: 0.28,
+    splitDivider: NSColor(calibratedRed: 0.671, green: 0.698, blue: 0.749, alpha: 0.12)
+  )
+
+  /// Soft Light — warm Solarized cream bg, black body text (user preference).
+  public static let softLight = TerminalSurfacePalette(
+    background: NSColor(calibratedRed: 0.992, green: 0.965, blue: 0.890, alpha: 1), // #FDF6E3 base3
+    foreground: NSColor(calibratedWhite: 0.0, alpha: 1), // black
+    faintForeground: NSColor(calibratedRed: 0.396, green: 0.482, blue: 0.514, alpha: 1), // #657B83 base00
+    cursorBackground: NSColor(calibratedWhite: 0.0, alpha: 1),
+    cursorForeground: NSColor(calibratedRed: 0.992, green: 0.965, blue: 0.890, alpha: 1),
+    selectionForeground: NSColor(calibratedWhite: 0.0, alpha: 1),
+    inactiveForegroundBlend: 0.28,
+    splitDivider: NSColor(calibratedRed: 0.345, green: 0.431, blue: 0.459, alpha: 0.22)
+  )
 }
 
 public enum TerminalSurfaceStyle {

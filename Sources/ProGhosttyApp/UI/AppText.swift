@@ -66,6 +66,10 @@ struct AppText {
   var theme: String { text("Theme", "主题") }
   var light: String { text("Light", "浅色") }
   var dark: String { text("Dark", "深色") }
+  var softLight: String { text("Soft Light", "柔和浅色") }
+  var softDark: String { text("Soft Dark", "柔和深色") }
+  var darkPreset: String { text("Dark preset", "深色预设") }
+  var lightPreset: String { text("Light preset", "浅色预设") }
   var renderer: String { text("Renderer", "渲染器") }
   var rendererAuto: String { text("Auto", "自动") }
   var rendererMetalDirect: String { text("Metal direct", "Metal 直接渲染") }

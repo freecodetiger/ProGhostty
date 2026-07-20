@@ -108,6 +108,89 @@ struct AppSettingsTests {
     #expect(!AppSettings.defaults.notifyWhenFocused)
   }
 
+  @Test func themeManagerRecognizesSoftThemes() {
+    #expect(ThemeManager.normalizedThemeName("soft-dark") == "soft-dark")
+    #expect(ThemeManager.normalizedThemeName("soft-light") == "soft-light")
+    #expect(ThemeManager.normalizedThemeName("unknown") == "dark")
+    #expect(ThemeManager.isDarkFamily("dark"))
+    #expect(ThemeManager.isDarkFamily("soft-dark"))
+    #expect(!ThemeManager.isDarkFamily("light"))
+    #expect(!ThemeManager.isDarkFamily("soft-light"))
+  }
+
+  @Test func themeManagerResolvesTerminalPalettes() {
+    #expect(ThemeManager.terminalPalette(for: "dark") == .dark)
+    #expect(ThemeManager.terminalPalette(for: "light") == .light)
+    #expect(ThemeManager.terminalPalette(for: "soft-dark") == .softDark)
+    #expect(ThemeManager.terminalPalette(for: "soft-light") == .softLight)
+  }
+
+  @Test func softLightTerminalBodyUsesBlackOnWarmBackground() {
+    let palette = TerminalSurfacePalette.softLight
+    let fg = palette.foreground.usingColorSpace(.deviceRGB) ?? palette.foreground
+    let bg = palette.background.usingColorSpace(.deviceRGB) ?? palette.background
+    #expect(fg.redComponent < 0.05)
+    #expect(fg.greenComponent < 0.05)
+    #expect(fg.blueComponent < 0.05)
+    #expect(bg.redComponent > 0.95)
+    #expect(bg.greenComponent > 0.90)
+    #expect(bg.blueComponent > 0.85)
+  }
+
+  @Test func effectiveThemeUsesSoftPreferencesWhenFollowingSystem() {
+    #expect(
+      ThemeManager.effectiveThemeName(
+        themeName: "dark",
+        followSystemAppearance: true,
+        softDarkPreferred: true,
+        softLightPreferred: false,
+        systemIsLight: false
+      ) == "soft-dark"
+    )
+    #expect(
+      ThemeManager.effectiveThemeName(
+        themeName: "dark",
+        followSystemAppearance: true,
+        softDarkPreferred: false,
+        softLightPreferred: true,
+        systemIsLight: true
+      ) == "soft-light"
+    )
+    #expect(
+      ThemeManager.effectiveThemeName(
+        themeName: "soft-dark",
+        followSystemAppearance: false,
+        softDarkPreferred: false,
+        softLightPreferred: false,
+        systemIsLight: true
+      ) == "soft-dark"
+    )
+  }
+
+  @Test func softThemePreferencesRoundTripAndDefaultOff() throws {
+    #expect(!AppSettings.defaults.softDarkPreferred)
+    #expect(!AppSettings.defaults.softLightPreferred)
+
+    var settings = AppSettings.defaults
+    settings.softDarkPreferred = true
+    settings.softLightPreferred = true
+    settings.themeName = "soft-dark"
+
+    let data = try JSONEncoder().encode(settings)
+    let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+    #expect(decoded.softDarkPreferred)
+    #expect(decoded.softLightPreferred)
+    #expect(decoded.themeName == "soft-dark")
+  }
+
+  @Test func softThemePreferencesDefaultFromThemeNameWhenMissing() throws {
+    let data = Data(#"{"themeName":"soft-light"}"#.utf8)
+    let settings = try JSONDecoder().decode(AppSettings.self, from: data)
+    #expect(settings.themeName == "soft-light")
+    #expect(settings.softLightPreferred)
+    #expect(!settings.softDarkPreferred)
+  }
+
   @Test func notificationSettingsRoundTripThroughJSON() throws {
     var settings = AppSettings.defaults
     settings.notificationsEnabled = true

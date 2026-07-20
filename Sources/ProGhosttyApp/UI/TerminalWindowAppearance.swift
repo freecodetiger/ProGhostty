@@ -1,4 +1,5 @@
 import AppKit
+import ProGhosttyCore
 
 @MainActor
 public enum ProGhosttyWindowAppearance {
@@ -44,6 +45,10 @@ public enum ProGhosttyWindowAppearance {
     window.appearance = appearance
     window.contentView?.appearance = appearance
     window.contentViewController?.view.appearance = appearance
+    // Transparent painted titlebar + visible system title fights: system label color
+    // does not follow our layer paint, so dark Soft/Default often got black title on
+    // dark chrome. Hide title (same as terminal); window.title still works for WM.
+    window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
     window.titlebarSeparatorStyle = .none
     window.backgroundColor = backgroundColor
@@ -226,6 +231,44 @@ public enum ProGhosttySettingsThemePalette {
     tertiaryText: NSColor(calibratedWhite: 0.500, alpha: 1),
     separator: NSColor(calibratedWhite: 0.300, alpha: 1)
   )
+
+  /// Soft Dark settings chrome — same blue-black family as terminal `#23272E`.
+  public static let softDark = ProGhosttySettingsThemeColors(
+    windowBackground: NSColor(calibratedRed: 0.106, green: 0.122, blue: 0.141, alpha: 1), // #1B1F24
+    controlBackground: NSColor(calibratedRed: 0.165, green: 0.188, blue: 0.220, alpha: 1), // #2A3038
+    textFieldBackground: NSColor(calibratedRed: 0.137, green: 0.153, blue: 0.180, alpha: 1), // #23272E
+    footerBackground: NSColor(calibratedRed: 0.125, green: 0.141, blue: 0.165, alpha: 1),
+    primaryText: NSColor(calibratedRed: 0.671, green: 0.698, blue: 0.749, alpha: 1), // #ABB2BF
+    secondaryText: NSColor(calibratedRed: 0.514, green: 0.549, blue: 0.612, alpha: 1),
+    tertiaryText: NSColor(calibratedRed: 0.361, green: 0.388, blue: 0.439, alpha: 1), // #5C6370
+    separator: NSColor(calibratedRed: 0.271, green: 0.302, blue: 0.349, alpha: 1)
+  )
+
+  /// Soft Light settings chrome — Solarized base2/base3 family.
+  /// Primary text uses base02 (not base01) so settings labels clear AA on base3.
+  public static let softLight = ProGhosttySettingsThemeColors(
+    windowBackground: NSColor(calibratedRed: 0.992, green: 0.965, blue: 0.890, alpha: 1), // #FDF6E3
+    controlBackground: NSColor(calibratedRed: 0.933, green: 0.910, blue: 0.835, alpha: 1), // #EEE8D5
+    textFieldBackground: NSColor(calibratedRed: 1.000, green: 0.980, blue: 0.925, alpha: 1),
+    footerBackground: NSColor(calibratedRed: 0.933, green: 0.910, blue: 0.835, alpha: 1),
+    primaryText: NSColor(calibratedRed: 0.027, green: 0.212, blue: 0.259, alpha: 1), // #073642 base02
+    secondaryText: NSColor(calibratedRed: 0.345, green: 0.431, blue: 0.459, alpha: 1), // #586E75 base01
+    tertiaryText: NSColor(calibratedRed: 0.396, green: 0.482, blue: 0.514, alpha: 1), // #657B83 base00
+    separator: NSColor(calibratedRed: 0.576, green: 0.631, blue: 0.631, alpha: 0.55)
+  )
+
+  public static func palette(for themeName: String) -> ProGhosttySettingsThemeColors {
+    switch ThemeManager.normalizedThemeName(themeName) {
+    case "light":
+      return light
+    case "soft-light":
+      return softLight
+    case "soft-dark":
+      return softDark
+    default:
+      return dark
+    }
+  }
 }
 
 public enum ProGhosttyOverlayStyle {

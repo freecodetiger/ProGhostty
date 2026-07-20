@@ -63,6 +63,22 @@ struct TerminalWindowAppearanceTests {
     #expect(dark.primaryText.contrastRatio(against: dark.textFieldBackground) >= 8)
   }
 
+  @Test func softSettingsThemePalettesMatchThemeFamily() {
+    let softDark = ProGhosttySettingsThemePalette.palette(for: "soft-dark")
+    let softLight = ProGhosttySettingsThemePalette.palette(for: "soft-light")
+
+    #expect(softDark.windowBackground.lightness < 0.20)
+    #expect(softDark.primaryText.contrastRatio(against: softDark.windowBackground) >= 4.5)
+    #expect(softDark.primaryText.contrastRatio(against: softDark.controlBackground) >= 4.5)
+
+    #expect(softLight.windowBackground.lightness > 0.85)
+    #expect(softLight.primaryText.contrastRatio(against: softLight.windowBackground) >= 4.5)
+    #expect(softLight.primaryText.contrastRatio(against: softLight.controlBackground) >= 4.5)
+
+    #expect(ProGhosttySettingsThemePalette.palette(for: "dark") == ProGhosttySettingsThemePalette.dark)
+    #expect(ProGhosttySettingsThemePalette.palette(for: "light") == ProGhosttySettingsThemePalette.light)
+  }
+
   @MainActor @Test func terminalChromePaintsWindowContentAndTitlebarBackgrounds() throws {
     let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 260))
     let window = NSWindow(
@@ -142,6 +158,7 @@ struct TerminalWindowAppearanceTests {
     )
 
     #expect(window.appearance?.name == .aqua)
+    #expect(window.titleVisibility == .hidden)
     #expect(window.titlebarAppearsTransparent)
     #expect(window.titlebarSeparatorStyle == .none)
     #expect(window.backgroundColor.sameRGB(as: background))
@@ -156,6 +173,7 @@ struct TerminalWindowAppearanceTests {
     )
 
     #expect(window.appearance?.name == .darkAqua)
+    #expect(window.titleVisibility == .hidden)
     #expect(window.backgroundColor.sameRGB(as: dark))
     #expect(window.contentView?.layer?.backgroundColor?.sameRGB(as: dark.cgColor) == true)
     #expect(window.contentView?.superview?.layer?.backgroundColor?.sameRGB(as: dark.cgColor) == true)
