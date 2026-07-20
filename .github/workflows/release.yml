@@ -60,7 +60,15 @@ jobs:
           body: |
             ProGhostty ${{ github.ref_name }} 正式版。
 
-            更新内容：
-            - 增加 Codex 和 Claude Code 任务完成后的 ProGhostty 通知 hook 注入。
-            - 增加应用内通知与提示音，降低系统通知权限和投递不稳定带来的影响。
-            - 优化大批量终端输出的按帧吞吐节奏，改善 `seq 1 30000` 等场景的连续渲染体验。
+            ## 高光：Pattern-2 平滑滚动重构
+            - 全新像素级平滑滚动（`SmoothScrollEngine` + display-link browse tick），浏览位置与 VT viewport 解耦。
+            - Metal 直绘 expanded grid（去掉 offscreen composite），亚行偏移一次清屏直达 drawable。
+            - 浏览历史时继续跟随底部新输出；回底更稳健；软边界 + 惯性取近期峰值速度。
+            - 下线 pattern-1 死路径与 history freeze，去掉双写 `visualOffsetY` 类滚动抖动根因。
+            - 最低系统版本抬到 **macOS 14**。
+
+            ## 其它
+            - 设置页侧边栏 + 条目级搜索，字体相关设置重整。
+            - 通知收敛为 Agent 任务完成场景；移除插件管理 / shell-enhancements。
+            - Core/App 分层加固、`PaneWorkspaceController` 唯一布局 owner、PTY 输出延迟减半。
+            - CI / 本地构建统一 `libghostty-vt` **ReleaseFast**，避免 VT 解析千倍变慢。
