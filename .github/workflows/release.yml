@@ -11,7 +11,9 @@ permissions:
 jobs:
   macos-dmg:
     name: Build macOS DMG
-    runs-on: macos-latest
+    # Zig 0.15.2's build runner fails to link libc on macOS 26 / Xcode 26
+    # (undefined _abort/_free/...). Pin until Zig catches up.
+    runs-on: macos-15
 
     steps:
       - name: Checkout
@@ -46,6 +48,7 @@ jobs:
         working-directory: Vendor/ghostty
         run: |
           set -euxo pipefail
+          export SDKROOT="$(xcrun --show-sdk-path)"
           zig build \
             --global-cache-dir "${GITHUB_WORKSPACE}/.zig-cache-global" \
             -Demit-lib-vt=true \
