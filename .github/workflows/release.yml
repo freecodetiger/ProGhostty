@@ -79,15 +79,12 @@ jobs:
           body: |
             ProGhostty ${{ github.ref_name }} 正式版。
 
-            ## 高光：Pattern-2 平滑滚动重构
-            - 全新像素级平滑滚动（`SmoothScrollEngine` + display-link browse tick），浏览位置与 VT viewport 解耦。
-            - Metal 直绘 expanded grid（去掉 offscreen composite），亚行偏移一次清屏直达 drawable。
-            - 浏览历史时继续跟随底部新输出；回底更稳健；软边界 + 惯性取近期峰值速度。
-            - 下线 pattern-1 死路径与 history freeze，去掉双写 `visualOffsetY` 类滚动抖动根因。
-            - 最低系统版本抬到 **macOS 14**。
+            ## v0.4.1 · Pattern-2 滚动与选区修复
+            - **假底部 / 吸附**：距底锚点 + 中途 live bottom 刷新，小幅下滚不再误回 live；能滚穿历史到真尾。
+            - **选区错位 / 选不上**：Metal 选区行已在 expanded 坐标，去掉重复 `selectionRowsOffset`（浏览差 1 行、live 大 overscan 高亮飞出）。
+            - **滚动卡死 + 光标狂闪**：browse 期间跳过 O(rows×cols) cursor-rect 重建；异步 present 时 GPU 忙则丢帧，不堵主线程。
+            - CI 继续 pin **macos-15**，`libghostty-vt` **ReleaseFast**。
 
-            ## 其它
-            - 设置页侧边栏 + 条目级搜索，字体相关设置重整。
-            - 通知收敛为 Agent 任务完成场景；移除插件管理 / shell-enhancements。
-            - Core/App 分层加固、`PaneWorkspaceController` 唯一布局 owner、PTY 输出延迟减半。
-            - CI / 本地构建统一 `libghostty-vt` **ReleaseFast**，避免 VT 解析千倍变慢。
+            ## 自 v0.4.0
+            - Pattern-2 平滑像素滚动、Metal 直绘 expanded grid、浏览时跟随新输出。
+            - 最低系统版本 **macOS 14**。
