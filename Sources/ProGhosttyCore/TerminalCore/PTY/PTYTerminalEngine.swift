@@ -885,6 +885,14 @@ public class PTYGridView: NSView {
   /// display-link tick never blocks the main thread on GPU completion while
   /// scrolling, and reverts to the low-latency synchronous present when idle.
   public var scrollActivityHandler: ((Bool) -> Void)?
+  /// Pattern-2 browse metrics: total scrollback rows + the absolute row at the
+  /// viewport top RIGHT NOW. Read from the VT scrollbar by the session (the view
+  /// never owns VT state). Returns nil if unavailable.
+  public var browseScrollMetricsHandler: (() -> (total: UInt64, topAbsoluteRow: UInt64)?)?
+  /// Pattern-2 browse present: fetch `visibleRows (+1 above/below)` rows starting
+  /// at `topAbsoluteRow` directly from scrollback and present them, shifted by
+  /// the view's current `viewport.visualOffsetY`. The VT viewport does NOT move.
+  public var browsePresentHandler: ((_ topAbsoluteRow: UInt64, _ visibleRows: Int) -> Void)?
   public var activationHandler: (() -> Void)?
   public var openURLHandler: ((URL) -> Void)? = { url in
     _ = NSWorkspace.shared.open(url)
@@ -908,6 +916,21 @@ public class PTYGridView: NSView {
   private var rendererOptions = TerminalRendererOptions()
   private var scrollController = PaneScrollController()
   private var suppressMomentumScroll = false
+  /// Pattern-2 smooth-scroll physics (display-link driven). Sole owner of how
+  /// the browse position evolves over time; the display-link tick is the ONLY
+  /// writer of `viewport.visualOffsetY` while browsing, so there is no async
+  /// commit racing it (the R1.2 BUG-3 double-writer cannot occur here).
+  private var smoothScrollEngine = SmoothScrollEngine()
+  /// Absolute scrollback row that sat at the viewport top when the current
+  /// gesture began. `engine.position == 0` maps here.
+  private var browseAnchorRow: UInt64 = 0
+  /// Total scrollback rows captured at gesture start (refreshed each tick from
+  /// the metrics handler so live output growth is tracked).
+  private var browseTotalRows: UInt64 = 0
+  private var scrollDisplayLink: CADisplayLink?
+  /// True while pattern-2 display-link browsing is active. When true the
+  /// event-driven `PaneScrollController` path is bypassed.
+  private var isSmoothScrollBrowsing = false
   /// While true, a viewport change updates state but does NOT trigger an
   /// immediate re-present. Used during a row commit so the offset can be set
   /// without flashing a frame that pairs the rebased (small) offset with the
@@ -1345,9 +1368,122 @@ public class PTYGridView: NSView {
     PTYRenderDebugLog.write(
       "wheel precise=\(event.hasPreciseScrollingDeltas) deltaY=\(String(format: "%.3f", event.scrollingDeltaY)) phase=\(event.phase.rawValue) momentum=\(event.momentumPhase.rawValue)"
     )
+    if shouldUseSmoothScrollBrowsing(for: event) {
+      feedSmoothScroll(event)
+      return
+    }
     processScroll(deltaY: event.scrollingDeltaY) {
       super.scrollWheel(with: event)
     }
+  }
+
+  // MARK: Pattern-2 display-link smooth scroll
+
+  private func shouldUseSmoothScrollBrowsing(for event: NSEvent) -> Bool {
+    guard rendererOptions.smoothPixelScrollingEnabled else { return false }
+    guard let frame = frameSnapshot, !frame.isAlternateScreen else { return false }
+    // Need the plumbing wired (session provides VT reads / present) and a valid
+    // cell height to map pixels ↔ rows.
+    guard browseScrollMetricsHandler != nil, browsePresentHandler != nil, cellSize.height > 0 else {
+      return false
+    }
+    return true
+  }
+
+  private func feedSmoothScroll(_ event: NSEvent) {
+    // We synthesize our own inertia, so drop OS momentum events (matches
+    // Ghostty). A momentum-phase event is the tail of a fling we already seeded.
+    if !event.momentumPhase.isEmpty { return }
+
+    let now = event.timestamp
+    let delta = event.scrollingDeltaY
+    let phase: WheelPhase
+    if event.phase.contains(.began) {
+      phase = .began
+    } else if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+      phase = .ended
+    } else if event.phase.contains(.changed) {
+      phase = .changed
+    } else {
+      // No gesture phase → discrete mouse wheel.
+      phase = .discrete
+    }
+
+    if !isSmoothScrollBrowsing {
+      startSmoothScrollBrowsing()
+    }
+    if phase == .discrete {
+      smoothScrollEngine.addDiscreteScroll(delta: delta, time: now)
+    } else {
+      smoothScrollEngine.addWheelInput(delta: delta, phase: phase, time: now)
+    }
+  }
+
+  private func startSmoothScrollBrowsing() {
+    guard let metrics = browseScrollMetricsHandler?() else { return }
+    isSmoothScrollBrowsing = true
+    browseAnchorRow = metrics.topAbsoluteRow
+    browseTotalRows = metrics.total
+    smoothScrollEngine.reset()
+    // Flip the engine to async present BEFORE the first tick so the very first
+    // scroll frame already avoids blocking the main thread on GPU completion.
+    scrollActivityHandler?(true)
+    startScrollDisplayLink()
+  }
+
+  private func startScrollDisplayLink() {
+    guard scrollDisplayLink == nil else { return }
+    let link = displayLink(target: self, selector: #selector(handleScrollDisplayLink(_:)))
+    // Allow the full ProMotion range; without this the link is capped at 60Hz.
+    link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+    link.add(to: .main, forMode: .common)
+    scrollDisplayLink = link
+  }
+
+  @objc private func handleScrollDisplayLink(_ link: CADisplayLink) {
+    // Physics steps to the frame we are PRESENTING (targetTimestamp), not the
+    // last vsync — smoother on variable-refresh displays (WWDC21).
+    smoothScrollEngine.tick(now: link.targetTimestamp)
+
+    // Track live scrollback growth so a tail that keeps producing doesn't shift
+    // the browse content under the user.
+    if let metrics = browseScrollMetricsHandler?() {
+      browseTotalRows = metrics.total
+    }
+
+    let resolved = SmoothScrollBrowseResolver.resolve(
+      position: smoothScrollEngine.position,
+      cellHeight: cellSize.height,
+      anchorRow: browseAnchorRow,
+      total: browseTotalRows,
+      visibleRows: max(1, frameSnapshot?.rows ?? visibleRowCount())
+    )
+
+    // The display-link tick is the SOLE writer of visualOffsetY while browsing.
+    suppressViewportChangePresent = true
+    viewport = TerminalViewport(visualOffsetY: resolved.pixelOffset)
+    suppressViewportChangePresent = false
+
+    browsePresentHandler?(resolved.topAbsoluteRow, max(1, frameSnapshot?.rows ?? visibleRowCount()))
+
+    // Edge: clamp reached — kill velocity so we settle instead of thrashing.
+    if resolved.atTopEdge || resolved.atBottomEdge {
+      smoothScrollEngine.reset()
+      viewport = TerminalViewport(visualOffsetY: resolved.pixelOffset)
+      stopSmoothScrollBrowsing()
+      return
+    }
+
+    if !smoothScrollEngine.isActive {
+      stopSmoothScrollBrowsing()
+    }
+  }
+
+  private func stopSmoothScrollBrowsing() {
+    isSmoothScrollBrowsing = false
+    scrollDisplayLink?.invalidate()
+    scrollDisplayLink = nil
+    scrollActivityHandler?(false)
   }
 
   private func processScroll(deltaY: CGFloat, forwardToPTY: () -> Void = {}) {
@@ -1567,6 +1703,64 @@ public class PTYGridView: NSView {
     processScroll(deltaY: deltaY)
   }
 
+  /// Test hook: begin a pattern-2 browse gesture (captures anchor/total from the
+  /// metrics handler) and seed the engine with `delta` points, without a real
+  /// display link. Pair with `testTickSmoothScroll(now:)`.
+  func testBeginSmoothScroll(delta: CGFloat, time: TimeInterval) {
+    guard browseScrollMetricsHandler != nil, browsePresentHandler != nil else { return }
+    if !isSmoothScrollBrowsing {
+      guard let metrics = browseScrollMetricsHandler?() else { return }
+      isSmoothScrollBrowsing = true
+      browseAnchorRow = metrics.topAbsoluteRow
+      browseTotalRows = metrics.total
+      smoothScrollEngine.reset()
+      scrollActivityHandler?(true)
+    }
+    smoothScrollEngine.addWheelInput(delta: delta, phase: .began, time: time)
+  }
+
+  /// Test hook: run one physics tick + browse present at `now`, standing in for
+  /// the display-link callback. Returns the resolved top absolute row.
+  @discardableResult
+  func testTickSmoothScroll(now: TimeInterval) -> UInt64 {
+    smoothScrollEngine.tick(now: now)
+    if let metrics = browseScrollMetricsHandler?() {
+      browseTotalRows = metrics.total
+    }
+    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
+    let resolved = SmoothScrollBrowseResolver.resolve(
+      position: smoothScrollEngine.position,
+      cellHeight: cellSize.height,
+      anchorRow: browseAnchorRow,
+      total: browseTotalRows,
+      visibleRows: visible
+    )
+    suppressViewportChangePresent = true
+    viewport = TerminalViewport(visualOffsetY: resolved.pixelOffset)
+    suppressViewportChangePresent = false
+    browsePresentHandler?(resolved.topAbsoluteRow, visible)
+    return resolved.topAbsoluteRow
+  }
+
+  var testIsSmoothScrollBrowsing: Bool { isSmoothScrollBrowsing }
+  var testEngineActiveForTests: Bool { smoothScrollEngine.isActive }
+
+  /// Test hook: end the current browse gesture (feeds `.ended`, entering inertia
+  /// or settling). Mirror the display link with `testTickSmoothScroll` after.
+  func testEndSmoothScroll(time: TimeInterval) {
+    smoothScrollEngine.addWheelInput(delta: 0, phase: .ended, time: time)
+  }
+
+  /// Test hook: run one tick and, if the engine has come to rest, perform the
+  /// same teardown the real display-link callback would (stop browsing + flip
+  /// scroll activity off).
+  func testTickSmoothScrollWithStop(now: TimeInterval) {
+    testTickSmoothScroll(now: now)
+    if !smoothScrollEngine.isActive {
+      stopSmoothScrollBrowsing()
+    }
+  }
+
   public override func mouseDown(with event: NSEvent) {
     activationHandler?()
     window?.makeFirstResponder(self)
@@ -1614,6 +1808,9 @@ public class PTYGridView: NSView {
       isDraggingSelectionStorage = false
       selectionDragPoint = nil
       stopSelectionAutoScroll()
+      // Tear down the display link when detached; a live link retaining the view
+      // off-window leaks and fires against a dead render path.
+      stopSmoothScrollBrowsing()
     }
   }
 

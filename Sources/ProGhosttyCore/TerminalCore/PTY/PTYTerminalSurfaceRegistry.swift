@@ -159,6 +159,17 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       guard let self, rowDelta != 0 else { return false }
       return self.canScrollViewport(session: id, rowDelta: rowDelta)
     }
+    gridView.browseScrollMetricsHandler = { [weak self] in
+      guard let self, let bridge = self.surfaces[id]?.bridge,
+        let scrollbar = try? bridge.scrollbar()
+      else {
+        return nil
+      }
+      return (total: scrollbar.total, topAbsoluteRow: scrollbar.offset)
+    }
+    gridView.browsePresentHandler = { [weak self] topAbsoluteRow, visibleRows in
+      self?.presentBrowseWindow(session: id, topAbsoluteRow: topAbsoluteRow, visibleRows: visibleRows)
+    }
     gridView.activationHandler = { [weak self] in
       self?.activationHandler?(id)
     }
@@ -671,6 +682,66 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       )
     }
     PTYRenderDebugLog.write("diagnostics session=\(id) \(composedRendererDiagnostics(for: surface).debugSummary)")
+  }
+
+  /// Pattern-2 browse present: fetch the window `[topAbsoluteRow, +visibleRows)`
+  /// (plus one row above and below for the sub-row peek) DIRECTLY from
+  /// scrollback via `rows(at:)`, WITHOUT moving the VT viewport, and present it
+  /// as a scroll frame with one overscan row on each side. The grid view's
+  /// display-link tick already set `viewport.visualOffsetY` to the sub-row
+  /// pixel offset; the renderer draws `topAbsoluteRow` shifted down by it.
+  private func presentBrowseWindow(
+    session id: TerminalSessionID,
+    topAbsoluteRow: UInt64,
+    visibleRows: Int
+  ) {
+    guard var surface = surfaces[id], let bridge = surface.bridge, visibleRows > 0 else { return }
+
+    // One row above (overscan top, revealed by a positive pixel offset), the
+    // visible rows, and one row below (overscan bottom).
+    let hasTop = topAbsoluteRow > 0
+    let start = hasTop ? topAbsoluteRow - 1 : topAbsoluteRow
+    let count = visibleRows + (hasTop ? 1 : 0) + 1
+    guard let window = try? bridge.rows(at: start, count: count), window.cols > 0 else { return }
+
+    let cols = window.cols
+    let rows = window.rows
+    let topOverscanCount = hasTop && !rows.isEmpty ? 1 : 0
+
+    let overscanTop = topOverscanCount > 0 ? Array(rows.prefix(1)) : []
+    let remainder = Array(rows.dropFirst(topOverscanCount))
+    let viewportRowSlice = Array(remainder.prefix(visibleRows))
+    let overscanBottom = Array(remainder.dropFirst(viewportRowSlice.count).prefix(1))
+
+    // Synthesize the viewport frame from the fetched rows. Cursor is off-screen
+    // while browsing history, so it is hidden.
+    var viewportCells: [GhosttyTerminalFrame.Cell] = []
+    viewportCells.reserveCapacity(viewportRowSlice.count * cols)
+    for row in viewportRowSlice {
+      viewportCells.append(contentsOf: row.cells)
+    }
+    let viewportFrame = GhosttyTerminalFrame(
+      cols: cols,
+      rows: viewportRowSlice.count,
+      cursorVisible: false,
+      cursorX: 0,
+      cursorY: 0,
+      cells: viewportCells
+    )
+
+    let scrollFrame = GhosttyTerminalScrollFrame(
+      viewport: viewportFrame,
+      overscanTop: overscanTop,
+      overscanBottom: overscanBottom,
+      requestedOverscanTop: topOverscanCount,
+      requestedOverscanBottom: overscanBottom.count,
+      viewportStartRow: start &+ UInt64(topOverscanCount)
+    )
+    let renderFrame = TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: isFocused(id))
+    surface.lastRenderFrame = renderFrame
+    surfaces[id] = surface
+    render(renderFrame, in: surface.liveRenderer)
+    surface.liveRenderer.flushPendingFrame()
   }
 
   private func render(_ snapshot: ResizeRenderSnapshot, surface: inout SurfaceState, session id: TerminalSessionID) {
