@@ -280,6 +280,11 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     // (Pattern 1 split these across an offscreen scene pass + a drawable pass;
     // with direct-draw there is only the drawable, so cursor + selection + link +
     // marked-text all share one translation, matching the old composited result.)
+    // Selection/link ranges from PTYGridView are already in expanded-frame
+    // row space (renderedGeometry). Do NOT add overscanTop again — that was
+    // the pattern-1 viewport-row contract and double-shifted highlights by
+    // overscanTop rows (1-row browse miss / ~24-row live miss). Marked-text /
+    // cursor overlays stay viewport-relative and still need markedTextRowsOffset.
     let overlays = MetalOverlayBuffer.makeOverlays(
       renderFrame: renderFrame,
       plan: plan,
@@ -287,7 +292,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       markedTextActive: view.isComposingMarkedText,
       selectedRows: view.currentSelectionRowSet,
       selectedCellRanges: view.currentSelectionCellRanges,
-      selectionRowsOffset: overscanTopRows,
+      selectionRowsOffset: 0,
       linkHoverRows: [],
       linkHoverCellRanges: view.currentLinkHoverCellRanges,
       cursorOverlay: cursorOverlay,
@@ -382,7 +387,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       metalLayer.drawableSize = drawableSize
       // Gate on the in-flight pool BEFORE acquiring a drawable so this tick can't
       // outrun the compositor. Released once per acquire below / in completion.
-      inFlightSemaphore.wait()
+      // During scroll we must NOT block the main thread if the GPU is behind —
+      // drop this frame instead of freezing input/cursor updates.
+      if prefersAsyncPresent {
+        if inFlightSemaphore.wait(timeout: .now()) == .timedOut {
+          return false
+        }
+      } else {
+        inFlightSemaphore.wait()
+      }
       let drawable = metalLayer.nextDrawable()
       if let drawable {
         presentedDrawable = true

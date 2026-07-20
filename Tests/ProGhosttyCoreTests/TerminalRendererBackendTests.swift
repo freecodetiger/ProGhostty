@@ -1372,6 +1372,53 @@ struct TerminalRendererBackendTests {
     #expect(selection?.rect.minY == expectedMinY)
   }
 
+  /// PTYGridView selection ranges are already in expanded-frame row space
+  /// (overscanTop + viewport). MetalDirectRenderEngine must pass
+  /// `selectionRowsOffset: 0`. Adding overscanTop again double-shifts the
+  /// highlight (browse: +1 row; live large overscan: highlight off-screen).
+  @Test func metalOverlayBufferExpandedFrameSelectionNeedsZeroRowsOffset() {
+    let plan = MetalTerminalRenderPlan(
+      presentation: .scrollFrame,
+      viewportRows: 2,
+      cols: 8,
+      overscanTopRows: 1,
+      overscanBottomRows: 1,
+      pixelRemainderY: 0,
+      dirtyRows: [0, 1],
+      cellSize: CGSize(width: 8, height: 16),
+      backingScale: 1,
+      isFocused: true
+    )
+    let renderFrame = TerminalRenderFrame(
+      scrollFrame: scrollFrame(
+        viewportRows: ["two", "three"],
+        overscanTop: ["one"],
+        overscanBottom: ["four"],
+        cols: 8
+      ),
+      isFocused: true
+    )
+
+    // First viewport row is expanded index 1 (after 1 overscan top row).
+    let correct = MetalOverlayBuffer.makeOverlays(
+      renderFrame: renderFrame,
+      plan: plan,
+      selectedCellRanges: [MetalSelectionCellRange(row: 1, cols: 0..<2)],
+      selectionRowsOffset: 0
+    ).first(where: { $0.kind == .selection })
+    let wrong = MetalOverlayBuffer.makeOverlays(
+      renderFrame: renderFrame,
+      plan: plan,
+      selectedCellRanges: [MetalSelectionCellRange(row: 1, cols: 0..<2)],
+      selectionRowsOffset: 1
+    ).first(where: { $0.kind == .selection })
+
+    let translationY = CGFloat(-1 * 16)
+    let expectedMinY = CGFloat(12) + CGFloat(1 * 16) + translationY
+    #expect(correct?.rect.minY == expectedMinY)
+    #expect(wrong?.rect.minY == expectedMinY + 16)
+  }
+
   @Test func metalOverlayBufferAppliesPixelScrollTranslationToLinkHoverGeometry() {
     let plan = MetalTerminalRenderPlan(
       presentation: .scrollFrame,

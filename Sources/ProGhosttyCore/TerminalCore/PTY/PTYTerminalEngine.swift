@@ -957,8 +957,7 @@ public class PTYGridView: NSView {
       if !suppressViewportChangePresent {
         viewportDidChangeHandler?()
         needsDisplay = true
-        window?.invalidateCursorRects(for: self)
-        invalidateIMECharacterCoordinates()
+        invalidateCursorAndIMEIfSettled()
       }
     }
   }
@@ -1163,8 +1162,7 @@ public class PTYGridView: NSView {
     } else {
       needsDisplay = true
     }
-    window?.invalidateCursorRects(for: self)
-    invalidateIMECharacterCoordinates()
+    invalidateCursorAndIMEIfSettled()
     ingestInputRenderSnapshot()
   }
 
@@ -1174,8 +1172,9 @@ public class PTYGridView: NSView {
     isFocusedTerminalStorage = isFocused
     if viewport.visualOffsetY != 0 {
       needsDisplay = true
-      window?.invalidateCursorRects(for: self)
-      invalidateIMECharacterCoordinates()
+      // Browse/pixel-scroll ticks update content every frame; skip O(rows×cols)
+      // cursor-rect rebuild (see invalidateCursorAndIMEIfSettled).
+      invalidateCursorAndIMEIfSettled()
       return
     }
     switch dirty.mode {
@@ -1188,8 +1187,7 @@ public class PTYGridView: NSView {
         setNeedsDisplay(rect)
       }
     }
-    window?.invalidateCursorRects(for: self)
-    invalidateIMECharacterCoordinates()
+    invalidateCursorAndIMEIfSettled()
     ingestInputRenderSnapshot()
   }
 
@@ -1200,8 +1198,7 @@ public class PTYGridView: NSView {
     isFocusedTerminalStorage = isFocused
     if viewport.visualOffsetY != 0 {
       needsDisplay = true
-      window?.invalidateCursorRects(for: self)
-      invalidateIMECharacterCoordinates()
+      invalidateCursorAndIMEIfSettled()
       return
     }
     if let previous, previous.rows == scrollFrame.viewport.rows, previous.cols == scrollFrame.viewport.cols {
@@ -1223,9 +1220,17 @@ public class PTYGridView: NSView {
     } else {
       needsDisplay = true
     }
+    invalidateCursorAndIMEIfSettled()
+    ingestInputRenderSnapshot()
+  }
+
+  /// Cursor rects are O(rows×cols). Pattern-2 browse presents ~120×/s; rebuilding
+  /// them every tick freezes the main thread and thrash-flips arrow↔I-beam under
+  /// the mouse. Defer until the gesture/inertia settles.
+  private func invalidateCursorAndIMEIfSettled() {
+    guard !isSmoothScrollBrowsing else { return }
     window?.invalidateCursorRects(for: self)
     invalidateIMECharacterCoordinates()
-    ingestInputRenderSnapshot()
   }
 
   public override func draw(_ dirtyRect: NSRect) {
@@ -1454,21 +1459,49 @@ public class PTYGridView: NSView {
     guard let metrics = browseScrollMetricsHandler?() else { return }
     isSmoothScrollBrowsing = true
     browseTotalRows = metrics.total
-    // `position == 0` maps to this anchor. If already parked in history, continue
-    // from that absolute row. If following the live tail, anchor at the current
-    // bottom page so scrolling down (position → 0) always returns to the LIVE
-    // bottom no matter how much output arrives while browsing.
+    // Distance-from-bottom model (see `.claude/BROWSE_ANCHOR_FIX_PLAN.md`):
+    // `position == 0` is the live tail; positive = points up into history.
+    // Anchor at the *current* live bottom page. Prefer the larger of
+    // (total-visible) and VT scrollbar.offset so we never underestimate how
+    // far down content goes (false bottom with rows still below).
+    // When already parked, seed position from that distance so a small
+    // downward flick continues through the remaining history instead of
+    // snapping to follow.
     let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
-    if let parked = browseTopRow {
-      browseAnchorRow = parked
+    let liveBottom = Self.liveBottomTopRow(
+      total: metrics.total,
+      visibleRows: visible,
+      vtOffset: metrics.topAbsoluteRow
+    )
+    browseAnchorRow = liveBottom
+
+    let seedPosition: CGFloat
+    if let parked = browseTopRow, cellSize.height > 0 {
+      let clampedParked = min(parked, liveBottom)
+      let rowsFromBottom = liveBottom &- clampedParked
+      // Preserve sub-row offset so re-seeding doesn't jump by a fraction of a row.
+      let fractional = max(0, min(viewport.visualOffsetY, cellSize.height - 0.001))
+      seedPosition = CGFloat(rowsFromBottom) * cellSize.height + fractional
     } else {
-      browseAnchorRow = metrics.total > UInt64(visible) ? metrics.total - UInt64(visible) : 0
+      seedPosition = 0
     }
-    smoothScrollEngine.reset()
+    smoothScrollEngine.reset(to: seedPosition)
     // Flip the engine to async present BEFORE the first tick so the very first
     // scroll frame already avoids blocking the main thread on GPU completion.
     scrollActivityHandler?(true)
     startScrollDisplayLink()
+  }
+
+  /// Live page-top row for distance-from-bottom math. VT stays pinned at the
+  /// bottom during pattern-2 browse, so `vtOffset` is normally the live page.
+  /// Prefer the larger of `total - visible` and VT offset so a short/stale
+  /// length cannot invent a false bottom with rows still below.
+  private static func liveBottomTopRow(total: UInt64, visibleRows: Int, vtOffset: UInt64) -> UInt64 {
+    guard total > 0 else { return 0 }
+    let visible = UInt64(max(1, visibleRows))
+    let byTotal = total > visible ? total - visible : 0
+    let cappedVT = min(vtOffset, total - 1)
+    return max(byTotal, cappedVT)
   }
 
   private func startScrollDisplayLink() {
@@ -1489,9 +1522,22 @@ public class PTYGridView: NSView {
     smoothScrollEngine.tick(now: link.targetTimestamp)
     let resolved = applyBrowseTick()
 
-    // Edge: clamp reached — kill velocity so we settle instead of thrashing.
-    if resolved.atTopEdge || resolved.atBottomEdge {
-      smoothScrollEngine.reset()
+    // Soft-stop only when the physics is actually at/over the edge AND not
+    // actively tracking the other way (e.g. first upward ticks still near 0
+    // must not kill the gesture as "bottom").
+    let trackingUp = smoothScrollEngine.target > smoothScrollEngine.position + 0.5
+    let trackingDown = smoothScrollEngine.target < smoothScrollEngine.position - 0.5
+    if resolved.atBottomEdge, !trackingUp {
+      smoothScrollEngine.reset(to: 0)
+      applyBrowsePosition(resolved)
+      stopSmoothScrollBrowsing()
+      return
+    }
+    if resolved.atTopEdge, !trackingDown {
+      let topDistance = cellSize.height > 0
+        ? CGFloat(browseAnchorRow) * cellSize.height
+        : 0
+      smoothScrollEngine.reset(to: topDistance)
       applyBrowsePosition(resolved)
       stopSmoothScrollBrowsing()
       return
@@ -1508,12 +1554,26 @@ public class PTYGridView: NSView {
   /// callback and test hooks. Returns the resolved window.
   @discardableResult
   private func applyBrowseTick() -> SmoothScrollBrowseResolver.Resolved {
-    // Track live scrollback growth so a tail that keeps producing doesn't shift
-    // the browse content under the user.
+    // Keep distance-from-bottom aligned with the *current* live bottom. If
+    // scrollback grew/pruned mid-gesture, shift position by the same delta so
+    // the absolute row under the viewport does not jump — and so scrolling to
+    // position 0 always reaches the real latest page (not a stale frozen maxTop).
+    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
     if let metrics = browseScrollMetricsHandler?() {
       browseTotalRows = metrics.total
+      let liveBottom = Self.liveBottomTopRow(
+        total: metrics.total,
+        visibleRows: visible,
+        vtOffset: metrics.topAbsoluteRow
+      )
+      if liveBottom != browseAnchorRow, cellSize.height > 0 {
+        let deltaRows = Int64(liveBottom) - Int64(browseAnchorRow)
+        smoothScrollEngine.offsetPosition(by: CGFloat(deltaRows) * cellSize.height)
+        browseAnchorRow = liveBottom
+      } else {
+        browseAnchorRow = liveBottom
+      }
     }
-    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
     let resolved = SmoothScrollBrowseResolver.resolve(
       position: smoothScrollEngine.position,
       cellHeight: cellSize.height,
@@ -1925,6 +1985,12 @@ public class PTYGridView: NSView {
   }
 
   public override func resetCursorRects() {
+    // While browsing, never rebuild per-cell cursor regions. AppKit may still
+    // call us if something else invalidates; keep it O(1) so scroll stays live.
+    if isSmoothScrollBrowsing {
+      addCursorRect(bounds, cursor: .arrow)
+      return
+    }
     guard let geometry = renderedGeometry() else { return }
     let frame = geometry.frame
     let clipRect = geometry.clipRect

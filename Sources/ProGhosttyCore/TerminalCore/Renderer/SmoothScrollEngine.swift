@@ -179,15 +179,25 @@ public struct SmoothScrollEngine: Sendable {
 
   // MARK: Reset
 
-  /// Snap everything to rest at the current committed position (e.g. after a VT
-  /// commit rebases the row, or on focus loss / alternate screen).
-  public mutating func reset() {
-    position = 0
-    target = 0
+  /// Snap everything to rest. Pass `position` to seed a continuous offset (e.g.
+  /// distance-from-bottom when resuming a parked history browse) so the next
+  /// gesture continues from the visible row instead of jumping to 0/follow.
+  public mutating func reset(to position: CGFloat = 0) {
+    self.position = position
+    self.target = position
     velocity = 0
     phase = .idle
     lastTickTime = nil
     recentVelocities.removeAll(keepingCapacity: true)
+  }
+
+  /// Shift the continuous coordinate without killing velocity/phase. Used when
+  /// the live-bottom anchor moves mid-gesture (scrollback growth/prune) so the
+  /// absolute history row under the viewport stays put.
+  public mutating func offsetPosition(by delta: CGFloat) {
+    guard delta != 0 else { return }
+    position += delta
+    target += delta
   }
 }
 

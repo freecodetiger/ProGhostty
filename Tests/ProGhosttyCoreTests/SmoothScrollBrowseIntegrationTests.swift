@@ -144,6 +144,66 @@ struct SmoothScrollBrowseIntegrationTests {
     #expect(!view.isViewingHistory)
   }
 
+  @Test func scrollingDownThroughHistoryReachesLiveBottomNotFalseFloor() {
+    // Mid-history park must still be able to walk the remaining rows down to
+    // the live page. A frozen/underestimated maxTop used to stop early with
+    // content still below.
+    let view = makeView()
+    view.browseScrollMetricsHandler = { (total: 1000, topAbsoluteRow: 976) }
+    var presented: [UInt64] = []
+    var resumedFollow = false
+    view.browsePresentHandler = { top, _ in presented.append(top) }
+    view.browseFollowResumeHandler = { resumedFollow = true }
+
+    // Climb into history and settle somewhere above the live page.
+    view.testBeginSmoothScroll(delta: 800, time: 0)
+    var t = 0.0
+    for _ in 0..<80 { t += 1.0 / 120.0; view.testTickSmoothScroll(now: t) }
+    let parked = view.testBrowseTopRow
+    #expect(parked != nil)
+    #expect(parked! < 976)
+
+    // Strong downward scroll should walk remaining history and resume follow —
+    // not freeze on a false floor above the live page.
+    resumedFollow = false
+    presented.removeAll()
+    view.testBeginSmoothScroll(delta: -3000, time: t)
+    for _ in 0..<120 { t += 1.0 / 120.0; view.testTickSmoothScroll(now: t) }
+
+    #expect(resumedFollow)
+    #expect(view.testBrowseTopRow == nil)
+  }
+
+  @Test func smallDownwardFlickFromParkedHistoryDoesNotSnapToBottom() {
+    // Regression: parked history used to re-anchor at the parked row with
+    // position reset to 0, so ANY downward delta made position ≤ 0 and
+    // snapped to live follow. Seed distance-from-bottom instead.
+    let view = makeView()
+    view.browseScrollMetricsHandler = { (total: 1000, topAbsoluteRow: 976) }
+    view.browsePresentHandler = { _, _ in }
+    var resumedFollow = false
+    view.browseFollowResumeHandler = { resumedFollow = true }
+
+    // Climb well into history and settle.
+    view.testBeginSmoothScroll(delta: 400, time: 0)
+    var t = 0.0
+    for _ in 0..<50 { t += 1.0 / 120.0; view.testTickSmoothScroll(now: t) }
+    let parked = view.testBrowseTopRow
+    #expect(parked != nil)
+    #expect(parked! < 976)
+
+    // Small downward flick — far less than the distance back to the live tail.
+    resumedFollow = false
+    view.testBeginSmoothScroll(delta: -20, time: t)
+    for _ in 0..<20 { t += 1.0 / 120.0; view.testTickSmoothScroll(now: t) }
+
+    #expect(!resumedFollow)
+    #expect(view.testBrowseTopRow != nil)
+    // Still above the live bottom page; may have moved a bit toward it.
+    #expect(view.testBrowseTopRow! < 976)
+    #expect(view.isViewingHistory)
+  }
+
   @Test func resetPixelScrollReturnsToFollow() {
     let view = makeView()
     view.browseScrollMetricsHandler = { (total: 1000, topAbsoluteRow: 976) }
