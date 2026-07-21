@@ -466,13 +466,14 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     if pendingRenderFrame != nil {
       diagnosticsState.droppedFrames += 1
     }
-    // Drop unflushed work so a post-resize-wrong frame cannot sneak out, but
-    // immediately re-present the last good frame so the drawable never goes empty
-    // during the VT resize blackout (divider/split commit gap).
+    // Drop unflushed work so a wrong-size frame cannot sneak out. Do NOT re-present
+    // here: CAMetalLayer present always clears, which flashes (especially the focused
+    // pane with a visible cursor). Leave the last drawable on screen; contentsGravity
+    // is .topLeft so bounds changes letterbox instead of stretching until the staged
+    // post-resize frame lands in applyResizeDiagnostics.
     pendingRenderFrame = nil
     pendingRenderGeneration = 0
     diagnosticsState.pendingResize = true
-    repaintLastPresentedFrame()
   }
 
   public func applyResizeDiagnostics(_ diagnostics: TerminalResizeDiagnostics) {
@@ -532,10 +533,9 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   }
 
   private func presentViewportChange() {
-    // During VT resize, new snapshots are staged — only re-paint the last good
-    // frame so scroll/overlay ticks cannot blank the surface or race the stage.
+    // During VT resize, leave the last drawable alone — re-present would clear and
+    // flash. New snapshots are staged until applyResizeDiagnostics.
     if diagnosticsState.pendingResize {
-      repaintLastPresentedFrame()
       return
     }
     guard let baseRenderFrame = pendingRenderFrame ?? lastPresentedRenderFrame else {
@@ -548,26 +548,12 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     render(refreshedFrame)
   }
 
-  /// Bounds changed (split / divider / window). Redraw the last frame immediately
-  /// at the new drawable size — bypass `pendingResize` staging so the layer is
-  /// never left with a mismatched drawable that would stretch under default gravity.
+  /// Bounds changed (split / divider / window). Do not re-present: every Metal
+  /// present clears the drawable and flashes (worst on the focused pane / cursor).
+  /// `contentsGravity = .topLeft` keeps the previous drawable unstretched until the
+  /// next real present (resize complete or normal output).
   private func presentForBoundsSizeChange() {
-    repaintLastPresentedFrame(preferPending: true)
-  }
-
-  /// Re-present held content without touching the resize stage queue.
-  /// `preferPending` uses an unflushed frame when available (pre-pendingResize only).
-  private func repaintLastPresentedFrame(preferPending: Bool = false) {
-    let renderFrame: TerminalRenderFrame?
-    if preferPending, !diagnosticsState.pendingResize, let pending = pendingRenderFrame {
-      renderFrame = pending
-    } else {
-      renderFrame = lastPresentedRenderFrame
-    }
-    guard let renderFrame else { return }
-    directView.present(renderFrame)
-    lastPresentedRenderFrame = renderFrame
-    updateDiagnostics(from: renderFrame)
+    // intentionally empty — see comment above
   }
 
   private func updateDiagnostics(from renderFrame: TerminalRenderFrame) {
