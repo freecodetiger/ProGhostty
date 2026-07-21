@@ -93,7 +93,7 @@ If you want **macOS-native chrome** on **honest terminal plumbing**, you’re in
 
 - **Stable long-output reading** — scroll history while agents keep printing; no “freeze the world” history mode as the happy path.
 - **Shift+Enter multi-line** where TUIs expect it; Enter still submits.
-- **Side input** — open a lightweight input while browsing history; Enter pastes into the real session without jumping your viewport.
+- **Side input (⌘P)** — pop a lightweight input while browsing history; type a command or prompt, Enter pastes it into the real session — without jumping your scroll position. Rebindable in Settings.
 - **Optional task notifications** — agent Stop hooks → toast / sound / system notify (**off by default**, install with consent).
 
 ### Hard lines we won’t cross
