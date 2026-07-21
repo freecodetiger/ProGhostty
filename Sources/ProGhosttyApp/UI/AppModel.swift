@@ -791,6 +791,12 @@ final class AppModel: ObservableObject {
 
     var runtime = workspaceRuntimes[index]
     let leavesBefore = PaneTreeReducer.listLeaves(in: runtime.layout.root)
+    // Last pane in a workspace is not closable via "close pane" — keep the
+    // workspace alive so the user can still split. Use workspace close instead.
+    guard leavesBefore.count > 1 else {
+      DebugLog.write("closePane ignored last pane=\(paneID)")
+      return
+    }
     if
       let pane = leavesBefore.first(where: { $0.paneId == paneID }),
       PaneCloseConfirmationPolicy.requiresConfirmation(for: pane, sessionManager: sessionManager),
@@ -802,8 +808,8 @@ final class AppModel: ObservableObject {
     DebugLog.write("closePane requested pane=\(paneID) leavesBefore=\(leavesBefore.count)")
     do {
       guard let closed = try paneWorkspaceController.closePane(workspaceID: activeWorkspaceID, paneID: paneID) else {
-        DebugLog.write("closePane closing terminal because reducer returned nil")
-        closeSelectedTerminal()
+        // Root is a single leaf (or pane not found) — never tear down the workspace here.
+        DebugLog.write("closePane no-op reducer returned nil pane=\(paneID)")
         return
       }
       guard let updatedLayout = paneWorkspaceController.workspaceLayout(id: activeWorkspaceID) else { return }

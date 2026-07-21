@@ -256,6 +256,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
         onPasteDroppedPaths: { [weak self] paneID, text in self?.onPasteDroppedPaths?(paneID, text) },
         menuText: menuText,
         palette: palette,
+        canClosePane: hasMultiplePanes,
         onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
         isResizeSensitiveScreen: { [weak self] paneID in self?.isResizeSensitiveScreen?(paneID) ?? false },
         onSplitAvailabilityChanged: { [weak self] paneID, size, canSplitRight, canSplitDown in
@@ -504,6 +505,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       menuText: menuText,
       palette: palette,
       dimsWhenInactive: hasMultiplePanes,
+      canClosePane: hasMultiplePanes,
       onResize: { [weak self] paneID, rows, cols in self?.onResize?(paneID, rows, cols) },
       isResizeSensitiveScreen: { [weak self] paneID in self?.isResizeSensitiveScreen?(paneID) ?? false },
       onSplitAvailabilityChanged: { [weak self] paneID, size, canSplitRight, canSplitDown in
@@ -815,6 +817,7 @@ final class TerminalPaneViewController: NSViewController {
   private var pendingResizeWorkItem: DispatchWorkItem?
   private var resizeCoordinator = TerminalResizeCommitCoordinator()
   private var sideInputOverlay: TerminalSideInputOverlayView?
+  private var canClosePane = false
 
   init(pane: TerminalPane, contentView: NSView?) {
     self.pane = pane
@@ -848,6 +851,7 @@ final class TerminalPaneViewController: NSViewController {
     menuText: AppText,
     palette: TerminalSurfacePalette,
     dimsWhenInactive: Bool = true,
+    canClosePane: Bool = false,
     onResize: @escaping (UUID, Int, Int) -> Void,
     isResizeSensitiveScreen: @escaping (UUID) -> Bool,
     onSplitAvailabilityChanged: @escaping (UUID, NSSize, Bool, Bool) -> Void,
@@ -867,6 +871,7 @@ final class TerminalPaneViewController: NSViewController {
     self.isResizeSensitiveScreen = isResizeSensitiveScreen
     self.onSplitAvailabilityChanged = onSplitAvailabilityChanged
     self.onPasteDroppedPaths = onPasteDroppedPaths
+    self.canClosePane = canClosePane
     currentPalette = palette
     configureDropHandling()
     applyAppearance(isSelected: isSelected, palette: palette, dimsWhenInactive: dimsWhenInactive)
@@ -1201,8 +1206,12 @@ final class TerminalPaneViewController: NSViewController {
     menu.addItem(.separator())
     menu.addItem(ClosureMenuItem(
       title: text.closePane,
-      handler: {
+      handler: { [weak self] in
+        guard self?.canClosePane == true else { return }
         onClose(paneId)
+      },
+      isEnabled: { [weak self] in
+        self?.canClosePane == true
       }
     ))
     menu.addItem(.separator())
