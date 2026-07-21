@@ -79,15 +79,16 @@ jobs:
           body: |
             ProGhostty ${{ github.ref_name }} 正式版。
 
-            ## v0.4.2 · Soft 主题与设置 chrome 一体
-            - **Soft Dark / Soft Light**：在 Default 深浅之外增加两套整套预设（Ghostty/One Dark 蓝深底 · Solarized cream + 黑字）；titlebar 跟终端底色一体。
-            - **设置页同族配色**：设置窗 chrome 按 effective 主题四套，不再 Soft 终端 + Default 中性灰设置。
-            - **跟随系统 + Soft 偏好**：`softDarkPreferred` / `softLightPreferred`；手动四选一。
-            - **设置窗标题黏底**：透明 titlebar 隐藏系统 "Settings" 标题，show/侧栏切换后 re-assert，避免深色下黑字贴底。
+            ## v0.4.3 · 分屏/滚动稳定性
+            - **分屏拉伸/错位**：分屏与拖动分界线时，Metal 旧帧不再被拉伸；竖直改高时用底色过渡，避免内容先上移/下移再回正。
+            - **分屏 reflow 闪动**：VT resize 后等 shell 重绘再统一 present，减少「到位后又刷一遍」。
+            - **关分屏崩溃**：修复高度变化清屏在 Metal completion 队列触碰 MainActor 导致的闪退。
+            - **最后一块分屏不可关**：只剩一个 pane 时不再误关整个工作区；菜单项禁用。
+            - **历史选区边缘滚动**：默认平滑路径下拖选进历史走 Pattern-2 browse，不再错误移动 VT 视口。
+            - Soft Dark 正文字改为纯白（用户偏好）。
 
-            ## 自 v0.4.1
-            - 假底部/选区错位/滚动卡死与光标狂闪修复；agent 任务完成通知（默认关，hooks 同意安装）。
+            ## 自 v0.4.2
+            - Soft Dark / Soft Light 整套预设与设置 chrome 同族配色。
 
             ## 自 v0.4.0
-            - Pattern-2 平滑像素滚动、Metal 直绘 expanded grid、浏览时跟随新输出。
-            - 最低系统版本 **macOS 14**。
+            - Pattern-2 平滑像素滚动、Metal 直绘 expanded grid；最低 **macOS 14**。
