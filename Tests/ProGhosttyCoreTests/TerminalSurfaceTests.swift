@@ -3197,6 +3197,13 @@ private final class RuntimeFailingMetalDirectRenderingEngine: MetalDirectRenderi
 
   func resetTextureCache() {}
 
+  func clearToBackground(
+    view: MetalDirectRendererView,
+    palette: TerminalSurfacePalette
+  ) -> Bool {
+    false
+  }
+
   func render(
     renderFrame: TerminalRenderFrame,
     plan: MetalTerminalRenderPlan,

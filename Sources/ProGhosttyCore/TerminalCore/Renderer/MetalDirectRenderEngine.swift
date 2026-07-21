@@ -33,6 +33,13 @@ protocol MetalDirectRenderingEngine: AnyObject {
     palette: TerminalSurfacePalette,
     glyphAtlas: MetalGlyphAtlas
   ) -> Bool
+  /// Clear the drawable to terminal background at the view's current bounds.
+  /// Used when pane height changes so a stale topLeft-letterboxed frame cannot
+  /// look like content jumped before the reflow present lands.
+  func clearToBackground(
+    view: MetalDirectRendererView,
+    palette: TerminalSurfacePalette
+  ) -> Bool
 }
 
 enum MetalDirectRenderPassLoadPolicy: Equatable {
@@ -213,6 +220,57 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
 
   func resetTextureCache() {
     cachedTextures.removeAll(keepingCapacity: true)
+  }
+
+  func clearToBackground(
+    view: MetalDirectRendererView,
+    palette: TerminalSurfacePalette
+  ) -> Bool {
+    guard pipelineReady else { return false }
+    let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+    let drawableSize = Self.drawableTargetSize(forViewBounds: view.bounds.size, backingScale: scale)
+    guard let metalLayer = view.layer as? CAMetalLayer else { return false }
+
+    metalLayer.drawableSize = drawableSize
+    if prefersAsyncPresent {
+      if inFlightSemaphore.wait(timeout: .now()) == .timedOut {
+        return false
+      }
+    } else {
+      inFlightSemaphore.wait()
+    }
+    guard let drawable = metalLayer.nextDrawable(),
+      let commandBuffer = commandQueue.makeCommandBuffer()
+    else {
+      inFlightSemaphore.signal()
+      return false
+    }
+
+    let passDescriptor = MTLRenderPassDescriptor()
+    passDescriptor.colorAttachments[0].texture = drawable.texture
+    passDescriptor.colorAttachments[0].loadAction = .clear
+    passDescriptor.colorAttachments[0].storeAction = .store
+    passDescriptor.colorAttachments[0].clearColor = MTLClearColor(
+      red: Double(palette.background.metalRed),
+      green: Double(palette.background.metalGreen),
+      blue: Double(palette.background.metalBlue),
+      alpha: 1
+    )
+    if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) {
+      encoder.endEncoding()
+    }
+    commandBuffer.present(drawable)
+    commandBuffer.addCompletedHandler { [inFlightSemaphore] _ in
+      inFlightSemaphore.signal()
+    }
+    commandBuffer.commit()
+    if !prefersAsyncPresent {
+      commandBuffer.waitUntilCompleted()
+    }
+    lastRenderPassLoadPolicy = .clear
+    lastWaitedForCompletion = !prefersAsyncPresent
+    lastGPUWaitReason = prefersAsyncPresent ? "none" : "clear-background-sync"
+    return true
   }
 
   func render(

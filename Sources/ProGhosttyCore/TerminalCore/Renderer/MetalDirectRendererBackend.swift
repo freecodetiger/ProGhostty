@@ -27,9 +27,8 @@ public final class MetalDirectRendererView: PTYGridView {
   }
 
   /// Fired when view bounds size changes (split, divider drag, window resize).
-  /// Backend re-presents the last frame at the new drawable size so CAMetalLayer
-  /// never shows a stretched stale texture while PTY resize is debounced.
-  public var boundsSizeDidChangeHandler: (() -> Void)?
+  /// Args: previous size, new size.
+  public var boundsSizeDidChangeHandler: ((CGSize, CGSize) -> Void)?
 
   private var lastLaidOutBoundsSize: CGSize = .zero
 
@@ -42,7 +41,9 @@ public final class MetalDirectRendererView: PTYGridView {
     // Default is `.resize`, which STRETCHES the previous drawable whenever the
     // layer bounds change before the next Metal present (common on split /
     // divider drag because PTY resize is debounced ~80ms). Pin top-left so a
-    // stale frame letterboxes instead of distorting glyphs.
+    // stale frame letterboxes instead of distorting glyphs (width changes).
+    // Height changes clear to background instead — topLeft would look like a
+    // vertical content jump before reflow.
     layer.contentsGravity = .topLeft
     return layer
   }
@@ -55,8 +56,9 @@ public final class MetalDirectRendererView: PTYGridView {
     let size = bounds.size
     guard size.width > 0, size.height > 0 else { return }
     if size != lastLaidOutBoundsSize {
+      let previous = lastLaidOutBoundsSize
       lastLaidOutBoundsSize = size
-      boundsSizeDidChangeHandler?()
+      boundsSizeDidChangeHandler?(previous, size)
     }
   }
 
@@ -333,8 +335,8 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     directView.transientOverlayDidChangeHandler = { [weak self] in
       self?.presentViewportChange()
     }
-    directView.boundsSizeDidChangeHandler = { [weak self] in
-      self?.presentForBoundsSizeChange()
+    directView.boundsSizeDidChangeHandler = { [weak self] previous, newSize in
+      self?.presentForBoundsSizeChange(previous: previous, newSize: newSize)
     }
     directView.scrollActivityHandler = { [weak self] isScrolling in
       self?.engine?.prefersAsyncPresent = isScrolling
@@ -548,12 +550,18 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     render(refreshedFrame)
   }
 
-  /// Bounds changed (split / divider / window). Do not re-present: every Metal
-  /// present clears the drawable and flashes (worst on the focused pane / cursor).
-  /// `contentsGravity = .topLeft` keeps the previous drawable unstretched until the
-  /// next real present (resize complete or normal output).
-  private func presentForBoundsSizeChange() {
-    // intentionally empty — see comment above
+  /// Bounds changed (split / divider / window).
+  /// - Width-only: leave the previous drawable (topLeft letterbox) until reflow.
+  /// - Height change: clear to terminal background. Re-presenting old content
+  ///   under topLeft looks like a vertical jump (compress-up / expand-down), and
+  ///   re-drawing old cells at the new size is the wrong reflow. Solid clear
+  ///   until the post-resize frame is the stable intermediate.
+  private func presentForBoundsSizeChange(previous: CGSize, newSize: CGSize) {
+    // First layout after attach has previous == .zero — not a divider jump.
+    guard previous.width > 0, previous.height > 0 else { return }
+    let heightChanged = abs(previous.height - newSize.height) > 0.5
+    guard heightChanged else { return }
+    _ = engine?.clearToBackground(view: directView, palette: palette)
   }
 
   private func updateDiagnostics(from renderFrame: TerminalRenderFrame) {
