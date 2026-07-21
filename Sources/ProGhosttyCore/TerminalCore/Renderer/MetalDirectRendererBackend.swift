@@ -466,9 +466,13 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     if pendingRenderFrame != nil {
       diagnosticsState.droppedFrames += 1
     }
+    // Drop unflushed work so a post-resize-wrong frame cannot sneak out, but
+    // immediately re-present the last good frame so the drawable never goes empty
+    // during the VT resize blackout (divider/split commit gap).
     pendingRenderFrame = nil
     pendingRenderGeneration = 0
     diagnosticsState.pendingResize = true
+    repaintLastPresentedFrame()
   }
 
   public func applyResizeDiagnostics(_ diagnostics: TerminalResizeDiagnostics) {
@@ -528,6 +532,12 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   }
 
   private func presentViewportChange() {
+    // During VT resize, new snapshots are staged — only re-paint the last good
+    // frame so scroll/overlay ticks cannot blank the surface or race the stage.
+    if diagnosticsState.pendingResize {
+      repaintLastPresentedFrame()
+      return
+    }
     guard let baseRenderFrame = pendingRenderFrame ?? lastPresentedRenderFrame else {
       return
     }
@@ -542,9 +552,19 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   /// at the new drawable size — bypass `pendingResize` staging so the layer is
   /// never left with a mismatched drawable that would stretch under default gravity.
   private func presentForBoundsSizeChange() {
-    guard let renderFrame = pendingRenderFrame ?? lastPresentedRenderFrame else {
-      return
+    repaintLastPresentedFrame(preferPending: true)
+  }
+
+  /// Re-present held content without touching the resize stage queue.
+  /// `preferPending` uses an unflushed frame when available (pre-pendingResize only).
+  private func repaintLastPresentedFrame(preferPending: Bool = false) {
+    let renderFrame: TerminalRenderFrame?
+    if preferPending, !diagnosticsState.pendingResize, let pending = pendingRenderFrame {
+      renderFrame = pending
+    } else {
+      renderFrame = lastPresentedRenderFrame
     }
+    guard let renderFrame else { return }
     directView.present(renderFrame)
     lastPresentedRenderFrame = renderFrame
     updateDiagnostics(from: renderFrame)

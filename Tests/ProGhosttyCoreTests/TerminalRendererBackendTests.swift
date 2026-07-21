@@ -780,9 +780,42 @@ struct TerminalRendererBackendTests {
     backend.flushPendingFrame()
 
     let diagnostics = backend.diagnostics
+    // Unflushed gen 11 is dropped; last good gen 10 is re-painted for the blackout.
     #expect(diagnostics.metalDirect.latestPresentedGeneration == 10)
+    #expect(diagnostics.metalDirect.planRows == 1)
+    #expect(diagnostics.metalDirect.planCols == 4)
     #expect(diagnostics.droppedFrames >= 1)
     #expect(diagnostics.pendingResize)
+  }
+
+  @MainActor @Test func metalDirectRendererBackendKeepsLastFramePaintedWhileResizePending() {
+    let backend = MetalDirectRendererBackend()
+
+    backend.render(TerminalRenderFrame(frame: frame(rows: ["old"], cols: 4, cursorX: 0, cursorY: 0), generation: 10))
+    backend.flushPendingFrame()
+    backend.markResizePending()
+
+    // New VT-sized frames stage only — must not replace the on-screen old frame yet.
+    backend.render(TerminalRenderFrame(frame: frame(rows: ["new", "wide"], cols: 8, cursorX: 0, cursorY: 0), generation: 11))
+    backend.flushPendingFrame()
+
+    var diagnostics = backend.diagnostics
+    #expect(diagnostics.pendingResize)
+    #expect(diagnostics.metalDirect.planRows == 1)
+    #expect(diagnostics.metalDirect.planCols == 4)
+    #expect(diagnostics.metalDirect.latestPresentedGeneration == 10)
+
+    backend.applyResizeDiagnostics(TerminalResizeDiagnostics(
+      totalDuration: 0.2,
+      vtDuration: 0.1,
+      snapshotDuration: 0.1
+    ))
+
+    diagnostics = backend.diagnostics
+    #expect(!diagnostics.pendingResize)
+    #expect(diagnostics.metalDirect.planRows == 2)
+    #expect(diagnostics.metalDirect.planCols == 8)
+    #expect(diagnostics.metalDirect.latestPresentedGeneration == 11)
   }
 
   @MainActor @Test func metalDirectRendererBackendKeepsLatestResizeStageGeneration() {
