@@ -337,9 +337,14 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   ) { [weak self] data, session, delivery in
     self?.flushOutput(data, session: session, delivery: delivery)
   }
+  /// After VT resize we stage the first snapshot but delay presenting until the
+  /// shell's SIGWINCH redraw has a chance to replace that stage. One present at
+  /// settle avoids "reflow flash + second flash when content settles".
+  private var resizePresentSettleTasks: [TerminalSessionID: Task<Void, Never>] = [:]
   private nonisolated static let interactiveInputByteLimit = 16
   private nonisolated static let interactiveEchoOutputByteLimit = 96
   private nonisolated static let interactiveEchoWindowSeconds: TimeInterval = 0.15
+  private nonisolated static let resizePresentSettleNanoseconds: UInt64 = 64_000_000
 
   public init(surfaceRegistry: PTYTerminalSurfaceRegistry) {
     self.surfaceRegistry = surfaceRegistry
@@ -386,6 +391,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     guard let state = sessions.removeValue(forKey: id) else { return }
     lastInputUptimeBySession[id] = nil
     outputBatchCoordinator.cancel(session: id)
+    cancelResizePresentSettle(session: id)
     state.readSource.cancel()
     state.waitTimer.cancel()
     resizeScheduler.cancel(session: id)
@@ -399,6 +405,8 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     guard var state = sessions[id] else { return }
     guard state.config.rows != rows || state.config.cols != cols else { return }
     outputBatchCoordinator.flush(session: id)
+    // A newer resize supersedes any settle that would present an older stage.
+    cancelResizePresentSettle(session: id)
     state.config.rows = rows
     state.config.cols = cols
     state.resizeGeneration &+= 1
@@ -713,8 +721,30 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       session: id,
       wasPinnedToBottom: wasPinnedToBottom
     )
+    // Stage only — still pendingResize, so Metal does not present yet.
     surfaceRegistry.render(snapshot, bridge: bridge, session: id)
-    surfaceRegistry.applyResizeDiagnostics(diagnostics, session: id)
+    scheduleResizePresentSettle(session: id, generation: generation, diagnostics: diagnostics)
+  }
+
+  private func cancelResizePresentSettle(session id: TerminalSessionID) {
+    resizePresentSettleTasks[id]?.cancel()
+    resizePresentSettleTasks[id] = nil
+  }
+
+  private func scheduleResizePresentSettle(
+    session id: TerminalSessionID,
+    generation: UInt64,
+    diagnostics: TerminalResizeDiagnostics
+  ) {
+    cancelResizePresentSettle(session: id)
+    resizePresentSettleTasks[id] = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: Self.resizePresentSettleNanoseconds)
+      guard !Task.isCancelled, let self else { return }
+      self.resizePresentSettleTasks[id] = nil
+      guard let state = self.sessions[id], state.resizeGeneration == generation else { return }
+      // Present whichever frame is staged (VT snapshot and/or SIGWINCH redraw).
+      self.surfaceRegistry.applyResizeDiagnostics(diagnostics, session: id)
+    }
   }
 
   private func performScheduledResize(session id: TerminalSessionID, job: PendingResizeJob) {
