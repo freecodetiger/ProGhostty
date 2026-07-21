@@ -57,17 +57,29 @@ Metal 直渲时：`MetalDirectRendererBackend.render → flushPendingFrame → M
 
 ## 像素滚动路径
 
+**主路径 Pattern-2**（默认 `smoothPixelScrollingEnabled = true`，非 alt-screen，browse handlers 已接线）：
+
 ```
-trackpad/wheel → PTYGridView.scrollWheel
-  → PaneScrollCoordinator.scroll（更新 viewport.visualOffsetY 亚行余量）
-  → 累积跨过一行 → ScrollCommitCoordinator.enqueue（~120Hz 合并）
-  → PTYGridView.commitViewportScroll → PTYTerminalSurfaceRegistry.scrollViewport
-  → GhosttyVTBridge.scrollViewport + scrollbar   （VT 行移动仍归 libghostty）
-  → renderScrollCommit → backend.render → resetViewportStartRowKeepingVisualOffset
+trackpad/wheel → PTYGridView.scrollWheel → feedSmoothScroll
+  → SmoothScrollEngine（display-link tick）
+  → SmoothScrollBrowseResolver → (topAbsoluteRow, pixelOffset)
+  → browseTopRow + viewport.visualOffsetY（tick 是 browsing 时唯一 writer）
+  → presentBrowseWindow via GhosttyVTBridge.rows(at:)   （不移动 VT viewport）
+  → Metal 直渲 translationY = (-overscanTop*h + P)
 ```
 
-- **纯亚行像素移动**便宜；**行提交帧**贵（要动权威 VT 视口 + 抓快照 + 渲染 + 调度）。
-- 滚动 owner 目前分散在 `PaneScrollCoordinator` / `ScrollCommitCoordinator` / `viewport.visualOffsetY`，计划收敛到 `PaneScrollController`（见 `.claude/ARCHITECTURE_PLAN.md` 阶段 2）。收敛时 VT 行移动仍留在 `bridge.scrollViewport`——别把语义搬进 Swift。
+选区边缘 auto-scroll 在 Pattern-2 可用时也走 discrete browse step（`browseTopRow ±1` + present/follow），**不要**再调 `scrollViewport`。
+
+**Fallback**（smooth off / alt-screen / 缺 browse plumbing）仍走：
+
+```
+processScroll → PaneScrollController（PaneScrollCoordinator + ScrollCommitCoordinator）
+  → commitViewportScroll → scrollViewport → bridge.scrollViewport
+  → renderScrollCommit → resetViewportStartRowKeepingVisualOffset
+```
+
+- Pattern-2 下 `visualOffsetY` 归 browse tick；`resetViewportStartRowKeepingVisualOffset` 在 `browseTopRow != nil || isSmoothScrollBrowsing` 时 no-op（防 PaneScroll remainder 抹掉 P）。
+- Fallback 的**行提交帧**贵（动权威 VT + 快照 + 渲染）；主路径热成本是 `rows(at:)` + present 频率。
 
 ## 诊断
 

@@ -52,8 +52,8 @@
 | 渲染（画像素，Metal 直渲） | `MetalDirectRendererBackend` + `MetalDirectRenderEngine` | `TerminalCore/Renderer/` | ✅ |
 | 渲染（AppKit cell-grid 回退） | `GhosttyVTCellGridRendererBackend` | `TerminalCore/Renderer/` | ✅ |
 | 渲染诊断（Metal 专属字段） | `MetalDirectDiagnostics` 子结构 | `TerminalCore/Renderer/MetalDirectDiagnostics.swift` | ✅ 已拆分 |
-| 像素滚动物理余量 | `PaneScrollCoordinator` | `TerminalCore/Renderer/` | ⚠️ 计划收敛到 `PaneScrollController` |
-| 滚动行提交批处理 | `ScrollCommitCoordinator`（~120Hz 合并） | `TerminalCore/Renderer/` | ⚠️ 同上 |
+| 像素滚动 / 历史浏览（主路径 Pattern-2） | `SmoothScrollEngine` + `SmoothScrollBrowseResolver` + `presentBrowseWindow`（`rows(at:)`，不移动 VT） | `TerminalCore/Renderer/` · `PTY/` | ✅ 默认 smooth on |
+| 像素滚动 fallback（smooth off / alt / 无 browse plumbing） | `PaneScrollController`（wraps `PaneScrollCoordinator` + `ScrollCommitCoordinator` → `scrollViewport`） | `TerminalCore/Renderer/` · `PTY/` | ✅ fallback only |
 | 输出合并（字节 + 快照两级） | `TerminalOutputBatchCoordinator` + `TerminalOutputCoordinator` | `TerminalCore/PTY/` | ✅ |
 | 工作区运行时状态 | `PaneWorkspaceController` | `Workspace/PaneWorkspaceController.swift` | ✅ |
 | 分屏树 reduce（纯值） | `PaneTreeReducer` | `Workspace/` | ✅ |

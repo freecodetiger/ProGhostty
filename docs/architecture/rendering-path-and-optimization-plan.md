@@ -88,40 +88,50 @@ separately in `MetalDirectRendererBackend.updateDiagnostics`.
 
 ### Scroll Render Path
 
-The interactive scroll path is:
+**Primary (Pattern-2)** — default when `smoothPixelScrollingEnabled` is true,
+non-alt-screen, and browse handlers are wired:
 
 ```text
 trackpad / wheel event
-  -> PTYGridView.scrollWheel
-  -> PaneScrollCoordinator.scroll
-  -> update viewport.visualOffsetY for sub-row motion
-  -> if accumulated delta crosses a row:
-       ScrollCommitCoordinator.enqueue
-       or immediate commit for slow accumulated single-row movement
-  -> PTYGridView.commitViewportScroll
-  -> PTYTerminalSurfaceRegistry.scrollViewport
-  -> GhosttyVTBridge.scrollViewport
-  -> GhosttyVTBridge.scrollbar
-  -> PTYTerminalSurfaceRegistry.renderScrollCommit
-  -> GhosttyVTBridge.scrollFrame
-  -> backend.render
-  -> resetViewportStartRowKeepingVisualOffset
-  -> scheduled backend flush on the next main-queue turn
+  -> PTYGridView.scrollWheel / feedSmoothScroll
+  -> SmoothScrollEngine (display-link tick)
+  -> SmoothScrollBrowseResolver -> (topAbsoluteRow, pixelOffset)
+  -> browseTopRow + viewport.visualOffsetY
+  -> PTYTerminalSurfaceRegistry.presentBrowseWindow
+  -> GhosttyVTBridge.rows(at:)   (VT viewport stays at live bottom)
+  -> backend.render / flush
 ```
 
-The key performance distinction:
+Selection edge auto-scroll uses the same browse present path (discrete whole-row
+steps) when Pattern-2 plumbing is available — it must not call `scrollViewport`.
 
-- Pure sub-row pixel movement is relatively cheap.
-- Row commit frames are heavier because they update the authoritative
-  `libghostty-vt` viewport, capture a new scroll snapshot, render it into the
-  backend, and schedule presentation.
+**Fallback** — smooth off, alt-screen, or missing browse plumbing:
+
+```text
+trackpad / wheel event
+  -> PTYGridView.processScroll
+  -> PaneScrollController (PaneScrollCoordinator + ScrollCommitCoordinator)
+  -> commitViewportScroll
+  -> PTYTerminalSurfaceRegistry.scrollViewport
+  -> GhosttyVTBridge.scrollViewport
+  -> renderScrollCommit / scrollFrame
+  -> resetViewportStartRowKeepingVisualOffset
+```
+
+Performance notes:
+
+- Pattern-2 hot cost: `rows(at:)` + present rate on the display link.
+- Fallback row-commit frames are heavier (authoritative VT move + snapshot + render).
+- While `browseTopRow != nil` or browsing, `resetViewportStartRowKeepingVisualOffset`
+  must not overwrite `visualOffsetY` from the unused PaneScroll remainder.
 
 ## Existing Caches and Coalescing
 
 The current implementation already has several optimization layers:
 
-- `ScrollCommitCoordinator` coalesces row deltas at about 120 Hz.
-- `PaneScrollCoordinator` keeps a pixel remainder smaller than one cell height.
+- Pattern-2: `SmoothScrollEngine` + `SmoothScrollBrowseResolver` + browse present.
+- Fallback: `ScrollCommitCoordinator` coalesces row deltas at about 120 Hz.
+- Fallback: `PaneScrollCoordinator` keeps a pixel remainder smaller than one cell height.
 - `CellGridDirtyTracker` computes dirty rows and dirty cell ranges.
 - `MetalGlyphAtlas` caches rendered glyph images.
 - `MetalDirectRenderEngine` caches Metal textures by glyph atlas entry id and

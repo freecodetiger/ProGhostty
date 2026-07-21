@@ -30,8 +30,8 @@ description: 做渲染/滚动/输出性能优化，或需要判断"正确性 vs 
 
 已在位（`docs/architecture/rendering-path-and-optimization-plan.md`）：
 
-- `ScrollCommitCoordinator` — 行提交 ~120Hz 合并。
-- `PaneScrollCoordinator` — 保持小于一行高的像素余量。
+- **Pattern-2 主路径**：`SmoothScrollEngine` + `SmoothScrollBrowseResolver` + `presentBrowseWindow`（`rows(at:)`，VT 不动）；亚行余量 `viewport.visualOffsetY`。
+- **Fallback**：`PaneScrollController`（`PaneScrollCoordinator` 像素余量 + `ScrollCommitCoordinator` ~120Hz 行提交）。
 - `CellGridDirtyTracker` — 算脏行 + 脏 cell 范围。
 - `MetalGlyphAtlas` — 缓存渲染后的字形图。
 - `MetalDirectRenderEngine` — 按字形 atlas entry id + generation 缓存 Metal 纹理。
@@ -39,11 +39,11 @@ description: 做渲染/滚动/输出性能优化，或需要判断"正确性 vs 
 - `ResizeSensitivityCache` — 除非缓存键变，不重扫光标下方所有行。
 - `TerminalOutputCoordinator` + `TerminalOutputBatchCoordinator` — 输出快照/字节两级合并，共 8ms 预算。
 
-加优化前先确认想要的缓存是否已存在——问题通常不是"没缓存"，而是行提交帧在主 actor 上同步做太多事。
+加优化前先确认想要的缓存是否已存在——主路径问题多在 `rows(at:)`/display-link 呈现；fallback 问题多在行提交帧。
 
 ## 已知重点（改这些要小心）
 
-- **行提交帧重**：同步动权威 VT 视口 + 抓 scrollbar/scrollFrame 快照 + backend staging + 视口余量 reset，全在主 actor。这是偶发滚动卡顿的主因。
+- **Fallback 行提交帧重**：同步动权威 VT 视口 + 抓 scrollbar/scrollFrame 快照 + backend staging + 视口余量 reset，全在主 actor（仅 smooth off / alt / 无 browse plumbing）。
 - **扩展帧分配**：`overscanTop.cells + viewport.cells + overscanBottom.cells` 在多处重复构建，滚动时加 CPU 压力。
 - **快照跨界成本**：每次 `frame()`/`scrollFrame()` 跨 bridge 锁把 cells 拷成 Swift 值。
 - **GPU 等待**：`MetalDirectRenderEngine.shouldWaitForCommandCompletion` 在首帧/纹理 resize/全量重绘/光标行脏/overlay 存在等条件下等命令完成，可能造成滚动尖刺。
