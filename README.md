@@ -1,164 +1,263 @@
-# ProGhostty
+<p align="center">
+  <img src="logo.png" alt="ProGhostty" width="128" height="128">
+</p>
 
-[![Release](https://img.shields.io/github/v/release/freecodetiger/ProGhostty?sort=semver)](https://github.com/freecodetiger/ProGhostty/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-black)](Package.swift)
-[![Swift](https://img.shields.io/badge/Swift-6.1-orange)](Package.swift)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<h1 align="center">ProGhostty</h1>
 
-ProGhostty 是一个原生 macOS 终端，目标是把 Ghostty 的终端语义和更适合开发者日常工作的交互层结合起来。
+<p align="center">
+  <strong>The macOS terminal for people who live in shells — and AI CLIs.</strong><br>
+  Real PTY. Ghostty VT semantics. Smooth history that stays out of your way.
+</p>
 
-它不是一个重新发明 Shell 的工具。你的 zsh、dotfiles、prompt、补全、tmux、vim、fzf、htop、Codex、Claude Code 和其它 TUI 工具，仍然沿着真实 PTY 和正常终端输入输出路径运行。
+<p align="center">
+  <a href="https://github.com/freecodetiger/ProGhostty/releases/latest"><img src="https://img.shields.io/github/v/release/freecodetiger/ProGhostty?sort=semver&style=for-the-badge" alt="Release"></a>
+  <a href="Package.swift"><img src="https://img.shields.io/badge/macOS-14%2B-black?style=for-the-badge" alt="macOS 14+"></a>
+  <a href="Package.swift"><img src="https://img.shields.io/badge/Swift-6.1-F05138?style=for-the-badge&logo=swift&logoColor=white" alt="Swift 6.1"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="MIT"></a>
+  <a href="https://github.com/freecodetiger/ProGhostty/stargazers"><img src="https://img.shields.io/github/stars/freecodetiger/ProGhostty?style=for-the-badge" alt="Stars"></a>
+</p>
 
-> ProGhostty 不是 Ghostty 官方版本，也不隶属于 Ghostty 项目。本仓库 vendored Ghostty，并使用 `libghostty-vt` 作为终端语义层。
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#why-proghostty">Why</a> ·
+  <a href="#what-you-get">What you get</a> ·
+  <a href="#build-from-source">Build</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#contributing">Contributing</a>
+</p>
 
-## 亮点
+---
 
-- **Ghostty 终端语义**：底层接入 `libghostty-vt`，终端状态、样式、光标、滚动视口等语义尽量交给真正的 VT 层处理。
-- **面向 Codex / AI TUI 的阅读体验**：滚动历史时不会轻易被新输出拉回底部，适合长上下文、长回答、长日志的阅读和继续输入。
-- **旁路输入框**：每个 pane 都可以用快捷键呼出自己的轻量输入框，在浏览历史记录时输入命令或 prompt，不打断当前预览位置；回车后按粘贴语义落到真实终端。
-- **真实终端 Shift+Enter 换行**：在 Codex 等 TUI 中可以直接输入多行内容，普通 Enter 仍保持回车行为。
-- **分屏和工作区**：支持多 pane、多工作区、独立 split tree 和长时间运行的终端会话。
-- **路径友好交互**：拖拽文件或文件夹到 pane 会解析为绝对路径；Cmd+点击文件路径会定位到访达。
-- **titlebar 更有用**：右侧显示当前工作区，中间显示当前聚焦 pane 的目录；鼠标悬停时可展开为绝对路径，长路径会保留首尾并在中间省略。
-- **克制的 macOS 原生体验**：SwiftUI + AppKit 实现，尽量保持安静、直接、可预测，不接管你的 Shell 生态。
+ProGhostty is a **native macOS terminal you can use as a daily driver**: fork real shells, speak real VT, split workspaces, and read long Codex / Claude sessions without the viewport fighting you.
 
-## 下载
+It does **not** reinvent your shell. zsh, fish, prompt, tmux, vim, fzf, htop, Codex, Claude Code — same PTY path you already trust.
 
-从 GitHub Releases 下载最新版 DMG：
+> **Not affiliated with Ghostty.** We vendor Ghostty and run **`libghostty-vt`** as the terminal semantics engine. Product UI stays on the right side of that boundary.
 
-<https://github.com/freecodetiger/ProGhostty/releases/latest>
+---
 
-当前 DMG 使用 ad-hoc 签名。macOS 可能提示无法验证开发者；如果被系统拦截，请在 Finder 中右键应用并选择“打开”。
+## Install
 
-ProGhostty 会在启动时或设置中检查更新。发现新版本时，titlebar 会显示更新提示，点击后打开对应 Release 页面。
+Ship builds on every tagged release. **Start here:**
 
-## 当前状态
+### [↓ Download the latest DMG](https://github.com/freecodetiger/ProGhostty/releases/latest)
 
-ProGhostty 仍处于早期阶段，但已经可以用于真实 PTY 会话和日常开发试用。当前优先级是：
+```bash
+# or build from source
+git clone --recursive https://github.com/freecodetiger/ProGhostty.git
+cd ProGhostty
+# see Build from source
+```
 
-1. 终端语义正确性。
-2. PTY、resize、scrollback 和 renderer 稳定性。
-3. Codex、Claude Code 等 TUI 的输入、滚动和粘贴体验。
-4. 不侵入用户已有 Shell 配置的产品增强能力。
+| | |
+|--|--|
+| **Signing** | Ad-hoc (open-source releases). First launch may need **Right-click → Open** or *Privacy & Security → Open Anyway*. |
+| **Updates** | In-app check opens the matching GitHub Release when a new `v*` ships. |
+| **Platform** | macOS **14+**, Apple Silicon & Intel via SwiftPM (release DMG tracks CI). |
 
-## 功能概览
+---
 
-- 原生 macOS app，使用 Swift、SwiftUI 和 AppKit。
-- 真实 PTY session，每个 pane 对应独立 Shell 进程。
-- 基于 `libghostty-vt` 的 VT 解析、cell state、样式、光标和 viewport 语义。
-- AppKit cell-grid renderer，使用 Ghostty VT snapshot 渲染。
-- 支持 overscan 的像素级 scrollback。
-- 分屏、工作区、工作区恢复和独立焦点管理。
-- 设置项覆盖外观、字体、Shell、工作目录、语言、快捷键、插件管理和更新检查。
-- Shell 插件管理支持预览、备份和受控配置块，不直接接管 dotfiles。
-- `pg` helper executable，用于 Shell 侧集成。
+## Why ProGhostty?
 
-## 从源码构建
+Terminals fail in two boring ways:
 
-要求：
+1. **Pretty UI, soft VT** — a second parser in the app layer slowly disagrees with reality.  
+2. **Correct VT, hostile history** — you’re halfway through a long AI answer and the view snaps to live tail.
 
-- macOS 14 或更新版本
-- Swift 6.1 toolchain
-- Git submodule 支持
-- Zig 0.15.2，用于构建 vendored Ghostty `libghostty-vt`
-- 生成 `ghostty-vt.xcframework` 或 app bundle 时需要完整 Xcode
+ProGhostty is built so those two failure modes stay rare:
 
-拉取 submodules：
+| Pillar | What it means in practice |
+|--------|---------------------------|
+| **Semantics first** | Cursor, scrollback, styles, ANSI — **`libghostty-vt` is the only truth**. Swift never re-parses the stream. |
+| **Architecture that holds** | Strict App → Core → PTY → VT → Renderer chain; Core **cannot** import SwiftUI (CI guard). |
+| **History that works** | Pattern‑2 smooth pixel scroll: browse without freezing new output, return to live without false bottoms. |
+| **Your shell stays yours** | No mandatory plugin takeover, no “managed” dotfiles. Enhancements are opt-in. |
+
+If you want **macOS-native chrome** on **honest terminal plumbing**, you’re in the right repo.
+
+---
+
+## What you get
+
+### Daily driver
+
+- **Real PTY panes** — independent processes, proper resize, signals, full-screen TUIs.
+- **Ghostty VT core** — battle-tested parse & state, not a hobby ANSI subset.
+- **Metal-first rendering** — direct draw path for smooth scroll; cell-grid / text fallback when needed.
+- **Workspaces & splits** — multi-pane layouts, multiple workspaces, predictable focus.
+- **Themes that cohere** — Default + **Soft Dark / Soft Light**; title bar and settings follow the terminal palette.
+- **Path-aware UX** — drop paths into the pane; **⌘-click** files to reveal in Finder.
+- **Useful title bar** — workspace + focused pane directory; hover for full path.
+
+### Built for AI CLIs (without special-casing reality)
+
+- **Stable long-output reading** — scroll history while agents keep printing; no “freeze the world” history mode as the happy path.
+- **Shift+Enter multi-line** where TUIs expect it; Enter still submits.
+- **Side input** — open a lightweight input while browsing history; Enter pastes into the real session without jumping your viewport.
+- **Optional task notifications** — agent Stop hooks → toast / sound / system notify (**off by default**, install with consent).
+
+### Hard lines we won’t cross
+
+- No second VT truth in Swift  
+- No default hijack of your shell config  
+- No feature that only works by scraping terminal text when the VT already knows
+
+---
+
+## Roadmap (open source, not “unfinished”)
+
+ProGhostty **ships continuous `v0.4.x` releases** with scroll stability, themes, notifications, and AI-CLI polish already in the box. Open source means the backlog is public and movable — not that the app is a prototype.
+
+**Coming next (community-shaped):** notarized / wider distribution options, richer theme import, more workspace power tools, contributor-driven fixes.
+
+Track work and ideas: [Issues](https://github.com/freecodetiger/ProGhostty/issues) · [Releases](https://github.com/freecodetiger/ProGhostty/releases).
+
+---
+
+## Build from source
+
+### Requirements
+
+| Tool | Notes |
+|------|--------|
+| macOS **14+** | App target |
+| **Swift 6.1** | Language mode `.v6` |
+| **Zig 0.15.2** | Vendored `libghostty-vt` |
+| **Xcode** | App bundle / signing tooling |
+| **Git submodules** | `Vendor/ghostty` |
+
+### 1. Submodules
 
 ```bash
 git submodule update --init --recursive
 ```
 
-构建 vendored Ghostty VT library：
+### 2. Build `libghostty-vt` (**ReleaseFast — required**)
+
+A Debug VT library makes parsing pathologically slow. Always use ReleaseFast:
 
 ```bash
 cd Vendor/ghostty
-../../.tools/zig-aarch64-macos-0.15.2/zig build \
+zig build \
   --global-cache-dir ../../.zig-cache-global \
   -Demit-lib-vt=true \
   -Demit-xcframework=false \
   -Doptimize=ReleaseFast
 ```
 
-构建并运行：
+Full notes: [`docs/libghostty-vt.md`](docs/libghostty-vt.md).
+
+### 3. Compile, test, architecture guard
 
 ```bash
 swift build
-swift run ProGhostty
+swift test
+scripts/check-architecture.sh
 ```
 
-构建 macOS app bundle：
+### 4. Run the app people actually ship
+
+`swift build` alone does **not** refresh the `.app` bundle. For a real launch:
 
 ```bash
-scripts/build-app-bundle.sh release
+./scripts/build-app-bundle.sh release
+open .build/arm64-apple-macosx/release/ProGhostty.app
 ```
 
-运行测试：
+---
 
-```bash
-swift test --no-parallel
-```
+## Architecture
 
-## 架构
-
-ProGhostty 把 Ghostty 集成封装在桥接层后面，让 UI 和产品代码不直接依赖 Ghostty 内部实现。
+One pipeline. One owner per concern.
 
 ```text
-forkpty shell
-  -> PTY output bytes
-  -> GhosttyVTBridge
-  -> libghostty-vt
-  -> cell-grid snapshot
-  -> AppKit renderer
+PTY bytes
+  → PTYTerminalEngine           session lifecycle & I/O
+  → GhosttyVTBridge.write
+  → libghostty-vt               ★ sole terminal state
+  → frame / scrollFrame / rows(at:)
+  → TerminalRenderFrame         immutable snapshot
+  → Metal direct | cell-grid | text fallback
 ```
 
-终端核心负责 PTY 生命周期、resize、输入路由和 renderer snapshot。工作区、设置、插件管理、更新检查、旁路输入框等产品功能围绕终端核心构建，而不是塞进 parser 或 renderer。
+| Concern | Owner |
+|---------|--------|
+| PTY / sessions | `PTYTerminalEngine` |
+| VT state | `libghostty-vt` via `GhosttyVTBridge` |
+| Smooth browse | `SmoothScrollEngine` + browse present |
+| Pixels | Metal / cell-grid backends (paint only) |
+| Workspaces | `PaneWorkspaceController` |
 
-## 仓库结构
+Deep dive: [`docs/architecture/ownership-map.md`](docs/architecture/ownership-map.md) · agent rules: [`CLAUDE.md`](CLAUDE.md).
 
 ```text
 Sources/
-  ProGhosttyApp/        macOS app、SwiftUI/AppKit UI、窗口、工作区
-  ProGhosttyCore/       PTY engine、Ghostty bridge、renderer、设置、插件
-  ProGhosttyGhosttyVT/  libghostty-vt 的 C 边界
-  ProGhosttyPTY/        forkpty、resize、wait C helpers
-  ProGhosttyPG/         Shell 侧 helper command
+  ProGhosttyApp/        macOS app, settings, windows
+  ProGhosttyCore/       PTY, VT bridge, renderer, workspace
+  ProGhosttyGhosttyVT/  C surface for libghostty-vt
+  ProGhosttyPTY/        forkpty / resize helpers
+  ProGhosttyPG/         `pg` helper CLI
 
-Tests/
-  ProGhosttyCoreTests/  终端、renderer、workspace、settings、update tests
-
-Vendor/
-  ghostty/              vendored Ghostty source
-
-docs/
-  architecture/         终端架构说明
+Vendor/ghostty/         vendored Ghostty (MIT)
+Tests/                  swift-testing
+scripts/                bundle, DMG, architecture guard
 ```
 
-## 设计原则
+---
 
-- 不替代用户的 Shell。
-- 不在产品 UI 中用字符串硬猜终端输出，终端语义应留在 VT 层。
-- 不为某个特定 TUI 写死 hack，但优先保证真实开发工具的体验。
-- 增强工作流必须可选、可降级。
-- 优先选择原生 macOS 交互、安静 UI 和可预测的终端行为。
+## Contributing
 
-## 参与贡献
+**Contributions are welcome** — from one-line docs to scroll/VT hard problems.
 
-欢迎提交 Issue 和 Pull Request。对于较大的改动，请说明：
+| You care about… | Jump in on… |
+|-----------------|-------------|
+| Daily-driver bugs | Repro + PR or detailed issue |
+| Scroll / split / resize | Pattern‑2 + pane layout |
+| Themes & settings chrome | Cohesive palettes, a11y contrast |
+| Docs & onboarding | Screenshots, build tips, translations |
+| Tests | Pure value types & scroll resolvers |
 
-- 用户可见的问题是什么；
-- 涉及哪些终端行为；
-- 如何测试；
-- 是否触及 PTY、`libghostty-vt`、renderer、workspace、settings 或 plugin-management 代码。
-
-提交 PR 前请运行：
+### PR checklist
 
 ```bash
-swift test --no-parallel
+swift build && swift test && scripts/check-architecture.sh
+# UI / renderer? also:
+./scripts/build-app-bundle.sh release   # hand-test the .app
 ```
+
+In the description: **user-visible behavior**, **layer touched** (PTY / VT / renderer / workspace / settings), **how you tested**.
+
+Commits: Conventional Commits — see [`docs/git-workflow.md`](docs/git-workflow.md).
+
+---
+
+## Community
+
+- [Issues](https://github.com/freecodetiger/ProGhostty/issues) — bugs & ideas  
+- [Releases](https://github.com/freecodetiger/ProGhostty/releases) — DMGs & notes  
+- ⭐ **Star the repo** if ProGhostty is your daily terminal — it helps the next person find a VT-honest macOS app.
+
+<p align="center">
+  <a href="https://github.com/freecodetiger/ProGhostty/releases/latest"><strong>Download</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/freecodetiger/ProGhostty/stargazers"><strong>Star</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/freecodetiger/ProGhostty/issues/new"><strong>Report / request</strong></a>
+</p>
+
+---
 
 ## License
 
-ProGhostty 使用 [MIT License](LICENSE)。
+**[MIT](LICENSE)** for ProGhostty.
 
-Vendored Ghostty source code 保持其自身 MIT license，见 [`Vendor/ghostty/LICENSE`](Vendor/ghostty/LICENSE)。
+Vendored Ghostty: **MIT** — [`Vendor/ghostty/LICENSE`](Vendor/ghostty/LICENSE).
+
+---
+
+<p align="center">
+  <sub>
+    Native Swift · <code>libghostty-vt</code> · real PTY · made for people who don’t leave the terminal<br>
+    中文界面 · English docs for the global community
+  </sub>
+</p>
