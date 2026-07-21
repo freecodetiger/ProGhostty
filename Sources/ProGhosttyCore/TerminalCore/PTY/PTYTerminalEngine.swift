@@ -1102,6 +1102,8 @@ public class PTYGridView: NSView {
   }
 
   public func resetViewportStartRowKeepingVisualOffset() {
+    // Pattern-2 owns visualOffsetY while parked/browsing; PaneScroll remainder is unused there.
+    if browseTopRow != nil || isSmoothScrollBrowsing { return }
     viewport = TerminalViewport(visualOffsetY: scrollController.pixelRemainderY)
   }
 
@@ -2709,7 +2711,7 @@ public class PTYGridView: NSView {
       direction = 0
     }
 
-    guard direction != 0, viewportCanScrollHandler?(direction) != false else {
+    guard direction != 0, selectionAutoScrollCanScroll(direction: direction) else {
       stopSelectionAutoScroll()
       return
     }
@@ -2741,9 +2743,14 @@ public class PTYGridView: NSView {
       stopSelectionAutoScroll()
       return
     }
-    guard viewportCanScrollHandler?(selectionAutoScrollDirection) != false,
-      viewportScrollHandler?(selectionAutoScrollDirection) == true
-    else {
+    let didScroll: Bool
+    if canUsePattern2BrowseForSelection {
+      didScroll = stepBrowseForSelectionAutoScroll(direction: selectionAutoScrollDirection)
+    } else {
+      didScroll = viewportCanScrollHandler?(selectionAutoScrollDirection) != false
+        && viewportScrollHandler?(selectionAutoScrollDirection) == true
+    }
+    guard didScroll else {
       stopSelectionAutoScroll()
       return
     }
@@ -2752,6 +2759,89 @@ public class PTYGridView: NSView {
     }
     needsDisplay = true
     transientOverlayDidChangeHandler?()
+  }
+
+  /// Same plumbing gate as wheel Pattern-2 browse, without the NSEvent.
+  private var canUsePattern2BrowseForSelection: Bool {
+    guard rendererOptions.smoothPixelScrollingEnabled else { return false }
+    guard browseScrollMetricsHandler != nil, browsePresentHandler != nil, cellSize.height > 0 else {
+      return false
+    }
+    return true
+  }
+
+  private func selectionAutoScrollCanScroll(direction: Int) -> Bool {
+    if canUsePattern2BrowseForSelection {
+      return canStepBrowseForSelectionAutoScroll(direction: direction)
+    }
+    return viewportCanScrollHandler?(direction) != false
+  }
+
+  private func canStepBrowseForSelectionAutoScroll(direction: Int) -> Bool {
+    guard let metrics = browseScrollMetricsHandler?() else { return false }
+    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
+    let liveBottom = Self.liveBottomTopRow(
+      total: metrics.total,
+      visibleRows: visible,
+      vtOffset: metrics.topAbsoluteRow
+    )
+    let currentTop = browseTopRow ?? liveBottom
+    if direction > 0 {
+      // Into history.
+      return currentTop > 0
+    }
+    if direction < 0 {
+      // Toward live tail — only while parked above the live page.
+      return browseTopRow != nil && currentTop < liveBottom
+    }
+    return false
+  }
+
+  /// Discrete whole-row history step for selection edge auto-scroll (Pattern-2).
+  /// Reuses browse present/follow handlers; does not move the VT viewport.
+  @discardableResult
+  private func stepBrowseForSelectionAutoScroll(direction: Int) -> Bool {
+    guard let metrics = browseScrollMetricsHandler?() else { return false }
+    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
+    let liveBottom = Self.liveBottomTopRow(
+      total: metrics.total,
+      visibleRows: visible,
+      vtOffset: metrics.topAbsoluteRow
+    )
+    let currentTop = browseTopRow ?? liveBottom
+
+    let nextTop: UInt64
+    if direction > 0 {
+      guard currentTop > 0 else { return false }
+      nextTop = currentTop - 1
+    } else if direction < 0 {
+      guard let parked = browseTopRow, parked < liveBottom else { return false }
+      nextTop = min(parked + 1, liveBottom)
+    } else {
+      return false
+    }
+
+    // Don't dual-write visualOffsetY with a live display-link tick.
+    if isSmoothScrollBrowsing {
+      smoothScrollEngine.reset()
+      stopSmoothScrollBrowsing()
+    }
+
+    if nextTop >= liveBottom {
+      browseTopRow = nil
+      suppressViewportChangePresent = true
+      viewport = TerminalViewport()
+      suppressViewportChangePresent = false
+      browseFollowResumeHandler?()
+    } else {
+      browseTopRow = nextTop
+      // Whole-row discrete step: clear sub-row remainder (tick is sole writer otherwise).
+      suppressViewportChangePresent = true
+      viewport = TerminalViewport()
+      suppressViewportChangePresent = false
+      browsePresentHandler?(nextTop, visible)
+    }
+    return true
   }
 
   private func renderedGeometry() -> RenderedGridGeometry? {
