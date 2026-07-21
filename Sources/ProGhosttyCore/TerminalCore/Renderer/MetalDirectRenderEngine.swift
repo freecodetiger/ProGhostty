@@ -232,13 +232,11 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     guard let metalLayer = view.layer as? CAMetalLayer else { return false }
 
     metalLayer.drawableSize = drawableSize
-    if prefersAsyncPresent {
-      if inFlightSemaphore.wait(timeout: .now()) == .timedOut {
-        return false
-      }
-    } else {
-      inFlightSemaphore.wait()
-    }
+    // Always synchronous: height-change clears are rare, and a Metal completion
+    // handler must not hop onto @MainActor isolation (EXC_BREAKPOINT /
+    // dispatch_assert_queue when the completion queue is not main — hit while
+    // closing a split re-lays out the remaining pane height).
+    inFlightSemaphore.wait()
     guard let drawable = metalLayer.nextDrawable(),
       let commandBuffer = commandQueue.makeCommandBuffer()
     else {
@@ -260,16 +258,12 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       encoder.endEncoding()
     }
     commandBuffer.present(drawable)
-    commandBuffer.addCompletedHandler { [inFlightSemaphore] _ in
-      inFlightSemaphore.signal()
-    }
     commandBuffer.commit()
-    if !prefersAsyncPresent {
-      commandBuffer.waitUntilCompleted()
-    }
+    commandBuffer.waitUntilCompleted()
+    inFlightSemaphore.signal()
     lastRenderPassLoadPolicy = .clear
-    lastWaitedForCompletion = !prefersAsyncPresent
-    lastGPUWaitReason = prefersAsyncPresent ? "none" : "clear-background-sync"
+    lastWaitedForCompletion = true
+    lastGPUWaitReason = "clear-background-sync"
     return true
   }
 
