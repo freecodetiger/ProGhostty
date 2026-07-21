@@ -238,8 +238,8 @@ public enum ProGhosttySettingsThemePalette {
     controlBackground: NSColor(calibratedRed: 0.165, green: 0.188, blue: 0.220, alpha: 1), // #2A3038
     textFieldBackground: NSColor(calibratedRed: 0.137, green: 0.153, blue: 0.180, alpha: 1), // #23272E
     footerBackground: NSColor(calibratedRed: 0.125, green: 0.141, blue: 0.165, alpha: 1),
-    primaryText: NSColor(calibratedRed: 0.671, green: 0.698, blue: 0.749, alpha: 1), // #ABB2BF
-    secondaryText: NSColor(calibratedRed: 0.514, green: 0.549, blue: 0.612, alpha: 1),
+    primaryText: NSColor(calibratedWhite: 1.0, alpha: 1), // white — match terminal body
+    secondaryText: NSColor(calibratedRed: 0.671, green: 0.698, blue: 0.749, alpha: 1), // #ABB2BF
     tertiaryText: NSColor(calibratedRed: 0.361, green: 0.388, blue: 0.439, alpha: 1), // #5C6370
     separator: NSColor(calibratedRed: 0.271, green: 0.302, blue: 0.349, alpha: 1)
   )

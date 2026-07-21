@@ -52,16 +52,16 @@ public struct TerminalSurfacePalette: Equatable, Sendable {
     splitDivider: NSColor(calibratedWhite: 0, alpha: 0.09)
   )
 
-  /// Soft Dark — Ghostty / One Dark blue-black (`#23272E` lineage).
+  /// Soft Dark — Ghostty / One Dark blue-black bg; white body text (user preference).
   public static let softDark = TerminalSurfacePalette(
     background: NSColor(calibratedRed: 0.137, green: 0.153, blue: 0.180, alpha: 1), // #23272E
-    foreground: NSColor(calibratedRed: 0.671, green: 0.698, blue: 0.749, alpha: 1), // #ABB2BF
+    foreground: NSColor(calibratedWhite: 1.0, alpha: 1), // white
     faintForeground: NSColor(calibratedRed: 0.361, green: 0.388, blue: 0.439, alpha: 1), // #5C6370
-    cursorBackground: NSColor(calibratedRed: 0.671, green: 0.698, blue: 0.749, alpha: 1),
+    cursorBackground: NSColor(calibratedWhite: 1.0, alpha: 1),
     cursorForeground: NSColor(calibratedRed: 0.137, green: 0.153, blue: 0.180, alpha: 1),
-    selectionForeground: NSColor(calibratedRed: 0.843, green: 0.855, blue: 0.878, alpha: 1), // #D7DAE0
+    selectionForeground: NSColor(calibratedWhite: 1.0, alpha: 1),
     inactiveForegroundBlend: 0.28,
-    splitDivider: NSColor(calibratedRed: 0.671, green: 0.698, blue: 0.749, alpha: 0.12)
+    splitDivider: NSColor(calibratedWhite: 1.0, alpha: 0.12)
   )
 
   /// Soft Light — warm Solarized cream bg, black body text (user preference).
