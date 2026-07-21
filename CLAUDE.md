@@ -53,7 +53,7 @@ PTY 字节
 | VT 语义 / 终端状态 | `GhosttyVTBridge` → `libghostty-vt` | `TerminalCore/LibGhostty/` |
 | 渲染后端选择 | `TerminalRendererPolicy` | `TerminalCore/Renderer/` |
 | 渲染（画像素） | `MetalDirectRendererBackend` / `GhosttyVTCellGridRendererBackend` | `TerminalCore/Renderer/` |
-| 像素滚动余量 | `PaneScrollCoordinator` + `ScrollCommitCoordinator`（收敛中，见 skill） | `TerminalCore/Renderer/` |
+| 像素滚动 / 历史浏览 | **Pattern-2 主路径** `SmoothScrollEngine` + `SmoothScrollBrowseResolver` + `browseTopRow`/`visualOffsetY` + `presentBrowseWindow`（不移动 VT）；**fallback** `PaneScrollController`（wraps coordinators → `scrollViewport`，smooth off / alt-screen / 缺 browse plumbing） | `TerminalCore/Renderer/` · `PTY/` |
 | 工作区运行时状态 | `PaneWorkspaceController` | `Workspace/` |
 | App 协调 / 视图模型 | `AppModel`（瘦身中） | `ProGhosttyApp/UI/` |
 

@@ -33,6 +33,13 @@ protocol MetalDirectRenderingEngine: AnyObject {
     palette: TerminalSurfacePalette,
     glyphAtlas: MetalGlyphAtlas
   ) -> Bool
+  /// Clear the drawable to terminal background at the view's current bounds.
+  /// Used when pane height changes so a stale topLeft-letterboxed frame cannot
+  /// look like content jumped before the reflow present lands.
+  func clearToBackground(
+    view: MetalDirectRendererView,
+    palette: TerminalSurfacePalette
+  ) -> Bool
 }
 
 enum MetalDirectRenderPassLoadPolicy: Equatable {
@@ -213,6 +220,51 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
 
   func resetTextureCache() {
     cachedTextures.removeAll(keepingCapacity: true)
+  }
+
+  func clearToBackground(
+    view: MetalDirectRendererView,
+    palette: TerminalSurfacePalette
+  ) -> Bool {
+    guard pipelineReady else { return false }
+    let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+    let drawableSize = Self.drawableTargetSize(forViewBounds: view.bounds.size, backingScale: scale)
+    guard let metalLayer = view.layer as? CAMetalLayer else { return false }
+
+    metalLayer.drawableSize = drawableSize
+    // Always synchronous: height-change clears are rare, and a Metal completion
+    // handler must not hop onto @MainActor isolation (EXC_BREAKPOINT /
+    // dispatch_assert_queue when the completion queue is not main — hit while
+    // closing a split re-lays out the remaining pane height).
+    inFlightSemaphore.wait()
+    guard let drawable = metalLayer.nextDrawable(),
+      let commandBuffer = commandQueue.makeCommandBuffer()
+    else {
+      inFlightSemaphore.signal()
+      return false
+    }
+
+    let passDescriptor = MTLRenderPassDescriptor()
+    passDescriptor.colorAttachments[0].texture = drawable.texture
+    passDescriptor.colorAttachments[0].loadAction = .clear
+    passDescriptor.colorAttachments[0].storeAction = .store
+    passDescriptor.colorAttachments[0].clearColor = MTLClearColor(
+      red: Double(palette.background.metalRed),
+      green: Double(palette.background.metalGreen),
+      blue: Double(palette.background.metalBlue),
+      alpha: 1
+    )
+    if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) {
+      encoder.endEncoding()
+    }
+    commandBuffer.present(drawable)
+    commandBuffer.commit()
+    commandBuffer.waitUntilCompleted()
+    inFlightSemaphore.signal()
+    lastRenderPassLoadPolicy = .clear
+    lastWaitedForCompletion = true
+    lastGPUWaitReason = "clear-background-sync"
+    return true
   }
 
   func render(

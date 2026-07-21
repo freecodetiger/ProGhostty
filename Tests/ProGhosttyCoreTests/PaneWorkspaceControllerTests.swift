@@ -64,6 +64,19 @@ struct PaneWorkspaceControllerTests {
     #expect(PaneTreeReducer.listLeaves(in: updated.root) == [opened.pane])
   }
 
+  @Test func closePaneOnLastLeafIsNoOpAndKeepsSession() throws {
+    let manager = RecordingSessionManager()
+    let controller = PaneWorkspaceController(sessionManager: manager, focusStore: TerminalFocusStore())
+    let opened = try controller.openTerminal(title: "work", config: makeConfig(cwd: "/a"), paneTitle: "zsh", cwd: "/a")
+
+    let closed = try controller.closePane(workspaceID: opened.workspace.id, paneID: opened.pane.paneId)
+
+    #expect(closed == nil)
+    #expect(manager.closedSessions.isEmpty)
+    let updated = try #require(controller.workspaceLayout(id: opened.workspace.id))
+    #expect(PaneTreeReducer.listLeaves(in: updated.root) == [opened.pane])
+  }
+
   @Test func paneCloseConfirmationPolicyRequiresConfirmationForForegroundProcess() {
     let manager = RecordingSessionManager()
     let session = TerminalSessionID()

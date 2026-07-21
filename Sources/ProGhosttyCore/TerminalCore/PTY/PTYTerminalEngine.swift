@@ -337,9 +337,14 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   ) { [weak self] data, session, delivery in
     self?.flushOutput(data, session: session, delivery: delivery)
   }
+  /// After VT resize we stage the first snapshot but delay presenting until the
+  /// shell's SIGWINCH redraw has a chance to replace that stage. One present at
+  /// settle avoids "reflow flash + second flash when content settles".
+  private var resizePresentSettleTasks: [TerminalSessionID: Task<Void, Never>] = [:]
   private nonisolated static let interactiveInputByteLimit = 16
   private nonisolated static let interactiveEchoOutputByteLimit = 96
   private nonisolated static let interactiveEchoWindowSeconds: TimeInterval = 0.15
+  private nonisolated static let resizePresentSettleNanoseconds: UInt64 = 64_000_000
 
   public init(surfaceRegistry: PTYTerminalSurfaceRegistry) {
     self.surfaceRegistry = surfaceRegistry
@@ -386,6 +391,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     guard let state = sessions.removeValue(forKey: id) else { return }
     lastInputUptimeBySession[id] = nil
     outputBatchCoordinator.cancel(session: id)
+    cancelResizePresentSettle(session: id)
     state.readSource.cancel()
     state.waitTimer.cancel()
     resizeScheduler.cancel(session: id)
@@ -399,6 +405,8 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     guard var state = sessions[id] else { return }
     guard state.config.rows != rows || state.config.cols != cols else { return }
     outputBatchCoordinator.flush(session: id)
+    // A newer resize supersedes any settle that would present an older stage.
+    cancelResizePresentSettle(session: id)
     state.config.rows = rows
     state.config.cols = cols
     state.resizeGeneration &+= 1
@@ -713,8 +721,30 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       session: id,
       wasPinnedToBottom: wasPinnedToBottom
     )
+    // Stage only — still pendingResize, so Metal does not present yet.
     surfaceRegistry.render(snapshot, bridge: bridge, session: id)
-    surfaceRegistry.applyResizeDiagnostics(diagnostics, session: id)
+    scheduleResizePresentSettle(session: id, generation: generation, diagnostics: diagnostics)
+  }
+
+  private func cancelResizePresentSettle(session id: TerminalSessionID) {
+    resizePresentSettleTasks[id]?.cancel()
+    resizePresentSettleTasks[id] = nil
+  }
+
+  private func scheduleResizePresentSettle(
+    session id: TerminalSessionID,
+    generation: UInt64,
+    diagnostics: TerminalResizeDiagnostics
+  ) {
+    cancelResizePresentSettle(session: id)
+    resizePresentSettleTasks[id] = Task { @MainActor [weak self] in
+      try? await Task.sleep(nanoseconds: Self.resizePresentSettleNanoseconds)
+      guard !Task.isCancelled, let self else { return }
+      self.resizePresentSettleTasks[id] = nil
+      guard let state = self.sessions[id], state.resizeGeneration == generation else { return }
+      // Present whichever frame is staged (VT snapshot and/or SIGWINCH redraw).
+      self.surfaceRegistry.applyResizeDiagnostics(diagnostics, session: id)
+    }
   }
 
   private func performScheduledResize(session id: TerminalSessionID, job: PendingResizeJob) {
@@ -1102,6 +1132,8 @@ public class PTYGridView: NSView {
   }
 
   public func resetViewportStartRowKeepingVisualOffset() {
+    // Pattern-2 owns visualOffsetY while parked/browsing; PaneScroll remainder is unused there.
+    if browseTopRow != nil || isSmoothScrollBrowsing { return }
     viewport = TerminalViewport(visualOffsetY: scrollController.pixelRemainderY)
   }
 
@@ -2709,7 +2741,7 @@ public class PTYGridView: NSView {
       direction = 0
     }
 
-    guard direction != 0, viewportCanScrollHandler?(direction) != false else {
+    guard direction != 0, selectionAutoScrollCanScroll(direction: direction) else {
       stopSelectionAutoScroll()
       return
     }
@@ -2741,9 +2773,14 @@ public class PTYGridView: NSView {
       stopSelectionAutoScroll()
       return
     }
-    guard viewportCanScrollHandler?(selectionAutoScrollDirection) != false,
-      viewportScrollHandler?(selectionAutoScrollDirection) == true
-    else {
+    let didScroll: Bool
+    if canUsePattern2BrowseForSelection {
+      didScroll = stepBrowseForSelectionAutoScroll(direction: selectionAutoScrollDirection)
+    } else {
+      didScroll = viewportCanScrollHandler?(selectionAutoScrollDirection) != false
+        && viewportScrollHandler?(selectionAutoScrollDirection) == true
+    }
+    guard didScroll else {
       stopSelectionAutoScroll()
       return
     }
@@ -2752,6 +2789,89 @@ public class PTYGridView: NSView {
     }
     needsDisplay = true
     transientOverlayDidChangeHandler?()
+  }
+
+  /// Same plumbing gate as wheel Pattern-2 browse, without the NSEvent.
+  private var canUsePattern2BrowseForSelection: Bool {
+    guard rendererOptions.smoothPixelScrollingEnabled else { return false }
+    guard browseScrollMetricsHandler != nil, browsePresentHandler != nil, cellSize.height > 0 else {
+      return false
+    }
+    return true
+  }
+
+  private func selectionAutoScrollCanScroll(direction: Int) -> Bool {
+    if canUsePattern2BrowseForSelection {
+      return canStepBrowseForSelectionAutoScroll(direction: direction)
+    }
+    return viewportCanScrollHandler?(direction) != false
+  }
+
+  private func canStepBrowseForSelectionAutoScroll(direction: Int) -> Bool {
+    guard let metrics = browseScrollMetricsHandler?() else { return false }
+    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
+    let liveBottom = Self.liveBottomTopRow(
+      total: metrics.total,
+      visibleRows: visible,
+      vtOffset: metrics.topAbsoluteRow
+    )
+    let currentTop = browseTopRow ?? liveBottom
+    if direction > 0 {
+      // Into history.
+      return currentTop > 0
+    }
+    if direction < 0 {
+      // Toward live tail — only while parked above the live page.
+      return browseTopRow != nil && currentTop < liveBottom
+    }
+    return false
+  }
+
+  /// Discrete whole-row history step for selection edge auto-scroll (Pattern-2).
+  /// Reuses browse present/follow handlers; does not move the VT viewport.
+  @discardableResult
+  private func stepBrowseForSelectionAutoScroll(direction: Int) -> Bool {
+    guard let metrics = browseScrollMetricsHandler?() else { return false }
+    let visible = max(1, frameSnapshot?.rows ?? visibleRowCount())
+    let liveBottom = Self.liveBottomTopRow(
+      total: metrics.total,
+      visibleRows: visible,
+      vtOffset: metrics.topAbsoluteRow
+    )
+    let currentTop = browseTopRow ?? liveBottom
+
+    let nextTop: UInt64
+    if direction > 0 {
+      guard currentTop > 0 else { return false }
+      nextTop = currentTop - 1
+    } else if direction < 0 {
+      guard let parked = browseTopRow, parked < liveBottom else { return false }
+      nextTop = min(parked + 1, liveBottom)
+    } else {
+      return false
+    }
+
+    // Don't dual-write visualOffsetY with a live display-link tick.
+    if isSmoothScrollBrowsing {
+      smoothScrollEngine.reset()
+      stopSmoothScrollBrowsing()
+    }
+
+    if nextTop >= liveBottom {
+      browseTopRow = nil
+      suppressViewportChangePresent = true
+      viewport = TerminalViewport()
+      suppressViewportChangePresent = false
+      browseFollowResumeHandler?()
+    } else {
+      browseTopRow = nextTop
+      // Whole-row discrete step: clear sub-row remainder (tick is sole writer otherwise).
+      suppressViewportChangePresent = true
+      viewport = TerminalViewport()
+      suppressViewportChangePresent = false
+      browsePresentHandler?(nextTop, visible)
+    }
+    return true
   }
 
   private func renderedGeometry() -> RenderedGridGeometry? {

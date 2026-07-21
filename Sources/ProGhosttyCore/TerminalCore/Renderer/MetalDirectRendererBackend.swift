@@ -26,12 +26,25 @@ public final class MetalDirectRendererView: PTYGridView {
     fatalError("init(coder:) has not been implemented")
   }
 
+  /// Fired when view bounds size changes (split, divider drag, window resize).
+  /// Args: previous size, new size.
+  public var boundsSizeDidChangeHandler: ((CGSize, CGSize) -> Void)?
+
+  private var lastLaidOutBoundsSize: CGSize = .zero
+
   public override func makeBackingLayer() -> CALayer {
     let layer = CAMetalLayer()
     layer.device = metalDevice
     layer.pixelFormat = .bgra8Unorm
     layer.framebufferOnly = false
     layer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+    // Default is `.resize`, which STRETCHES the previous drawable whenever the
+    // layer bounds change before the next Metal present (common on split /
+    // divider drag because PTY resize is debounced ~80ms). Pin top-left so a
+    // stale frame letterboxes instead of distorting glyphs (width changes).
+    // Height changes clear to background instead — topLeft would look like a
+    // vertical content jump before reflow.
+    layer.contentsGravity = .topLeft
     return layer
   }
 
@@ -39,6 +52,13 @@ public final class MetalDirectRendererView: PTYGridView {
     super.layout()
     if let metalLayer = layer as? CAMetalLayer {
       metalLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+    }
+    let size = bounds.size
+    guard size.width > 0, size.height > 0 else { return }
+    if size != lastLaidOutBoundsSize {
+      let previous = lastLaidOutBoundsSize
+      lastLaidOutBoundsSize = size
+      boundsSizeDidChangeHandler?(previous, size)
     }
   }
 
@@ -315,6 +335,9 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     directView.transientOverlayDidChangeHandler = { [weak self] in
       self?.presentViewportChange()
     }
+    directView.boundsSizeDidChangeHandler = { [weak self] previous, newSize in
+      self?.presentForBoundsSizeChange(previous: previous, newSize: newSize)
+    }
     directView.scrollActivityHandler = { [weak self] isScrolling in
       self?.engine?.prefersAsyncPresent = isScrolling
     }
@@ -445,6 +468,11 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     if pendingRenderFrame != nil {
       diagnosticsState.droppedFrames += 1
     }
+    // Drop unflushed work so a wrong-size frame cannot sneak out. Do NOT re-present
+    // here: CAMetalLayer present always clears, which flashes (especially the focused
+    // pane with a visible cursor). Leave the last drawable on screen; contentsGravity
+    // is .topLeft so bounds changes letterbox instead of stretching until the staged
+    // post-resize frame lands in applyResizeDiagnostics.
     pendingRenderFrame = nil
     pendingRenderGeneration = 0
     diagnosticsState.pendingResize = true
@@ -507,6 +535,11 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   }
 
   private func presentViewportChange() {
+    // During VT resize, leave the last drawable alone — re-present would clear and
+    // flash. New snapshots are staged until applyResizeDiagnostics.
+    if diagnosticsState.pendingResize {
+      return
+    }
     guard let baseRenderFrame = pendingRenderFrame ?? lastPresentedRenderFrame else {
       return
     }
@@ -515,6 +548,20 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
       generation: 0
     )
     render(refreshedFrame)
+  }
+
+  /// Bounds changed (split / divider / window).
+  /// - Width-only: leave the previous drawable (topLeft letterbox) until reflow.
+  /// - Height change: clear to terminal background. Re-presenting old content
+  ///   under topLeft looks like a vertical jump (compress-up / expand-down), and
+  ///   re-drawing old cells at the new size is the wrong reflow. Solid clear
+  ///   until the post-resize frame is the stable intermediate.
+  private func presentForBoundsSizeChange(previous: CGSize, newSize: CGSize) {
+    // First layout after attach has previous == .zero — not a divider jump.
+    guard previous.width > 0, previous.height > 0 else { return }
+    let heightChanged = abs(previous.height - newSize.height) > 0.5
+    guard heightChanged else { return }
+    _ = engine?.clearToBackground(view: directView, palette: palette)
   }
 
   private func updateDiagnostics(from renderFrame: TerminalRenderFrame) {

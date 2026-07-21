@@ -2577,6 +2577,51 @@ struct TerminalSurfaceTests {
     #expect(gridView.currentSelectionRowSet == [0, 1])
   }
 
+  @MainActor @Test func ptyGridSelectionDragAboveTopUsesBrowsePresentWhenPattern2Ready() throws {
+    let gridView = PTYGridView()
+    var frame = frameWithText(rows: ["first visible", "second visible"], cols: 24, cursorX: 0, cursorY: 0)
+    frame.isAlternateScreen = false
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.applyRendererOptions(TerminalRendererOptions(smoothPixelScrollingEnabled: true))
+    gridView.render(frame, isFocused: true)
+
+    var rowDeltas: [Int] = []
+    var presented: [(top: UInt64, visible: Int)] = []
+    var followed = false
+    gridView.viewportCanScrollHandler = { _ in
+      Issue.record("VT can-scroll must not run when Pattern-2 browse plumbing is ready")
+      return true
+    }
+    gridView.viewportScrollHandler = {
+      rowDeltas.append($0)
+      return true
+    }
+    // total 100, visible 2 → liveBottom max(98, 76) = 98
+    gridView.browseScrollMetricsHandler = { (total: 100, topAbsoluteRow: 76) }
+    gridView.browsePresentHandler = { top, visible in
+      presented.append((top, visible))
+    }
+    gridView.browseFollowResumeHandler = { followed = true }
+
+    let start = PTYGridView.textGlyphRect(row: 1, col: 2, cellSize: cellSize, inset: inset)
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: gridView))
+    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: start.midX, y: inset.height - 8), in: gridView))
+
+    #expect(rowDeltas.isEmpty)
+    #expect(followed == false)
+    #expect(presented.count == 1)
+    #expect(presented[0].top == 97)
+    #expect(presented[0].visible == 2)
+    #expect(gridView.browseTopAbsoluteRow == 97)
+  }
+
   @MainActor @Test func ptyGridSelectionAnchorStaysOnOriginalTextAfterAutoScrollRender() throws {
     let gridView = PTYGridView()
     let cols = 24
@@ -3151,6 +3196,13 @@ private final class RuntimeFailingMetalDirectRenderingEngine: MetalDirectRenderi
   let staleCompletionCount = 0
 
   func resetTextureCache() {}
+
+  func clearToBackground(
+    view: MetalDirectRendererView,
+    palette: TerminalSurfacePalette
+  ) -> Bool {
+    false
+  }
 
   func render(
     renderFrame: TerminalRenderFrame,

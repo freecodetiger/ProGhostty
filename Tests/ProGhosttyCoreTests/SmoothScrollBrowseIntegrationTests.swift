@@ -219,6 +219,31 @@ struct SmoothScrollBrowseIntegrationTests {
     #expect(!view.testIsSmoothScrollBrowsing)
   }
 
+  @Test func vtRemainderResetDoesNotWipePattern2VisualOffset() {
+    let view = makeView()
+    view.browseScrollMetricsHandler = { (total: 1000, topAbsoluteRow: 976) }
+    view.browsePresentHandler = { _, _ in }
+
+    // Climb with a non-row-aligned delta so sub-row P is non-zero mid-gesture.
+    view.testBeginSmoothScroll(delta: 40, time: 0)
+    var t = 0.0
+    var preservedOffset: CGFloat = 0
+    for _ in 0..<8 {
+      t += 1.0 / 120.0
+      _ = view.testTickSmoothScroll(now: t)
+      if view.viewport.visualOffsetY > 0.001 {
+        preservedOffset = view.viewport.visualOffsetY
+        break
+      }
+    }
+    #expect(view.testIsSmoothScrollBrowsing || view.testBrowseTopRow != nil)
+    #expect(preservedOffset > 0.001)
+
+    // Pattern-1 finish path would set visualOffsetY = pixelRemainderY (0).
+    view.resetViewportStartRowKeepingVisualOffset()
+    #expect(view.viewport.visualOffsetY == preservedOffset)
+  }
+
   // MARK: Hit-testing red line
 
   /// A browse present builds a scroll frame with one overscan row above

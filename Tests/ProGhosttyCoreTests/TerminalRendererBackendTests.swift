@@ -188,6 +188,71 @@ struct TerminalRendererBackendTests {
     #expect(size == CGSize(width: 1007, height: 743))
   }
 
+  @MainActor @Test func metalDirectLayerPinsContentsGravitySoBoundsChangeDoesNotStretch() {
+    let view = MetalDirectRendererView(device: nil)
+    let metalLayer = view.layer as? CAMetalLayer
+    #expect(metalLayer != nil)
+    // Default CALayer gravity is `.resize` (stretch). Terminal content must not
+    // distort when the pane shrinks before the next Metal present.
+    #expect(metalLayer?.contentsGravity == .topLeft)
+  }
+
+  @MainActor @Test func metalDirectHeightBoundsChangeClearsBackgroundWithoutOldContentJump() {
+    final class RecordingClearEngine: MetalDirectRenderingEngine {
+      let drawPassCount = 0
+      var presentedFrameCount = 0
+      let latestSubmittedGeneration = 0
+      let latestPresentedGeneration = 0
+      let pipelineReady = true
+      var prefersAsyncPresent = false
+      let lastRenderedRowCount = 0
+      let lastRenderedCellCount = 0
+      let lastRenderedRunCount = 0
+      let lastRenderPassLoadPolicy = MetalDirectRenderPassLoadPolicy.clear
+      let lastWaitedForCompletion = false
+      let lastGPUWaitReason = "none"
+      let lastGlyphTextureHitCount = 0
+      let lastGlyphTextureMissCount = 0
+      let staleCompletionCount = 0
+      var clearCount = 0
+      var renderCount = 0
+
+      func resetTextureCache() {}
+      func clearToBackground(view: MetalDirectRendererView, palette: TerminalSurfacePalette) -> Bool {
+        clearCount += 1
+        return true
+      }
+      func render(
+        renderFrame: TerminalRenderFrame,
+        plan: MetalTerminalRenderPlan,
+        view: MetalDirectRendererView,
+        palette: TerminalSurfacePalette,
+        glyphAtlas: MetalGlyphAtlas
+      ) -> Bool {
+        renderCount += 1
+        presentedFrameCount += 1
+        return true
+      }
+    }
+
+    let engine = RecordingClearEngine()
+    let backend = MetalDirectRendererBackend(options: TerminalRendererOptions()) { _ in engine }
+    let view = backend.directView
+    view.frame = NSRect(x: 0, y: 0, width: 200, height: 400)
+    view.layout() // seeds lastLaidOutBoundsSize
+
+    // Width-only: must NOT clear (topLeft letterbox is fine).
+    view.frame = NSRect(x: 0, y: 0, width: 160, height: 400)
+    view.layout()
+    #expect(engine.clearCount == 0)
+
+    // Height change: clear background, do not re-present old cells.
+    view.frame = NSRect(x: 0, y: 0, width: 160, height: 280)
+    view.layout()
+    #expect(engine.clearCount == 1)
+    #expect(engine.renderCount == 0)
+  }
+
   @MainActor @Test func metalDirectRenderRowsUsesFullRangeForFullRedraw() {
     let plan = MetalTerminalRenderPlan(
       presentation: .frame,
@@ -771,9 +836,42 @@ struct TerminalRendererBackendTests {
     backend.flushPendingFrame()
 
     let diagnostics = backend.diagnostics
+    // Unflushed gen 11 is dropped; last good gen 10 is re-painted for the blackout.
     #expect(diagnostics.metalDirect.latestPresentedGeneration == 10)
+    #expect(diagnostics.metalDirect.planRows == 1)
+    #expect(diagnostics.metalDirect.planCols == 4)
     #expect(diagnostics.droppedFrames >= 1)
     #expect(diagnostics.pendingResize)
+  }
+
+  @MainActor @Test func metalDirectRendererBackendKeepsLastFramePaintedWhileResizePending() {
+    let backend = MetalDirectRendererBackend()
+
+    backend.render(TerminalRenderFrame(frame: frame(rows: ["old"], cols: 4, cursorX: 0, cursorY: 0), generation: 10))
+    backend.flushPendingFrame()
+    backend.markResizePending()
+
+    // New VT-sized frames stage only — must not replace the on-screen old frame yet.
+    backend.render(TerminalRenderFrame(frame: frame(rows: ["new", "wide"], cols: 8, cursorX: 0, cursorY: 0), generation: 11))
+    backend.flushPendingFrame()
+
+    var diagnostics = backend.diagnostics
+    #expect(diagnostics.pendingResize)
+    #expect(diagnostics.metalDirect.planRows == 1)
+    #expect(diagnostics.metalDirect.planCols == 4)
+    #expect(diagnostics.metalDirect.latestPresentedGeneration == 10)
+
+    backend.applyResizeDiagnostics(TerminalResizeDiagnostics(
+      totalDuration: 0.2,
+      vtDuration: 0.1,
+      snapshotDuration: 0.1
+    ))
+
+    diagnostics = backend.diagnostics
+    #expect(!diagnostics.pendingResize)
+    #expect(diagnostics.metalDirect.planRows == 2)
+    #expect(diagnostics.metalDirect.planCols == 8)
+    #expect(diagnostics.metalDirect.latestPresentedGeneration == 11)
   }
 
   @MainActor @Test func metalDirectRendererBackendKeepsLatestResizeStageGeneration() {
@@ -1847,6 +1945,13 @@ struct TerminalRendererBackendTests {
 
     func resetTextureCache() {}
 
+    func clearToBackground(
+      view: MetalDirectRendererView,
+      palette: TerminalSurfacePalette
+    ) -> Bool {
+      true
+    }
+
     func render(
       renderFrame: TerminalRenderFrame,
       plan: MetalTerminalRenderPlan,
@@ -1881,6 +1986,13 @@ struct TerminalRendererBackendTests {
     let staleCompletionCount = 0
 
     func resetTextureCache() {}
+
+    func clearToBackground(
+      view: MetalDirectRendererView,
+      palette: TerminalSurfacePalette
+    ) -> Bool {
+      false
+    }
 
     func render(
       renderFrame: TerminalRenderFrame,
