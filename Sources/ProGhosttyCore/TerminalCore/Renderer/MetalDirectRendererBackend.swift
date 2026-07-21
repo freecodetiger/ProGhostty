@@ -26,12 +26,24 @@ public final class MetalDirectRendererView: PTYGridView {
     fatalError("init(coder:) has not been implemented")
   }
 
+  /// Fired when view bounds size changes (split, divider drag, window resize).
+  /// Backend re-presents the last frame at the new drawable size so CAMetalLayer
+  /// never shows a stretched stale texture while PTY resize is debounced.
+  public var boundsSizeDidChangeHandler: (() -> Void)?
+
+  private var lastLaidOutBoundsSize: CGSize = .zero
+
   public override func makeBackingLayer() -> CALayer {
     let layer = CAMetalLayer()
     layer.device = metalDevice
     layer.pixelFormat = .bgra8Unorm
     layer.framebufferOnly = false
     layer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+    // Default is `.resize`, which STRETCHES the previous drawable whenever the
+    // layer bounds change before the next Metal present (common on split /
+    // divider drag because PTY resize is debounced ~80ms). Pin top-left so a
+    // stale frame letterboxes instead of distorting glyphs.
+    layer.contentsGravity = .topLeft
     return layer
   }
 
@@ -39,6 +51,12 @@ public final class MetalDirectRendererView: PTYGridView {
     super.layout()
     if let metalLayer = layer as? CAMetalLayer {
       metalLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+    }
+    let size = bounds.size
+    guard size.width > 0, size.height > 0 else { return }
+    if size != lastLaidOutBoundsSize {
+      lastLaidOutBoundsSize = size
+      boundsSizeDidChangeHandler?()
     }
   }
 
@@ -315,6 +333,9 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     directView.transientOverlayDidChangeHandler = { [weak self] in
       self?.presentViewportChange()
     }
+    directView.boundsSizeDidChangeHandler = { [weak self] in
+      self?.presentForBoundsSizeChange()
+    }
     directView.scrollActivityHandler = { [weak self] isScrolling in
       self?.engine?.prefersAsyncPresent = isScrolling
     }
@@ -515,6 +536,18 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
       generation: 0
     )
     render(refreshedFrame)
+  }
+
+  /// Bounds changed (split / divider / window). Redraw the last frame immediately
+  /// at the new drawable size — bypass `pendingResize` staging so the layer is
+  /// never left with a mismatched drawable that would stretch under default gravity.
+  private func presentForBoundsSizeChange() {
+    guard let renderFrame = pendingRenderFrame ?? lastPresentedRenderFrame else {
+      return
+    }
+    directView.present(renderFrame)
+    lastPresentedRenderFrame = renderFrame
+    updateDiagnostics(from: renderFrame)
   }
 
   private func updateDiagnostics(from renderFrame: TerminalRenderFrame) {

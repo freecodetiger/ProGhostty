@@ -188,6 +188,15 @@ struct TerminalRendererBackendTests {
     #expect(size == CGSize(width: 1007, height: 743))
   }
 
+  @MainActor @Test func metalDirectLayerPinsContentsGravitySoBoundsChangeDoesNotStretch() {
+    let view = MetalDirectRendererView(device: nil)
+    let metalLayer = view.layer as? CAMetalLayer
+    #expect(metalLayer != nil)
+    // Default CALayer gravity is `.resize` (stretch). Terminal content must not
+    // distort when the pane shrinks before the next Metal present.
+    #expect(metalLayer?.contentsGravity == .topLeft)
+  }
+
   @MainActor @Test func metalDirectRenderRowsUsesFullRangeForFullRedraw() {
     let plan = MetalTerminalRenderPlan(
       presentation: .frame,
