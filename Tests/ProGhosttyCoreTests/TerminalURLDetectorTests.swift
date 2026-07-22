@@ -68,6 +68,46 @@ struct TerminalURLDetectorTests {
     #expect(TerminalURLDetector.hitTest(row: 0, col: 27, in: frame) == nil)
   }
 
+  @Test func joinsSoftWrappedURLAcrossRows() throws {
+    // A long URL soft-wrapped across two rows: row 0 fills to the last cell (no
+    // trailing space → treated as wrapped), row 1 holds the continuation.
+    let frame = frame(
+      rows: [
+        "see https://example.com/very/long",
+        "/path/segment?query=value done",
+      ],
+      cols: 33
+    )
+
+    let expected = "https://example.com/very/long/path/segment?query=value"
+
+    // Clicking the first-row prefix resolves the whole joined URL.
+    let firstRowHit = try #require(TerminalURLDetector.hitTest(row: 0, col: 10, in: frame))
+    #expect(firstRowHit.url.absoluteString == expected)
+    #expect(firstRowHit.row == 0)
+
+    // Clicking the continuation on the second row resolves the same URL.
+    let secondRowHit = try #require(TerminalURLDetector.hitTest(row: 1, col: 2, in: frame))
+    #expect(secondRowHit.url.absoluteString == expected)
+    #expect(secondRowHit.row == 1)
+  }
+
+  @Test func doesNotJoinURLAcrossHardLineBreak() throws {
+    // Row 0 ends with a trailing space → not wrapped. The second row's text must
+    // not be appended to the first row's URL.
+    let frame = frame(
+      rows: [
+        "open https://example.com/first ",
+        "https://example.com/second",
+      ],
+      cols: 33
+    )
+
+    let hit = try #require(TerminalURLDetector.hitTest(row: 0, col: 10, in: frame))
+    #expect(hit.url.absoluteString == "https://example.com/first")
+    #expect(hit.row == 0)
+  }
+
   private func frame(rows: [String], cols: Int) -> GhosttyTerminalFrame {
     let cells = rows.flatMap { row in
       let padded = row.padding(toLength: cols, withPad: " ", startingAt: 0)

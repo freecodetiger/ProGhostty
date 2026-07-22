@@ -28,28 +28,47 @@ public enum TerminalURLDetector {
 
   public static func hits(inRow row: Int, frame: GhosttyTerminalFrame) -> [TerminalURLHit] {
     guard row >= 0, row < frame.rows, frame.cols > 0 else { return [] }
-    let rowStart = row * frame.cols
-    let rowEnd = min(rowStart + frame.cols, frame.cells.count)
-    guard rowStart < rowEnd else { return [] }
 
-    let line = frame.cells[rowStart..<rowEnd].map { String($0.scalar) }.joined()
+    let hyperlinkHits = hyperlinkHits(inRow: row, frame: frame)
+    let visibleURLHits = visibleURLHits(inRow: row, frame: frame).filter { hit in
+      !hyperlinkHits.contains { rangesOverlap($0.range, hit.range) }
+    }
+    return hyperlinkHits + visibleURLHits
+  }
+
+  /// Match plain-text URLs against the logical (soft-wrap joined) line, then map
+  /// each match back to the physical rows it covers. This lets a URL that wraps
+  /// across rows resolve as one link instead of only its first-row prefix.
+  private static func visibleURLHits(inRow row: Int, frame: GhosttyTerminalFrame) -> [TerminalURLHit] {
+    let rows = TerminalLogicalLine.rows(around: row, frame: frame)
+    guard !rows.isEmpty else { return [] }
+    let line = rows.map(\.text).joined()
     let nsLine = line as NSString
     let fullRange = NSRange(location: 0, length: nsLine.length)
     guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
       return []
     }
 
-    let hyperlinkHits = hyperlinkHits(inRow: row, frame: frame)
-    let visibleURLHits = regex.matches(in: line, options: [], range: fullRange).compactMap { match in
-      normalizedHit(
+    return regex.matches(in: line, options: [], range: fullRange).flatMap { match in
+      urlHits(
         from: nsLine.substring(with: match.range(at: 1)),
         range: match.range(at: 1),
-        row: row
+        rows: rows
       )
-    }.filter { hit in
-      !hyperlinkHits.contains { rangesOverlap($0.range, hit.range) }
+    }.filter { $0.row == row }
+  }
+
+  /// Turn a single joined-line URL match into per-physical-row hits sharing the
+  /// same resolved URL and full visible text.
+  private static func urlHits(from rawText: String, range rawRange: NSRange, rows: [TerminalLogicalLine.Row]) -> [TerminalURLHit] {
+    let trimmed = rawText.trimmingCharacters(in: trailingCharacters)
+    guard !trimmed.isEmpty else { return [] }
+    let removedCharacterCount = rawText.count - trimmed.count
+    let range = rawRange.location..<(rawRange.location + max(0, rawRange.length - removedCharacterCount))
+    guard let url = normalizedURL(from: trimmed) else { return [] }
+    return TerminalLogicalLine.split(range: range, across: rows).map { rowRange in
+      TerminalURLHit(url: url, row: rowRange.row, range: rowRange.range, text: trimmed)
     }
-    return hyperlinkHits + visibleURLHits
   }
 
   private static func hyperlinkHits(inRow row: Int, frame: GhosttyTerminalFrame) -> [TerminalURLHit] {
@@ -76,15 +95,6 @@ public enum TerminalURLDetector {
     }
     flush(end: frame.cols)
     return hits
-  }
-
-  private static func normalizedHit(from rawText: String, range rawRange: NSRange, row: Int) -> TerminalURLHit? {
-    let trimmed = rawText.trimmingCharacters(in: trailingCharacters)
-    guard !trimmed.isEmpty else { return nil }
-    let removedCharacterCount = rawText.count - trimmed.count
-    let range = rawRange.location..<(rawRange.location + max(0, rawRange.length - removedCharacterCount))
-    guard let url = normalizedURL(from: trimmed) else { return nil }
-    return TerminalURLHit(url: url, row: row, range: range, text: trimmed)
   }
 
   private static func normalizedURL(from text: String) -> URL? {
