@@ -57,13 +57,22 @@ public enum SemanticLinkObjectResolver {
   ///
   /// Uses `TerminalLinkDetector` to find the hit at the point, then collects all
   /// sibling hits sharing the same resolved target across the logical line's rows.
-  public static func object(at row: Int, col: Int, in frame: GhosttyTerminalFrame) -> SemanticLinkObject? {
-    guard let hit = TerminalLinkDetector.hitTest(row: row, col: col, in: frame) else { return nil }
-    return object(for: hit, in: frame)
+  public static func object(
+    at row: Int,
+    col: Int,
+    in frame: GhosttyTerminalFrame,
+    pathValidator: ((String) -> Bool)? = nil
+  ) -> SemanticLinkObject? {
+    guard let hit = TerminalLinkDetector.hitTest(row: row, col: col, in: frame, pathValidator: pathValidator) else { return nil }
+    return object(for: hit, in: frame, pathValidator: pathValidator)
   }
 
   /// Group all segments belonging to the same link as `hit`.
-  public static func object(for hit: TerminalLinkHit, in frame: GhosttyTerminalFrame) -> SemanticLinkObject {
+  public static func object(
+    for hit: TerminalLinkHit,
+    in frame: GhosttyTerminalFrame,
+    pathValidator: ((String) -> Bool)? = nil
+  ) -> SemanticLinkObject {
     let logicalRows = TerminalLogicalLine.rows(around: hit.row, frame: frame)
     let rowNumbers = logicalRows.isEmpty ? [hit.row] : logicalRows.map(\.row)
 
@@ -71,7 +80,7 @@ public enum SemanticLinkObjectResolver {
     // wrapped link contributes one segment per row it spans.
     var segments: [SemanticLinkObject.Segment] = []
     for rowNumber in rowNumbers {
-      for candidate in TerminalLinkDetector.hits(inRow: rowNumber, frame: frame)
+      for candidate in TerminalLinkDetector.hits(inRow: rowNumber, frame: frame, pathValidator: pathValidator)
       where sameTarget(candidate.target, hit.target) && candidate.text == hit.text {
         segments.append(SemanticLinkObject.Segment(row: candidate.row, cols: candidate.range))
       }

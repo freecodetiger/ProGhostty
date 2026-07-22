@@ -63,6 +63,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   private var activationHandler: (@MainActor (TerminalSessionID) -> Void)?
   private var linkHoverHandler: (@MainActor (TerminalSessionID, Bool) -> Void)?
   private var linkTargetHandler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?
+  /// Per-session predicate: does a bare token resolve to an existing file/dir under
+  /// that session's cwd? Enables bare-word path detection (e.g. `src`, `dist`).
+  private var pathExistenceProvider: (@MainActor (TerminalSessionID, String) -> Bool)?
   private var viewportScrollHandler: (@MainActor (TerminalSessionID, Int) -> Bool)?
   private var rendererOptions = TerminalRendererOptions()
   private let isMetalDirectAvailable: Bool
@@ -185,6 +188,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     gridView.openLinkTargetHandler = { [weak self] target in
       PTYRenderDebugLog.write("surface link-target session=\(id) target=\(target)")
       self?.linkTargetHandler?(id, target)
+    }
+    gridView.pathExistenceValidator = pathExistenceProvider.map { provider in
+      { token in provider(id, token) }
     }
     gridView.pasteboard = .general
     gridView.applyPalette(palette)
@@ -383,6 +389,15 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       surface.gridView.openLinkTargetHandler = { [weak self] target in
         PTYRenderDebugLog.write("surface link-target session=\(id) target=\(target)")
         self?.linkTargetHandler?(id, target)
+      }
+    }
+  }
+
+  public func setPathExistenceProvider(_ provider: (@MainActor (TerminalSessionID, String) -> Bool)?) {
+    pathExistenceProvider = provider
+    for (id, surface) in surfaces {
+      surface.gridView.pathExistenceValidator = provider.map { provider in
+        { token in provider(id, token) }
       }
     }
   }

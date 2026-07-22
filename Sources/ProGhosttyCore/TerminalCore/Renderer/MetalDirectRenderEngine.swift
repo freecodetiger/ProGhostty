@@ -143,6 +143,20 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     var position: SIMD2<Float>
     var color: SIMD4<Float>
     var texCoord: SIMD2<Float>
+    var weightBoost: Float = 0
+  }
+
+  /// Vertex for the feathered Semantic Halo SDF pass. `localPos` is the fragment
+  /// position relative to the halo's center (pixels); the fragment shader uses it
+  /// against a rounded-rect signed distance field to produce a soft falloff.
+  private struct HaloVertex {
+    var position: SIMD2<Float>
+    var color: SIMD4<Float>
+    var localPos: SIMD2<Float>
+    var halfSize: SIMD2<Float>
+    var cornerRadius: Float
+    var feather: Float
+    var ringWidth: Float
   }
 
   private struct Uniforms {
@@ -173,6 +187,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
   private let textureLoader: MTKTextureLoader
   private let backgroundPipeline: MTLRenderPipelineState
   private let glyphPipeline: MTLRenderPipelineState
+  private let haloPipeline: MTLRenderPipelineState
   private var cachedTextures: [Int: CachedTexture] = [:]
   private let completionBox = MetalDirectFrameCompletionBox()
   private var previousTransientOverlayRevision = 0
@@ -213,8 +228,15 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       vertexFunctionName: "metal_direct_vertex",
       fragmentFunctionName: "metal_direct_glyph_fragment"
     )
+    let haloPipeline = try Self.makePipeline(
+      device: device,
+      library: library,
+      vertexFunctionName: "metal_direct_halo_vertex",
+      fragmentFunctionName: "metal_direct_halo_fragment"
+    )
     self.backgroundPipeline = backgroundPipeline
     self.glyphPipeline = glyphPipeline
+    self.haloPipeline = haloPipeline
     pipelineReady = true
   }
 
@@ -347,15 +369,73 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       selectionRowsOffset: 0,
       linkHoverRows: [],
       linkHoverCellRanges: view.currentLinkHoverCellRanges,
+      linkHoverIntensity: view.currentLinkHoverIntensity,
       cursorOverlay: cursorOverlay,
       markedTextOverlay: markedTextOverlay,
       imeCompositionCursorOverlay: view.currentIMECompositionCursorOverlay,
       markedTextRowsOffset: overscanTopRows,
       translationYOverride: translationY
     )
+    // Semantic halo is drawn by its own SDF pipeline, beneath glyphs; keep it out
+    // of the flat-rect overlay vertex builders.
+    let haloOverlays = overlays.filter { $0.kind == .semanticHalo }
+    let flatOverlays = overlays.filter { $0.kind != .semanticHalo }
+    let haloVertices = buildHaloVertices(overlays: haloOverlays)
+    // GPU ring cursor: a clean stroked SDF ring centered on the pointer (no
+    // magnetism). Reuses the halo SDF pipeline in ring mode. Kept in its OWN
+    // buffer, drawn LAST (above glyphs + weight boost) — it is the cursor, so it
+    // must sit on top of the text instead of being beneath and bitten into by the
+    // awoken (weight-boosted) glyphs.
+    var puckVertices: [HaloVertex] = []
+    if let puck = view.currentCursorPuck, puck.strength > 0.01 {
+      let center = CGPoint(x: puck.center.x * pixelScale, y: puck.center.y * pixelScale)
+      let radius = cellSize.height * 0.28
+      let ringWidth = Float(max(1, 1.25 * pixelScale))
+      let margin: CGFloat = 2 * pixelScale
+      let rect = CGRect(
+        x: center.x - radius - margin,
+        y: center.y - radius - margin,
+        width: (radius + margin) * 2,
+        height: (radius + margin) * 2
+      )
+      // Solid two-tone ring, chosen from the background's brightness (not the
+      // theme name, so custom themes work): light background → solid dark-grey
+      // ring, dark background → solid near-white ring. Solid (opaque) so the edge
+      // stays clean instead of the muddy blend a translucent ring makes over text.
+      let lightBackground = palette.background.relativeLuminanceValue >= 0.5
+      let ringTone: NSColor = lightBackground
+        ? NSColor(calibratedWhite: 0.24, alpha: 1) // soft dark grey, not hard black
+        : NSColor(calibratedWhite: 0.96, alpha: 1) // near-white
+      let puckColor = ringTone.withAlphaComponent(min(1, puck.strength)).metalRGBA
+      let puckOverlay = MetalOverlayPrimitive(
+        kind: .semanticHalo,
+        phase: .aboveGlyphs,
+        rect: rect,
+        color: puckColor,
+        halo: MetalOverlayPrimitive.HaloGeometry(
+          coreHalfSize: SIMD2<Float>(Float(radius), Float(radius)),
+          cornerRadius: Float(radius),
+          feather: 1,
+          ringWidth: ringWidth
+        )
+      )
+      puckVertices = buildHaloVertices(overlays: [puckOverlay])
+    }
     let overlayBelowVertices = buildOverlayVertices(
-      overlays: overlays.filter { $0.phase == .beneathGlyphs }
+      overlays: flatOverlays.filter { $0.phase == .beneathGlyphs }
     )
+    // Dwell reveal (spec §4): the awoken semantic object's glyphs gain weight in
+    // place (faux-weight alpha dilation in the shader). No float, no halo, no
+    // color change. `currentLinkHoverIntensity` is the 0…1 tween of the boost.
+    let linkWeightBoost = view.currentLinkHoverIntensity
+    let linkLitColumnsByRow: [Int: Set<Int>] = linkWeightBoost > 0.001
+      ? Dictionary(
+          grouping: view.currentLinkHoverCellRanges.flatMap { range in
+            range.cols.map { (range.row, $0) }
+          },
+          by: { $0.0 }
+        ).mapValues { Set($0.map { $0.1 }) }
+      : [:]
     let glyphVertices = buildGlyphVertices(
       frame: drawFrame,
       cellRanges: renderCellRanges,
@@ -368,10 +448,12 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       cursorRow: renderFrame.scrollFrame.map { $0.overscanTop.count + $0.viewport.cursorY } ?? renderFrame.frame.cursorY,
       cursorCol: renderFrame.frame.cursorX,
       cursorVisible: renderFrame.frame.cursorVisible,
-      cursorShape: renderFrame.frame.cursorShape
+      cursorShape: renderFrame.frame.cursorShape,
+      linkLitColumnsByRow: linkLitColumnsByRow,
+      linkWeightBoost: linkWeightBoost
     )
     let overlayAboveVertices = buildOverlayVertices(
-      overlays: overlays.filter { $0.phase == .aboveGlyphs }
+      overlays: flatOverlays.filter { $0.phase == .aboveGlyphs }
     )
     let markedTextGlyphLayout = Self.markedTextGlyphLayout(
       text: markedTextString ?? "",
@@ -397,6 +479,16 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       palette: palette,
       glyphAtlas: glyphAtlas
     )
+    // Trailing ↗ Action Hint (spec §5): a small arrow one cell past the hovered
+    // URL, faded by proximity. Reuses the single-glyph draw path.
+    let actionHintDraw = buildActionHintGlyphDraw(
+      hint: view.currentActionHint,
+      palette: palette,
+      glyphAtlas: glyphAtlas,
+      cellSize: cellSize,
+      inset: inset,
+      translationY: translationY
+    )
     // Typing / idle presents synchronously for lowest latency; active scrolling
     // (prefersAsyncPresent) presents async with semaphore back-pressure so the
     // display-link tick never blocks the main thread on GPU completion.
@@ -407,10 +499,13 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     guard
       let backgroundBuffer = makeBuffer(vertices: backgroundVertices),
       let overlayBelowBuffer = makeBuffer(vertices: overlayBelowVertices),
+      let haloBuffer = makeBuffer(haloVertices: haloVertices),
+      let puckBuffer = makeBuffer(haloVertices: puckVertices),
       let glyphBuffer = makeBuffer(vertices: glyphVertices),
       let overlayAboveBuffer = makeBuffer(vertices: overlayAboveVertices),
       let markedTextGlyphBuffer = makeBuffer(vertices: markedTextGlyphDraw.vertices),
-      let cursorGlyphBuffer = makeBuffer(vertices: cursorGlyphDraw.vertices)
+      let cursorGlyphBuffer = makeBuffer(vertices: cursorGlyphDraw.vertices),
+      let actionHintGlyphBuffer = makeBuffer(vertices: actionHintDraw.vertices)
     else {
       return false
     }
@@ -422,16 +517,21 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     var retainedResources: [Any] = [
       backgroundBuffer,
       overlayBelowBuffer,
+      haloBuffer,
+      puckBuffer,
       glyphBuffer,
       overlayAboveBuffer,
       markedTextGlyphBuffer,
       cursorGlyphBuffer,
+      actionHintGlyphBuffer,
       backgroundPipeline,
       glyphPipeline,
+      haloPipeline,
     ]
     retainedResources.append(contentsOf: glyphSlices.map(\.texture))
     retainedResources.append(contentsOf: markedTextGlyphDraw.slices.map(\.texture))
     retainedResources.append(contentsOf: cursorGlyphDraw.slices.map(\.texture))
+    retainedResources.append(contentsOf: actionHintDraw.slices.map(\.texture))
 
     var presentedDrawable = false
     if let metalLayer = view.layer as? CAMetalLayer {
@@ -486,6 +586,14 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: overlayBelowVertices.count)
           }
 
+          // Feathered Semantic Halo: beneath glyphs so text stays crisp on top.
+          if !haloVertices.isEmpty {
+            encoder.setRenderPipelineState(haloPipeline)
+            encoder.setVertexBuffer(haloBuffer, offset: 0, index: 0)
+            setUniforms()
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: haloVertices.count)
+          }
+
           if !glyphVertices.isEmpty {
             encoder.setRenderPipelineState(glyphPipeline)
             encoder.setVertexBuffer(glyphBuffer, offset: 0, index: 0)
@@ -521,6 +629,25 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
               encoder.setFragmentTexture(textureSlice.texture, index: 0)
               encoder.drawPrimitives(type: .triangle, vertexStart: textureSlice.vertexStart, vertexCount: textureSlice.vertexCount)
             }
+          }
+
+          if !actionHintDraw.vertices.isEmpty {
+            encoder.setRenderPipelineState(glyphPipeline)
+            encoder.setVertexBuffer(actionHintGlyphBuffer, offset: 0, index: 0)
+            setUniforms()
+            for textureSlice in actionHintDraw.slices {
+              encoder.setFragmentTexture(textureSlice.texture, index: 0)
+              encoder.drawPrimitives(type: .triangle, vertexStart: textureSlice.vertexStart, vertexCount: textureSlice.vertexCount)
+            }
+          }
+
+          // GPU ring cursor drawn LAST, on top of glyphs (incl. weight-boosted
+          // ones) so the cursor sits over the text instead of being bitten into.
+          if !puckVertices.isEmpty {
+            encoder.setRenderPipelineState(haloPipeline)
+            encoder.setVertexBuffer(puckBuffer, offset: 0, index: 0)
+            setUniforms()
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: puckVertices.count)
           }
 
           encoder.endEncoding()
@@ -917,6 +1044,22 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     }
   }
 
+  private func makeBuffer(haloVertices: [HaloVertex]) -> MTLBuffer? {
+    guard !haloVertices.isEmpty else {
+      return device.makeBuffer(length: 1, options: [])
+    }
+    return haloVertices.withUnsafeBytes { rawBuffer in
+      guard let baseAddress = rawBuffer.baseAddress else {
+        return nil
+      }
+      return device.makeBuffer(
+        bytes: baseAddress,
+        length: MemoryLayout<HaloVertex>.stride * haloVertices.count,
+        options: []
+      )
+    }
+  }
+
   private func buildBackgroundVertices(
     frame: GhosttyTerminalFrame,
     cellRanges: [MetalCellDirtyRange],
@@ -969,7 +1112,9 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     cursorRow: Int,
     cursorCol: Int,
     cursorVisible: Bool,
-    cursorShape: TerminalCursorShape
+    cursorShape: TerminalCursorShape,
+    linkLitColumnsByRow: [Int: Set<Int>] = [:],
+    linkWeightBoost: CGFloat = 0
   ) -> [Vertex] {
     var vertices: [Vertex] = []
     vertices.reserveCapacity(cellRanges.reduce(0) { $0 + $1.cols.count } * 6)
@@ -978,6 +1123,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       let rowStart = row * frame.cols
       let rowEnd = min(rowStart + frame.cols, frame.cells.count)
       guard row >= 0, row < frame.rows, rowStart < rowEnd else { continue }
+      let litColumns = linkLitColumnsByRow[row]
       for col in range.cols {
         let index = rowStart + col
         guard col >= 0, col < frame.cols, index < rowEnd else { continue }
@@ -996,11 +1142,17 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
         guard texture(for: entry, glyphAtlas: glyphAtlas) != nil else {
           continue
         }
+        // Dwell reveal (spec §4): the awoken object's glyphs gain weight in place.
+        // No float, no color change — only the fragment-shader alpha dilation.
+        let boost: Float = (linkWeightBoost > 0.001 && litColumns?.contains(col) == true)
+          ? Float(linkWeightBoost)
+          : 0
         let foreground = colors.foreground.metalRGBA
         vertices.append(contentsOf: quadVertices(
           rect: Self.glyphDrawRect(for: entry, in: rect),
           color: foreground,
-          textureRect: Self.glyphTextureRect(for: entry)
+          textureRect: Self.glyphTextureRect(for: entry),
+          weightBoost: boost
         ))
       }
     }
@@ -1083,6 +1235,67 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     }
   }
 
+  /// Build the trailing ↗ Action Hint glyph (spec §5). It fades in place by
+  /// opacity only — no float, no translation — once the object reaches ActionHint.
+  private func buildActionHintGlyphDraw(
+    hint: PTYGridView.ActionHint?,
+    palette: TerminalSurfacePalette,
+    glyphAtlas: MetalGlyphAtlas,
+    cellSize: CGSize,
+    inset: CGSize,
+    translationY: CGFloat
+  ) -> (vertices: [Vertex], slices: [GlyphTextureSlice]) {
+    guard let hint, hint.intensity > 0.01 else { return ([], []) }
+    let entry = glyphAtlas.entry(for: "↗")
+    guard let texture = texture(for: entry, glyphAtlas: glyphAtlas) else { return ([], []) }
+    let cellRect = CGRect(
+      x: inset.width + CGFloat(hint.col) * cellSize.width,
+      y: inset.height + CGFloat(hint.row) * cellSize.height + translationY,
+      width: cellSize.width,
+      height: cellSize.height
+    )
+    // Fade in place — opacity is the whole reveal (spec §5). Kept faint.
+    let color = palette.foreground.withAlphaComponent(min(0.85, hint.intensity * 0.85)).metalRGBA
+    let vertices = quadVertices(
+      rect: Self.glyphDrawRect(for: entry, in: cellRect),
+      color: color,
+      textureRect: Self.glyphTextureRect(for: entry)
+    )
+    return (vertices, [GlyphTextureSlice(texture: texture, vertexStart: 0, vertexCount: vertices.count)])
+  }
+
+  /// Build SDF-halo vertices for `.semanticHalo` primitives. Each becomes a quad
+  /// carrying, per vertex, its position relative to the halo center plus the
+  /// rounded-rect half-size / corner / feather so the fragment shader can compute
+  /// a smooth signed-distance falloff.
+  private func buildHaloVertices(overlays: [MetalOverlayPrimitive]) -> [HaloVertex] {
+    overlays.flatMap { overlay -> [HaloVertex] in
+      guard let halo = overlay.halo else { return [] }
+      let rect = overlay.rect
+      let cx = Float(rect.midX)
+      let cy = Float(rect.midY)
+      let minX = Float(rect.minX)
+      let maxX = Float(rect.maxX)
+      let minY = Float(rect.minY)
+      let maxY = Float(rect.maxY)
+      func vertex(_ px: Float, _ py: Float) -> HaloVertex {
+        HaloVertex(
+          position: SIMD2<Float>(px, py),
+          color: overlay.color,
+          localPos: SIMD2<Float>(px - cx, py - cy),
+          halfSize: halo.coreHalfSize,
+          cornerRadius: halo.cornerRadius,
+          feather: halo.feather,
+          ringWidth: halo.ringWidth
+        )
+      }
+      return [
+        vertex(minX, minY), vertex(maxX, minY), vertex(minX, maxY),
+        vertex(minX, maxY), vertex(maxX, minY), vertex(maxX, maxY),
+      ]
+    }
+  }
+
   private func quadVertices(rect: CGRect, color: SIMD4<Float>, texture: Bool) -> [Vertex] {
     quadVertices(
       rect: rect,
@@ -1091,7 +1304,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     )
   }
 
-  private func quadVertices(rect: CGRect, color: SIMD4<Float>, textureRect: CGRect?) -> [Vertex] {
+  private func quadVertices(rect: CGRect, color: SIMD4<Float>, textureRect: CGRect?, weightBoost: Float = 0) -> [Vertex] {
     let minX = Float(rect.minX)
     let maxX = Float(rect.maxX)
     let minY = Float(rect.minY)
@@ -1107,12 +1320,12 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     let uvbl = SIMD2<Float>(Float(texRect.minX), Float(texRect.maxY))
     let uvbr = SIMD2<Float>(Float(texRect.maxX), Float(texRect.maxY))
     return [
-      Vertex(position: tl, color: color, texCoord: textureRect == nil ? zero : uvtl),
-      Vertex(position: tr, color: color, texCoord: textureRect == nil ? zero : uvtr),
-      Vertex(position: bl, color: color, texCoord: textureRect == nil ? zero : uvbl),
-      Vertex(position: bl, color: color, texCoord: textureRect == nil ? zero : uvbl),
-      Vertex(position: tr, color: color, texCoord: textureRect == nil ? zero : uvtr),
-      Vertex(position: br, color: color, texCoord: textureRect == nil ? zero : uvbr),
+      Vertex(position: tl, color: color, texCoord: textureRect == nil ? zero : uvtl, weightBoost: weightBoost),
+      Vertex(position: tr, color: color, texCoord: textureRect == nil ? zero : uvtr, weightBoost: weightBoost),
+      Vertex(position: bl, color: color, texCoord: textureRect == nil ? zero : uvbl, weightBoost: weightBoost),
+      Vertex(position: bl, color: color, texCoord: textureRect == nil ? zero : uvbl, weightBoost: weightBoost),
+      Vertex(position: tr, color: color, texCoord: textureRect == nil ? zero : uvtr, weightBoost: weightBoost),
+      Vertex(position: br, color: color, texCoord: textureRect == nil ? zero : uvbr, weightBoost: weightBoost),
     ]
   }
 
@@ -1160,12 +1373,14 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     float2 position;
     float4 color;
     float2 texCoord;
+    float weightBoost;
   };
 
   struct VertexOut {
     float4 position [[position]];
     float4 color;
     float2 texCoord;
+    float weightBoost;
   };
 
   struct Uniforms {
@@ -1186,6 +1401,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     out.position = float4(clip, 0.0, 1.0);
     out.color = in.color;
     out.texCoord = in.texCoord;
+    out.weightBoost = in.weightBoost;
     return out;
   }
 
@@ -1198,8 +1414,124 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     texture2d<float> texture0 [[texture(0)]]
   ) {
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::nearest);
-    float alpha = texture0.sample(s, in.texCoord).a;
-    return float4(in.color.rgb, in.color.a * alpha);
+    // Base coverage is ALWAYS the nearest-filtered tap — pixel-exact, identical to
+    // plain text. Never resample the glyph core with linear, or the whole stroke
+    // goes soft (the cause of the "blurry when weighted" artifact).
+    float core = texture0.sample(s, in.texCoord).a;
+    if (in.weightBoost < 0.001) {
+      return float4(in.color.rgb, in.color.a * core);
+    }
+    // Faux-weight (spec §4.1): grow ONLY a thin outer rim by max-combining a few
+    // linear-filtered neighbor taps, then union with the crisp core. The core
+    // stays sharp; the boost just adds sub-texel coverage at the stroke edge.
+    constexpr sampler ls(coord::normalized, address::clamp_to_edge, filter::linear);
+    float w = float(texture0.get_width());
+    float h = float(texture0.get_height());
+    // Up to ~0.7 device texels of dilation at full boost — a gentle Regular→
+    // Medium-ish thickening without closing glyph counters.
+    float2 d = float2(1.0 / max(w, 1.0), 1.0 / max(h, 1.0)) * (in.weightBoost * 0.7);
+    float rim = texture0.sample(ls, in.texCoord + float2( d.x, 0.0)).a;
+    rim = max(rim, texture0.sample(ls, in.texCoord + float2(-d.x, 0.0)).a);
+    rim = max(rim, texture0.sample(ls, in.texCoord + float2(0.0,  d.y)).a);
+    rim = max(rim, texture0.sample(ls, in.texCoord + float2(0.0, -d.y)).a);
+    rim = max(rim, texture0.sample(ls, in.texCoord + float2( d.x,  d.y)).a);
+    rim = max(rim, texture0.sample(ls, in.texCoord + float2( d.x, -d.y)).a);
+    rim = max(rim, texture0.sample(ls, in.texCoord + float2(-d.x,  d.y)).a);
+    rim = max(rim, texture0.sample(ls, in.texCoord + float2(-d.x, -d.y)).a);
+    float a = max(core, rim);
+    return float4(in.color.rgb, in.color.a * a);
+  }
+
+  // ---- Feathered Semantic Halo (spec §4.2) ----
+
+  struct HaloVertexIn {
+    float2 position;
+    float4 color;
+    float2 localPos;
+    float2 halfSize;
+    float cornerRadius;
+    float feather;
+    float ringWidth;
+  };
+
+  struct HaloVertexOut {
+    float4 position [[position]];
+    float4 color;
+    float2 localPos;
+    float2 halfSize;
+    float cornerRadius;
+    float feather;
+    float ringWidth;
+  };
+
+  vertex HaloVertexOut metal_direct_halo_vertex(
+    uint vertexID [[vertex_id]],
+    const device HaloVertexIn *vertices [[buffer(0)]],
+    constant Uniforms &uniforms [[buffer(1)]]
+  ) {
+    HaloVertexOut out;
+    HaloVertexIn in = vertices[vertexID];
+    float2 clip = float2(
+      (in.position.x / uniforms.drawableSize.x) * 2.0 - 1.0,
+      1.0 - (in.position.y / uniforms.drawableSize.y) * 2.0
+    );
+    out.position = float4(clip, 0.0, 1.0);
+    out.color = in.color;
+    out.localPos = in.localPos;
+    out.halfSize = in.halfSize;
+    out.cornerRadius = in.cornerRadius;
+    out.feather = in.feather;
+    out.ringWidth = in.ringWidth;
+    return out;
+  }
+
+  // Signed distance to a rounded rectangle centered at origin.
+  static inline float rounded_box_sdf(float2 p, float2 halfSize, float radius) {
+    float2 q = abs(p) - (halfSize - float2(radius));
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+  }
+
+  // Cheap per-pixel hash noise in [-0.5, 0.5], used to dither the halo so its very
+  // low-alpha gradient does not quantize into visible concentric bands on 8-bit
+  // output. Standard fract-sin hash keyed on the fragment's screen coordinate.
+  static inline float halo_dither(float2 p) {
+    float n = fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+    return n - 0.5;
+  }
+
+  fragment float4 metal_direct_halo_fragment(HaloVertexOut in [[stage_in]]) {
+    float dist = rounded_box_sdf(in.localPos, in.halfSize, in.cornerRadius);
+
+    // Ring mode (cursor puck): a crisp stroked outline with only ~1px AA, so it
+    // reads as a clean small circle rather than a soft glow.
+    if (in.ringWidth > 0.0) {
+      float aa = 1.0;
+      // Distance from the ring's centerline (half the stroke inside the edge).
+      float ringDist = abs(dist + in.ringWidth * 0.5) - in.ringWidth * 0.5;
+      float coverage = 1.0 - smoothstep(0.0, aa, ringDist);
+      if (coverage <= 0.001) {
+        discard_fragment();
+      }
+      return float4(in.color.rgb, in.color.a * coverage);
+    }
+
+    // Soft, borderless falloff: begin the fade slightly INSIDE the core so there
+    // is no hard edge where the solid core meets the feather, then ease out across
+    // the whole feather band. smootherstep (6t^5-15t^4+10t^3) is gentler than
+    // smoothstep and reads as a true glow rather than a shape with a rim.
+    float feather = max(in.feather, 1.0);
+    float t = clamp((dist + feather * 0.25) / (feather * 1.25), 0.0, 1.0);
+    float smoother = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    float coverage = 1.0 - smoother;
+    // Dither the final alpha by ~1/255 to break up 8-bit banding (the "rings").
+    // Amplitude is one quantization step so it scatters the boundary between
+    // adjacent alpha levels without introducing perceptible noise.
+    float alpha = in.color.a * coverage;
+    alpha += halo_dither(in.position.xy) * (1.0 / 255.0);
+    if (alpha <= 0.001) {
+      discard_fragment();
+    }
+    return float4(in.color.rgb, alpha);
   }
   """#
 }

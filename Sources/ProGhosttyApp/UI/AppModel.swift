@@ -80,8 +80,18 @@ final class AppModel: ObservableObject {
   private var titlebarToastTask: Task<Void, Never>?
   private var inAppNotificationTask: Task<Void, Never>?
   private var paneSplitAvailability: [UUID: PaneSplitAvailability] = [:]
+  /// Memoized bare-token existence checks, keyed by "cwd\0token". Bounds the
+  /// per-mouse-move disk stats the clickable-path detector would otherwise do.
+  private var bareTokenExistenceCache: [String: (exists: Bool, timestamp: CFTimeInterval)] = [:]
+  private static let bareTokenExistenceTTL: CFTimeInterval = 2.0
+  private static let bareTokenExistenceCacheLimit = 2048
 
   struct TitlebarToast: Equatable, Sendable {
+    // Unique per presentation so re-showing the *same* message/style is still a
+    // distinct value. Without this, @Published's Equatable check swallows a repeat
+    // toast (e.g. ⌘-clicking the same invalid path twice) and the view never
+    // re-appears — "only the first click shows a toast".
+    var id = UUID()
     var message: String
     var style: Style
     var lifetime: ProGhosttyTitlebarToastLifetime
@@ -155,6 +165,9 @@ final class AppModel: ObservableObject {
     }
     surfaceRegistry.setLinkTargetHandler { [weak self] sourceSession, target in
       self?.openTerminalLinkTarget(target, from: sourceSession)
+    }
+    surfaceRegistry.setPathExistenceProvider { [weak self] sourceSession, token in
+      self?.bareTokenResolvesToExistingPath(token, from: sourceSession) ?? false
     }
     applyTerminalAppearance()
 
@@ -851,6 +864,40 @@ final class AppModel: ObservableObject {
     }
   }
 
+  /// True if a bare token (e.g. `src`, `dist`) exists as a file/dir under the
+  /// session cwd — powers clickable bare-word paths.
+  ///
+  /// This runs on the main thread for *every* `mouseMoved` (the link detector
+  /// probes each bare token on the pointer's row/logical line). A raw
+  /// `FileManager.fileExists` there is a synchronous disk stat per token per move,
+  /// which stalls pointer tracking on rows full of path-like text. Memoize by
+  /// (cwd, token) with a short TTL so repeated moves reuse the result and only a
+  /// genuinely new token hits the filesystem.
+  private func bareTokenResolvesToExistingPath(_ token: String, from sourceSession: TerminalSessionID) -> Bool {
+    guard let cwd = sessionCwd(for: sourceSession), !cwd.isEmpty else { return false }
+    let key = cwd + "\u{0}" + token
+    let now = CACurrentMediaTime()
+    if let cached = bareTokenExistenceCache[key], now - cached.timestamp < Self.bareTokenExistenceTTL {
+      return cached.exists
+    }
+    let base = URL(fileURLWithPath: cwd).standardizedFileURL.path
+    let path = URL(fileURLWithPath: cwd).appendingPathComponent(token).standardizedFileURL.path
+    // Guard against `..` escaping cwd or resolving to cwd itself.
+    let exists = path.hasPrefix(base + "/") && FileManager.default.fileExists(atPath: path)
+    if bareTokenExistenceCache.count > Self.bareTokenExistenceCacheLimit {
+      bareTokenExistenceCache.removeAll(keepingCapacity: true)
+    }
+    bareTokenExistenceCache[key] = (exists, now)
+    return exists
+  }
+
+  private func sessionCwd(for sourceSession: TerminalSessionID) -> String? {
+    sessionManager.workingDirectory(for: sourceSession)
+      ?? workspaceRuntimes.first { runtime in
+        PaneTreeReducer.listLeaves(in: runtime.layout.root).contains { $0.sessionId == sourceSession }
+      }?.cwdBySession[sourceSession]
+  }
+
   private func revealTerminalFilePath(_ target: TerminalFilePathTarget, from sourceSession: TerminalSessionID) {
     let cwd = sessionManager.workingDirectory(for: sourceSession)
       ?? workspaceRuntimes.first { runtime in
@@ -1252,12 +1299,20 @@ final class AppModel: ObservableObject {
   ) {
     titlebarToastTask?.cancel()
     titlebarToastTask = nil
-    titlebarToast = TitlebarToast(message: message, style: style, lifetime: lifetime)
+    let toast = TitlebarToast(message: message, style: style, lifetime: lifetime)
+    titlebarToast = toast
     guard let delay = lifetime.dismissDelay else { return }
     titlebarToastTask = Task { [weak self] in
       try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+      // Cancelling a Task does NOT stop code after the (throwing) sleep — `try?`
+      // swallows the CancellationError and execution falls through. Without this
+      // guard a rapid second toast would cancel the first task, which then
+      // immediately cleared the *new* toast (it showed for one frame). Bail if
+      // cancelled, and only clear if this is still the toast we scheduled.
+      if Task.isCancelled { return }
       await MainActor.run {
-        self?.titlebarToast = nil
+        guard let self, self.titlebarToast?.id == toast.id else { return }
+        self.titlebarToast = nil
       }
     }
   }

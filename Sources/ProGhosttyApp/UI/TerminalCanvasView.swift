@@ -1060,6 +1060,8 @@ final class TerminalPaneViewController: NSViewController {
     guard let draft else {
       sideInputOverlay?.removeFromSuperview()
       sideInputOverlay = nil
+      // Input box gone → terminal grid resumes normal mouse interaction.
+      setTerminalInteractionEnabled(true)
       return
     }
 
@@ -1073,6 +1075,9 @@ final class TerminalPaneViewController: NSViewController {
       view.addSubview(overlay)
       sideInputOverlay = overlay
     }
+    // Input box present → make the grid inert to the mouse (plain text, iBeam),
+    // so hover ring / dwell / Explore don't fight the typing session.
+    setTerminalInteractionEnabled(false)
 
     overlay.configure(
       paneID: pane.paneId,
@@ -1096,6 +1101,13 @@ final class TerminalPaneViewController: NSViewController {
       overlay.focus()
       onFocusRequestHandled(draft.paneID, draft.focusRequestID)
     }
+  }
+
+  /// Enable/disable the terminal grid's mouse-driven link interaction while the
+  /// side-input box is open (inert plain-text terminal during typing).
+  private func setTerminalInteractionEnabled(_ enabled: Bool) {
+    guard let surface = contentView as? PTYTerminalSurfaceView else { return }
+    surface.liveGridView.setInteractionEnabled(enabled)
   }
 
   private func layoutSideInputOverlay() {

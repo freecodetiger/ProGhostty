@@ -20,6 +20,13 @@ public struct TerminalURLHit: Equatable, Sendable {
 
 public enum TerminalURLDetector {
   private static let pattern = #"(?<![A-Za-z0-9_])((?:https?://)[^\s<>"']+|(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\])(?::\d{1,5})(?:/[^\s<>"']*)?)"#
+  /// Compiled once. Recompiling this per row on every `mouseMoved` (the hover /
+  /// dwell detector calls `hits(inRow:)` for the pointer's logical line) was a
+  /// measurable per-move stall — regex compilation is expensive.
+  private static let regex: NSRegularExpression? = try? NSRegularExpression(
+    pattern: pattern,
+    options: [.caseInsensitive]
+  )
   private static let trailingCharacters = CharacterSet(charactersIn: ".,;:!?)]}")
 
   public static func hitTest(row: Int, col: Int, in frame: GhosttyTerminalFrame) -> TerminalURLHit? {
@@ -45,7 +52,7 @@ public enum TerminalURLDetector {
     let line = rows.map(\.text).joined()
     let nsLine = line as NSString
     let fullRange = NSRange(location: 0, length: nsLine.length)
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+    guard let regex else {
       return []
     }
 

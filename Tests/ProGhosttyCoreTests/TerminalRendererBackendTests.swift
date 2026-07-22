@@ -1143,7 +1143,8 @@ struct TerminalRendererBackendTests {
 
     #expect(overlays.contains(where: { $0.kind == .cursor }))
     #expect(overlays.contains(where: { $0.kind == .selection }))
-    #expect(overlays.contains(where: { $0.kind == .linkHover }))
+    // Link hover no longer emits a background halo primitive.
+    #expect(!overlays.contains(where: { $0.kind == .semanticHalo }))
     #expect(overlays.filter({ $0.kind == .selection }).count == 1)
     #expect(overlays.filter({ $0.kind == .cursor }).count == 1)
   }
@@ -1240,7 +1241,7 @@ struct TerminalRendererBackendTests {
     #expect(selection?.rect.width == expectedWidth)
   }
 
-  @Test func metalOverlayBufferScopesLinkHoverToCellRange() {
+  @Test func metalOverlayBufferEmitsNoBackgroundHaloForLinkHover() {
     let plan = MetalTerminalRenderPlan(
       presentation: .frame,
       viewportRows: 1,
@@ -1266,11 +1267,10 @@ struct TerminalRendererBackendTests {
       ]
     )
 
-    let hover = overlays.first(where: { $0.kind == .linkHover })
-    let expectedMinX = CGFloat(14 * 2 + 6 * 8 * 2)
-    let expectedWidth = CGFloat(5 * 8 * 2)
-    #expect(hover?.rect.minX == expectedMinX)
-    #expect(hover?.rect.width == expectedWidth)
+    // The link "awake" signal is the glyph float + action-hint arrow + cursor
+    // puck — not a background halo or underline. makeOverlays emits neither.
+    #expect(!overlays.contains(where: { $0.kind == .semanticHalo }))
+    #expect(!overlays.contains(where: { $0.kind == .linkHover }))
   }
 
   @Test func metalOverlayBufferBuildsMarkedTextPrimitive() {
@@ -1518,6 +1518,9 @@ struct TerminalRendererBackendTests {
   }
 
   @Test func metalOverlayBufferAppliesPixelScrollTranslationToLinkHoverGeometry() {
+    // Semantic halo removed — hover emits no geometry from makeOverlays; the link
+    // signal (glyph float / puck) is applied elsewhere. Kept as a regression guard
+    // that hover produces no stray overlay under a scroll translation.
     let plan = MetalTerminalRenderPlan(
       presentation: .scrollFrame,
       viewportRows: 2,
@@ -1548,11 +1551,7 @@ struct TerminalRendererBackendTests {
       ]
     )
 
-    let hover = overlays.first(where: { $0.kind == .linkHover })
-    let expectedTranslationY = CGFloat(-1 * 16 * 2 + 5 * 2)
-    let expectedRowMinY = CGFloat(12 * 2) + CGFloat(1 * 16 * 2) + expectedTranslationY
-    let expectedUnderlineTop = expectedRowMinY + CGFloat(16 * 2) - max(1, CGFloat(16 * 2) * 0.10)
-    #expect(hover?.rect.minY == expectedUnderlineTop)
+    #expect(!overlays.contains(where: { $0.kind == .semanticHalo }))
   }
 
   @Test func metalTerminalFrameEncoderPreservesOverscanPixelRemainderAndDirtyRows() {
@@ -1639,13 +1638,18 @@ struct TerminalRendererBackendTests {
     #expect(CGFloat(image.height) < cellSize.height)
   }
 
-  @MainActor @Test func metalGlyphAtlasDoesNotThickenRegularGlyphsByDefault() throws {
+  @MainActor @Test func metalGlyphAtlasPadsGlyphBitmapForFauxWeightDilation() throws {
+    // The glyph bitmap now carries a small transparent margin so the dwell-reveal
+    // faux-weight (alpha dilation in the shader) can expand coverage outward
+    // symmetrically instead of clipping at a tight quad edge.
     let atlas = MetalGlyphAtlas(fontFamily: "Menlo", fontSize: 14, backingScale: 2)
 
-    let image = try #require(atlas.renderedImage(for: "A"))
-    let cellSize = atlas.renderCellSize
-
-    #expect(CGFloat(image.width) <= cellSize.width)
+    let entry = atlas.entry(for: "A")
+    // Ink sits strictly inside the padded bitmap (a transparent border on each side).
+    #expect(entry.inkBounds.minX >= 1)
+    #expect(entry.inkBounds.minY >= 1)
+    #expect(entry.inkBounds.maxX < entry.bitmapSize.width)
+    #expect(entry.inkBounds.maxY < entry.bitmapSize.height)
   }
 
   @MainActor @Test func metalDirectGlyphQuadUsesTightInkBoundsInsideCell() {
@@ -1689,13 +1693,17 @@ struct TerminalRendererBackendTests {
     #expect(options[.origin] as? MTKTextureLoader.Origin == .topLeft)
   }
 
-  @MainActor @Test func metalDirectGlyphShaderSamplesGlyphAtlasWithoutLinearFiltering() throws {
+  @MainActor @Test func metalDirectGlyphShaderUsesNearestAtRestAndLinearForFauxWeight() throws {
     let source = MetalDirectRenderEngine.shaderSource
     let glyphFragment = try #require(source.range(of: "metal_direct_glyph_fragment"))
     let fragmentSource = source[glyphFragment.lowerBound...]
 
+    // Rest path (weightBoost == 0) still samples with nearest filtering — glyphs
+    // are byte-identical to plain text. The faux-weight dilation path uses linear
+    // filtering for a smooth sub-texel coverage ramp.
     #expect(fragmentSource.contains("filter::nearest"))
-    #expect(!fragmentSource.contains("filter::linear"))
+    #expect(fragmentSource.contains("filter::linear"))
+    #expect(fragmentSource.contains("weightBoost"))
   }
 
   @MainActor @Test func metalGlyphAtlasInvalidatesEntriesWhenFontChanges() {

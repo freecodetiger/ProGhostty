@@ -6,6 +6,9 @@ public enum MetalOverlayKind: Sendable {
   case selection
   case linkHover
   case markedText
+  /// Feathered, borderless Semantic Halo behind a hovered link (spec §4.2).
+  /// Rendered by a dedicated SDF pipeline, not the flat-rect overlay path.
+  case semanticHalo
 }
 
 public enum MetalOverlayPhase: Sendable {
@@ -18,12 +21,36 @@ public struct MetalOverlayPrimitive: Equatable, Sendable {
   public let phase: MetalOverlayPhase
   public let rect: CGRect
   public let color: SIMD4<Float>
+  /// For `.semanticHalo`: the *core* rect half-size and feather/corner geometry,
+  /// all in the same pixel space as `rect`. `rect` is the core expanded by
+  /// `feather` on every side so the falloff has room. Nil for flat overlays.
+  public let halo: HaloGeometry?
 
-  public init(kind: MetalOverlayKind, phase: MetalOverlayPhase, rect: CGRect, color: SIMD4<Float>) {
+  public struct HaloGeometry: Equatable, Sendable {
+    /// Half-extent of the solid core (before feather), in pixels.
+    public var coreHalfSize: SIMD2<Float>
+    /// Corner radius of the rounded core, in pixels.
+    public var cornerRadius: Float
+    /// Feather band width (core edge → fully transparent), in pixels.
+    public var feather: Float
+    /// If > 0, render as a crisp stroked ring of this width (pixels) instead of a
+    /// filled feathered glow — used for the clean cursor puck.
+    public var ringWidth: Float
+
+    public init(coreHalfSize: SIMD2<Float>, cornerRadius: Float, feather: Float, ringWidth: Float = 0) {
+      self.coreHalfSize = coreHalfSize
+      self.cornerRadius = cornerRadius
+      self.feather = feather
+      self.ringWidth = ringWidth
+    }
+  }
+
+  public init(kind: MetalOverlayKind, phase: MetalOverlayPhase, rect: CGRect, color: SIMD4<Float>, halo: HaloGeometry? = nil) {
     self.kind = kind
     self.phase = phase
     self.rect = rect
     self.color = color
+    self.halo = halo
   }
 }
 
@@ -42,6 +69,8 @@ public enum MetalOverlayBuffer {
     selectionRowsOffset: Int = 0,
     linkHoverRows: Set<Int> = [],
     linkHoverCellRanges: [MetalLinkHoverCellRange] = [],
+    /// 0…1 hover animation progress for the semantic halo (spec §8). 0 = no halo.
+    linkHoverIntensity: CGFloat = 1,
     cursorOverlay: MetalMarkedTextOverlay? = nil,
     markedTextOverlay: MetalMarkedTextOverlay? = nil,
     imeCompositionCursorOverlay: MetalMarkedTextOverlay? = nil,
@@ -201,33 +230,10 @@ public enum MetalOverlayBuffer {
       }
       : linkHoverCellRanges
 
-    for range in resolvedLinkHoverRanges {
-      guard !range.cols.isEmpty else { continue }
-      let hoverRow = range.row + selectionRowsOffset
-      let clampedLower = min(max(0, range.cols.lowerBound), max(0, frame.cols))
-      let clampedUpper = min(max(clampedLower, range.cols.upperBound), max(0, frame.cols))
-      guard clampedLower < clampedUpper else { continue }
-      let hoverRect = cellRangeRect(
-        row: hoverRow,
-        cols: clampedLower..<clampedUpper,
-        cellSize: cellSize,
-        inset: inset,
-        translationY: translationY
-      )
-      overlays.append(
-        MetalOverlayPrimitive(
-          kind: .linkHover,
-          phase: .aboveGlyphs,
-        rect: CGRect(
-          x: hoverRect.minX,
-          y: hoverRect.maxY - max(1, cellSize.height * 0.10),
-          width: hoverRect.width,
-          height: max(1, cellSize.height * 0.10)
-          ),
-          color: palette.cursorBackground.withAlphaComponent(0.32).metalRGBA
-        )
-      )
-    }
+    // Semantic Halo removed: the link "awake" signal is carried by the glyph
+    // float + action-hint arrow + cursor puck, not a background glow. `_ =` keeps
+    // the now-unused inputs from tripping the compiler while the API is stable.
+    _ = (resolvedLinkHoverRanges, linkHoverIntensity)
 
     if let markedTextOverlay {
       let markedRow = markedTextOverlay.row + markedTextRowsOffset
@@ -334,4 +340,28 @@ extension NSColor {
   var metalRed: CGFloat { (usingColorSpace(.deviceRGB) ?? self).redComponent }
   var metalGreen: CGFloat { (usingColorSpace(.deviceRGB) ?? self).greenComponent }
   var metalBlue: CGFloat { (usingColorSpace(.deviceRGB) ?? self).blueComponent }
+
+  /// WCAG relative luminance of this color.
+  var relativeLuminanceValue: CGFloat {
+    let rgb = usingColorSpace(.deviceRGB) ?? self
+    func channel(_ value: CGFloat) -> CGFloat {
+      value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(rgb.redComponent)
+      + 0.7152 * channel(rgb.greenComponent)
+      + 0.0722 * channel(rgb.blueComponent)
+  }
+
+  /// Linear blend of this color toward `target` by `amount` (0…1), RGB only.
+  func blendedTowardColor(_ target: NSColor, amount: CGFloat) -> NSColor {
+    let lhs = usingColorSpace(.deviceRGB) ?? self
+    let rhs = target.usingColorSpace(.deviceRGB) ?? target
+    let a = min(1, max(0, amount))
+    return NSColor(
+      calibratedRed: lhs.redComponent + (rhs.redComponent - lhs.redComponent) * a,
+      green: lhs.greenComponent + (rhs.greenComponent - lhs.greenComponent) * a,
+      blue: lhs.blueComponent + (rhs.blueComponent - lhs.blueComponent) * a,
+      alpha: lhs.alphaComponent
+    )
+  }
 }

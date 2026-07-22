@@ -18,6 +18,16 @@ Second principle, equal weight:
 
 > **Everything is interactive, but quiet by default.**
 
+Third — the long-term shape this is building toward:
+
+> **Explore Mode: the whole terminal wakes at once, on intent.**
+
+The most mature version of this is not per-object dwell hints but a global gesture:
+hold **⌘** and the entire terminal enters *Explore Mode* — every semantic object
+lights up together (URLs get halos, file paths get file icons, git commits get a
+git glyph, PIDs / ports / containers get a unified affordance). Release ⌘ and it
+all goes silent again. See §13.
+
 A URL is not a web link. It is a **Semantic Object** living inside a monospace
 grid — indistinguishable from surrounding text until the user asks it to wake up.
 
@@ -261,3 +271,74 @@ Fast pass-through (< 200ms over the object) → **no visual change at all**.
 > grouping) should live in testable value types in `ProGhosttyCore`, driven by the
 > existing display-link + `transientOverlayDidChangeHandler` plumbing — no new
 > ANSI parsing, renderer stays a painter.
+
+---
+
+## 13. Explore Mode (design aspiration — the destination)
+
+> A truly high-end terminal doesn't say *"you can click here."* It stays silent
+> until the user signals *"I want to explore right now"* — then the whole surface
+> wakes at once.
+
+This is the north-star endpoint of the "quiet by default" philosophy. The dwell
+ladder (§2) is the **single-object** expression of intent; Explore Mode is the
+**whole-screen** expression of the same idea.
+
+### 13.1 The gesture
+
+- **Hold ⌘** → the entire terminal enters Explore Mode. Every semantic object on
+  screen becomes interactive *simultaneously*.
+- **Release ⌘** → everything returns to silent plain text.
+- No toolbar, no toggle, no persistent chrome. The modifier *is* the mode.
+- (Optional later: a sticky "Explore" command for keyboard-only users, same visuals.)
+
+### 13.2 What wakes up
+
+Every recognized semantic object type lights up together, each with a *unified*,
+quiet affordance:
+
+| Object | Affordance in Explore Mode |
+|--------|----------------------------|
+| **URL** | Semantic Halo (§4.2) |
+| **File path** | small file icon at the token |
+| **Git commit hash** | git glyph |
+| **PID** | process affordance |
+| **Port** | port/network affordance |
+| **Container id** | container affordance |
+
+All share one visual language (same halo/icon weight, same 120–180ms ease-out fade,
+same background-derived tinting) so the screen reads as *one coherent layer waking*,
+not a pile of different badges.
+
+### 13.3 Why this is the better model
+
+- **Cross-line, misfire, highlight, visual-consistency problems mostly dissolve.**
+  There is no per-object hover race and no dwell ambiguity — the mode is binary and
+  global, driven by a key the user is already holding to act.
+- It is the purest form of *"everything interactive, but everything quiet; they
+  respond only when the user needs them."*
+- It gives ProGhostty a **restrained, mature** character — never a terminal nagging
+  *"click me"* from every corner.
+
+### 13.4 Relationship to this spec (v1)
+
+Explore Mode is **not** required for v1, and nothing here blocks it — v1 *builds its
+atoms*:
+
+- The **Semantic Object** model (§7) is exactly the unit Explore Mode toggles en masse.
+- The **background-derived halo** (§4.2.1) and **120–180ms ease-out** (§8) are the
+  shared visual language every object type will reuse.
+- Today ⌘ already flips `commandLinkMode`; Explore Mode generalizes that single flag
+  into "wake all semantic objects," fading them in together instead of only enabling
+  ⌘-click.
+
+Sequencing:
+1. **v1 (this spec):** URLs as semantic objects — dwell halo, action hint, popover, ⌘-click open.
+2. **Later:** add object *types* (paths, commits, PIDs, ports, containers) behind the
+   same halo/icon language.
+3. **Explore Mode:** promote ⌘-hold to a global reveal of every object type at once.
+
+Open questions for that phase: detectors for each new type (must stay out of the VT
+layer — no ANSI re-parse), icon rendering in the cell grid, and how ⌘-hold Explore
+coexists with ⌘-click open (likely: hold reveals, click-through still opens).
+

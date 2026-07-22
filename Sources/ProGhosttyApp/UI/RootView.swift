@@ -88,6 +88,10 @@ struct RootView: View {
   private var terminalChromeSyncToken: Int {
     var hasher = Hasher()
     hasher.combine(model.isWorkspaceSwitcherPresented)
+    // Include the toast's unique id so re-showing the same message/style still
+    // changes the token and re-syncs the AppKit titlebar chrome. Hashing only the
+    // message swallowed repeat toasts (e.g. ⌘-clicking the same invalid path).
+    hasher.combine(model.titlebarToast?.id)
     hasher.combine(model.titlebarToast?.message)
     hasher.combine(String(describing: model.titlebarToast?.style))
     hasher.combine(String(describing: model.titlebarToast?.lifetime))

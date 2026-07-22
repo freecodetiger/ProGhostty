@@ -308,7 +308,10 @@ public final class MetalGlyphAtlas {
       cellBounds = cellBounds.union(underlineBounds)
     }
 
-    let padding: CGFloat = 0
+    // A small transparent margin around the ink so faux-weight dilation (the
+    // dwell "weight +" reveal, done in the glyph fragment shader) can expand the
+    // coverage outward symmetrically instead of clipping at a tight quad edge.
+    let padding: CGFloat = 2
     let pixelX = floor(cellBounds.minX) - padding
     let pixelY = floor(cellBounds.minY) - padding
     let fractionX = cellBounds.minX - floor(cellBounds.minX)
