@@ -79,13 +79,13 @@ jobs:
           body: |
             ProGhostty ${{ github.ref_name }} 正式版。
 
-            ## v0.4.3 · 分屏/滚动稳定性
-            - **分屏拉伸/错位**：分屏与拖动分界线时，Metal 旧帧不再被拉伸；竖直改高时用底色过渡，避免内容先上移/下移再回正。
-            - **分屏 reflow 闪动**：VT resize 后等 shell 重绘再统一 present，减少「到位后又刷一遍」。
-            - **关分屏崩溃**：修复高度变化清屏在 Metal completion 队列触碰 MainActor 导致的闪退。
-            - **最后一块分屏不可关**：只剩一个 pane 时不再误关整个工作区；菜单项禁用。
-            - **历史选区边缘滚动**：默认平滑路径下拖选进历史走 Pattern-2 browse，不再错误移动 VT 视口。
-            - Soft Dark 正文字改为纯白（用户偏好）。
+            ## v0.4.4 · 跨行链接与 Soft Light 正文
+            - **跨行链接 ⌘-click**：软换行后半段现在能拼回完整链接。URL 与文件路径共用一套逻辑行拼接（`TerminalLogicalLine`），不再「URL 只识别前半段、路径能跨行」的分叉。
+            - **设置窗标题黏底**：透明 titlebar 隐藏系统 “Settings” 标题并在展示/切侧栏后 re-assert，深色下不再出现贴底黑字。
+            - Soft Light 正文字改为纯黑（用户偏好），底仍 Solarized 暖色。
+
+            ## 自 v0.4.3
+            - 分屏拉伸/错位、reflow 闪动、关分屏崩溃、最后一块分屏误关、历史选区边缘滚动修复。
 
             ## 自 v0.4.2
             - Soft Dark / Soft Light 整套预设与设置 chrome 同族配色。
