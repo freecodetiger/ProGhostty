@@ -78,4 +78,5 @@ public enum TerminalEvent: Sendable {
   func setActivationHandler(_ handler: (@MainActor (TerminalSessionID) -> Void)?)
   func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?)
   func setLinkTargetHandler(_ handler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?)
+  func setPathExistenceProvider(_ provider: (@MainActor (TerminalSessionID, String) -> Bool)?)
 }

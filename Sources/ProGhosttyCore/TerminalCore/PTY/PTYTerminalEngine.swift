@@ -296,6 +296,10 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
   public func setLinkTargetHandler(_ handler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?) {
     surfaceRegistry.setLinkTargetHandler(handler)
   }
+
+  public func setPathExistenceProvider(_ provider: (@MainActor (TerminalSessionID, String) -> Bool)?) {
+    surfaceRegistry.setPathExistenceProvider(provider)
+  }
 }
 
 @MainActor
@@ -934,6 +938,10 @@ public class PTYGridView: NSView {
   }
   public var openLinkTargetHandler: ((TerminalLinkTarget) -> Void)?
   public var linkHoverHandler: ((Bool) -> Void)?
+  /// Returns true if a bare token (no `/`) resolves to an existing file/dir under
+  /// the session cwd, so `dist`, `src`, `README` become clickable. Provided by the
+  /// registry (which knows the cwd). Nil disables bare-word path detection.
+  public var pathExistenceValidator: ((String) -> Bool)?
   public var pasteboard = NSPasteboard.general
 
   private var frameSnapshot: GhosttyTerminalFrame?
@@ -1005,6 +1013,38 @@ public class PTYGridView: NSView {
   private var commandLinkMode = false
   private var isHoveringLink = false
   private var hoveredLinkHit: TerminalLinkHit?
+  private var hoveredLinkObject: SemanticLinkObject?
+  /// Dwell state for the object currently under the pointer (spec: dwell-gated,
+  /// not proximity). Owns the 300ms Awake / 500ms ActionHint timing.
+  private var dwell = SemanticDwell()
+  /// One-shot timer that re-evaluates dwell for a stationary pointer so it still
+  /// crosses the 300/500ms thresholds without a mouse event.
+  private var dwellWakeupTimer: Timer?
+  /// Last pointer location (view coords), so the display-link tick can recompute
+  /// the puck as the dwell state advances without a fresh mouse event.
+  private var lastPointer: NSPoint?
+  /// 0…1 animated reveal intensity: drives the glyph weight boost (spec §4) and
+  /// the ↗ opacity. Tweened by the display link toward `linkHoverIntensityTarget`,
+  /// which the dwell phase (or ⌘ Explore Mode) sets to 0 or 1.
+  private var linkHoverIntensity: CGFloat = 0
+  private var linkHoverIntensityTarget: CGFloat = 0
+  private var linkHoverDisplayLink: CADisplayLink?
+  private var linkHoverLastTickTime: CFTimeInterval = 0
+  private let linkPopover = SemanticLinkPopover()
+  /// Ring cursor shown over an awoken semantic object. It is an independent
+  /// `CALayer` composited by Core Animation ABOVE the Metal content — moving it is
+  /// one `position` assignment, wrapped in a no-actions transaction, so it never
+  /// enters the terminal's full-rebuild Metal present path (which drops/blocks
+  /// frames and made the old GPU puck stutter). Same compositor path as the
+  /// hardware cursor → smooth by construction. While it shows, the arrow is hidden.
+  private lazy var ringCursorLayer: CALayer = makeRingCursorLayer()
+  private var ringCursorVisible = false
+  private var isCursorHidden = false
+  /// When false, the grid is inert to the mouse: no link hover ring, no dwell
+  /// weight reveal, no ⌘ Explore, only the plain iBeam cursor. The ⌘P side-input
+  /// box sets this off so typing isn't fought by terminal hover interaction. A
+  /// single flag (vs. tracking a sibling overlay's geometry) keeps it stable.
+  private var interactionEnabled = true
   private var mouseTrackingArea: NSTrackingArea?
   private var markedText = NSAttributedString(string: "")
   private var markedTextRange = NSRange(location: NSNotFound, length: 0)
@@ -1393,11 +1433,14 @@ public class PTYGridView: NSView {
     )
   }
 
-  private static func urlHitsByRow(in frame: GhosttyTerminalFrame) -> [Int: [TerminalLinkHit]] {
+  private static func urlHitsByRow(
+    in frame: GhosttyTerminalFrame,
+    pathValidator: ((String) -> Bool)? = nil
+  ) -> [Int: [TerminalLinkHit]] {
     guard frame.rows > 0, frame.cols > 0 else { return [:] }
     var hitsByRow: [Int: [TerminalLinkHit]] = [:]
     for row in 0..<frame.rows {
-      let hits = TerminalLinkDetector.hits(inRow: row, frame: frame)
+      let hits = TerminalLinkDetector.hits(inRow: row, frame: frame, pathValidator: pathValidator)
       if !hits.isEmpty {
         hitsByRow[row] = hits
       }
@@ -1940,6 +1983,7 @@ public class PTYGridView: NSView {
     stopSelectionAutoScroll()
     let eventPoint = convert(event.locationInWindow, from: nil)
     if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) {
+      // ⌘-click opens immediately — the power-user path (spec §6, decided).
       logCommandLinkHit(at: eventPoint)
       if let hit = linkHit(at: eventPoint) {
         if let openLinkTargetHandler {
@@ -1949,6 +1993,10 @@ public class PTYGridView: NSView {
         }
         return
       }
+    } else if let hit = linkHit(at: eventPoint) {
+      // Plain click on a URL or file path → pointer-anchored actions Popover.
+      presentLinkPopover(for: hit.target, at: eventPoint)
+      return
     }
     let oldDirtyRects = selectionDirtyRects()
     let geometry = renderedGeometry()
@@ -1957,6 +2005,47 @@ public class PTYGridView: NSView {
     selectionHead = point
     isDraggingSelectionStorage = point != nil
     invalidateSelectionRects(oldDirtyRects)
+  }
+
+  private func presentLinkPopover(for target: TerminalLinkTarget, at point: NSPoint) {
+    let items: [SemanticLinkPopover.Item]
+    let title: String
+    switch target {
+    case .url(let url):
+      title = url.absoluteString
+      items = [
+        SemanticLinkPopover.Item(title: "Open in Browser", symbol: "safari") { [weak self] in
+          self?.activateLink(target)
+        },
+        SemanticLinkPopover.Item(title: "Copy Link", symbol: "doc.on.doc") { [weak self] in
+          self?.copyToPasteboard(url.absoluteString)
+        },
+      ]
+    case .filePath(let filePath):
+      title = filePath.rawPath
+      items = [
+        SemanticLinkPopover.Item(title: "Reveal in Finder", symbol: "folder") { [weak self] in
+          self?.activateLink(target)
+        },
+        SemanticLinkPopover.Item(title: "Copy Path", symbol: "doc.on.doc") { [weak self] in
+          self?.copyToPasteboard(filePath.rawPath)
+        },
+      ]
+    }
+    linkPopover.present(title: title, items: items, at: point, in: self, palette: palette)
+  }
+
+  private func activateLink(_ target: TerminalLinkTarget) {
+    if let openLinkTargetHandler {
+      openLinkTargetHandler(target)
+    } else if case .url(let url) = target {
+      openURLHandler?(url)
+    }
+  }
+
+  private func copyToPasteboard(_ string: String) {
+    pasteboard.clearContents()
+    pasteboard.setString(string, forType: .string)
   }
 
   public override func mouseDragged(with event: NSEvent) {
@@ -1984,10 +2073,28 @@ public class PTYGridView: NSView {
       // Tear down the display link when detached; a live link retaining the view
       // off-window leaks and fires against a dead render path.
       stopSmoothScrollBrowsing()
+      stopLinkHoverDisplayLink()
+      hoveredLinkObject = nil
+      hoveredLinkHit = nil
+      dwell.setObject(nil, at: CACurrentMediaTime())
+      lastPointer = nil
+      linkHoverIntensity = 0
+      linkHoverIntensityTarget = 0
+      updateRingCursor(pointer: .zero, show: false)
+      setCursorHidden(false)
     }
   }
 
   public override func mouseMoved(with event: NSEvent) {
+    // Input mode (the ⌘P side-input box is open): the grid is inert to the mouse —
+    // no link ring, no dwell, no Explore. One flag, checked here, so we never have
+    // to keep the grid's hover state in sync with a sibling overlay's geometry.
+    guard interactionEnabled else { return }
+    // Self-heal a stale Explore Mode: if ⌘ was released while we were defocused
+    // (e.g. ⌘-click opened an external app), the key-up flagsChanged never reached
+    // us. Reconcile from live modifier state so the first move after returning
+    // behaves correctly instead of staying stuck "⌘ held".
+    reconcileCommandLinkMode()
     updateLinkHover(at: convert(event.locationInWindow, from: nil))
   }
 
@@ -1996,14 +2103,84 @@ public class PTYGridView: NSView {
   }
 
   public override func flagsChanged(with event: NSEvent) {
-    let isCommandActive = event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command)
-    if commandLinkMode != isCommandActive {
-      commandLinkMode = isCommandActive
-      window?.invalidateCursorRects(for: self)
-      needsDisplay = true
+    guard interactionEnabled else {
+      super.flagsChanged(with: event)
+      return
     }
+    // Bare ⌘ only is an Explore gesture. Any other modifier present means this is
+    // (part of) a keyboard shortcut, not "I want to explore" — don't wake objects.
+    let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    let isBareCommand = flags == .command
+    setCommandLinkMode(isBareCommand)
     updateLinkHover(at: convert(event.locationInWindow, from: nil))
     super.flagsChanged(with: event)
+  }
+
+  /// Focus left us (e.g. ⌘P moved focus into the side-input box, or a ⌘-shortcut
+  /// opened/closed something). That means a held ⌘'s key-up will never reach us,
+  /// which would otherwise strand Explore Mode "on". Exit it now. This is the
+  /// general cure for "⌘ + another key leaves everything expanded".
+  public override func resignFirstResponder() -> Bool {
+    setCommandLinkMode(false)
+    clearHover()
+    return super.resignFirstResponder()
+  }
+
+  /// Enable/disable all mouse-driven link interaction (hover ring, dwell weight,
+  /// ⌘ Explore, pointing-hand cursor rects). The side-input box turns this off so
+  /// the terminal becomes inert "plain text" while typing — see the class-level
+  /// `interactionEnabled` note. Disabling immediately clears any live hover and
+  /// rebuilds cursor rects (so the ring/hidden-cursor state can't strand).
+  public func setInteractionEnabled(_ enabled: Bool) {
+    guard interactionEnabled != enabled else { return }
+    interactionEnabled = enabled
+    if !enabled {
+      setCommandLinkMode(false)
+      clearHover()
+    }
+    window?.invalidateCursorRects(for: self)
+  }
+
+  /// Enter/leave Explore Mode (⌘ held). Idempotent, so it can also be called to
+  /// *correct* a stale mode — e.g. after a ⌘-click opened an external app and the
+  /// window lost focus before the ⌘ key-up `flagsChanged` arrived.
+  private func setCommandLinkMode(_ isActive: Bool) {
+    guard commandLinkMode != isActive else { return }
+    commandLinkMode = isActive
+    window?.invalidateCursorRects(for: self)
+    // Explore Mode (spec §13): holding ⌘ wakes every semantic object on screen at
+    // once, releasing returns them to silence. Animate the reveal intensity so the
+    // weight fades in/out rather than popping.
+    linkHoverIntensityTarget = isActive ? 1 : (isHoveringLink ? 1 : 0)
+    if reduceMotionEnabled {
+      linkHoverIntensity = linkHoverIntensityTarget
+    }
+    startLinkHoverDisplayLinkIfNeeded()
+    needsDisplay = true
+    transientOverlayDidChangeHandler?()
+  }
+
+  /// Reconcile Explore Mode with the *live* keyboard state. Called on mouse moves
+  /// so a lost ⌘ key-up (window defocused by opening a link) self-corrects on the
+  /// next pointer motion instead of staying stuck "up".
+  private func reconcileCommandLinkMode() {
+    // Bare ⌘ only — a ⌘+X combo is a shortcut, not an Explore gesture.
+    let isBareCommand = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command
+    setCommandLinkMode(isBareCommand)
+  }
+
+  /// All semantic-object segments to reveal (weight gain). In Explore Mode (⌘ held)
+  /// this is every detected link on screen; otherwise just the dwelled object.
+  public var currentExploreModeCellRanges: [GridSelectionCellRange] {
+    // Use the SAME geometry as hover (renderedGeometry → expanded frame, in
+    // expanded-frame row space). frameSnapshot is the viewport-only frame (0-based
+    // rows); mixing it with the renderer's expanded-frame row space shifted every
+    // link by overscanTopRows once scrolled off the top.
+    guard commandLinkMode, let geometry = renderedGeometry() else { return [] }
+    let hitsByRow = Self.urlHitsByRow(in: geometry.frame, pathValidator: pathExistenceValidator)
+    return hitsByRow.keys.sorted().flatMap { row in
+      (hitsByRow[row] ?? []).map { GridSelectionCellRange(row: $0.row, cols: $0.range) }
+    }
   }
 
   public override func rightMouseDown(with event: NSEvent) {
@@ -2030,7 +2207,7 @@ public class PTYGridView: NSView {
     // pointing-hand regions when ⌘ is held. Running it every time cursor rects
     // are invalidated — which happens on every scroll tick — is pure waste and,
     // on a full screen of path-like text, heavy enough to stall the main thread.
-    let urlHitsByRow = commandLinkMode ? Self.urlHitsByRow(in: frame) : [:]
+    let urlHitsByRow = commandLinkMode ? Self.urlHitsByRow(in: frame, pathValidator: pathExistenceValidator) : [:]
     if commandLinkMode {
       for rect in Self.urlCursorRects(
         urlHitsByRow: urlHitsByRow,
@@ -2042,11 +2219,17 @@ public class PTYGridView: NSView {
         addCursorRect(clipped, cursor: .pointingHand)
       }
     }
+    // Cells covered by the dwelled object get pointing-hand (added above); skip
+    // them here so the iBeam doesn't fight the hand on the same cell.
+    let hoveredCols: [Int: Range<Int>] = hoveredLinkObject.map { obj in
+      Dictionary(obj.segments.map { ($0.row, $0.cols) }, uniquingKeysWith: { a, _ in a })
+    } ?? [:]
     for row in 0..<frame.rows {
       for col in 0..<frame.cols {
         let index = row * frame.cols + col
         guard index < frame.cells.count, isRenderedCell(frame.cells[index]) else { continue }
         if commandLinkMode, urlHitsByRow[row]?.contains(where: { $0.range.contains(col) }) == true { continue }
+        if hoveredCols[row]?.contains(col) == true { continue }
         let rect = geometry.rectForCell(row: row, col: col)
         guard let clipped = clippedCursorRect(rect, to: clipRect) else { continue }
         addCursorRect(clipped, cursor: .iBeam)
@@ -2116,8 +2299,47 @@ public class PTYGridView: NSView {
   }
 
   public var currentLinkHoverCellRanges: [GridSelectionCellRange] {
+    // Explore Mode (⌘ held): wash every detected semantic object on screen.
+    let exploreRanges = currentExploreModeCellRanges
+    if !exploreRanges.isEmpty {
+      // Whole hovered object still included (dedup by row+bounds).
+      let hoverRanges: [GridSelectionCellRange] = hoveredLinkObject.map { obj in
+        obj.segments.map { GridSelectionCellRange(row: $0.row, cols: $0.cols) }
+      } ?? []
+      var seen = Set<String>()
+      return (exploreRanges + hoverRanges).filter { range in
+        seen.insert("\(range.row):\(range.cols.lowerBound):\(range.cols.upperBound)").inserted
+      }
+    }
+    // Whole semantic object (all wrapped segments), not just the clicked row.
+    if let hoveredLinkObject {
+      return hoveredLinkObject.segments.map { GridSelectionCellRange(row: $0.row, cols: $0.cols) }
+    }
     guard let hoveredLinkHit else { return [] }
     return [GridSelectionCellRange(row: hoveredLinkHit.row, cols: hoveredLinkHit.range)]
+  }
+
+  /// 0…1 animated reveal intensity for the renderer — drives the glyph weight
+  /// boost (spec §4) and the ↗ opacity.
+  public var currentLinkHoverIntensity: CGFloat { linkHoverIntensity }
+
+  /// Placement for the trailing ↗ Action Hint (spec §5): the cell just past the
+  /// logical end of the dwelled URL object. Fades in place by opacity only. Only
+  /// URLs; not shown in Explore Mode (⌘) to avoid one arrow per link on screen.
+  public struct ActionHint: Equatable, Sendable {
+    public var row: Int
+    public var col: Int
+    /// 0…1 opacity of the arrow (tracks the reveal intensity tween).
+    public var intensity: CGFloat
+  }
+
+  public var currentActionHint: ActionHint? {
+    guard !commandLinkMode, let object = hoveredLinkObject else { return nil }
+    // Appears together with the weight boost (Awake), not the later ActionHint
+    // dwell — the ↗ rides the same reveal so it fades in as the glyphs thicken.
+    guard dwell.phase(at: CACurrentMediaTime()) >= .awake else { return nil }
+    guard case .url = object.target, let end = object.logicalEnd else { return nil }
+    return ActionHint(row: end.row, col: end.cols.upperBound, intensity: linkHoverIntensity)
   }
 
   public var currentMarkedTextOverlay: GridMarkedTextOverlay? {
@@ -2599,7 +2821,7 @@ public class PTYGridView: NSView {
     else {
       return nil
     }
-    return TerminalLinkDetector.hitTest(row: coordinate.row, col: coordinate.col, in: geometry.frame)
+    return TerminalLinkDetector.hitTest(row: coordinate.row, col: coordinate.col, in: geometry.frame, pathValidator: pathExistenceValidator)
   }
 
   private func logCommandLinkHit(at point: NSPoint) {
@@ -2688,20 +2910,247 @@ public class PTYGridView: NSView {
   }
 
   private func updateLinkHover(at point: NSPoint) {
-    let hit = linkHit(at: point)
-    hoveredLinkHit = hit
-    updateLinkHover(isHovering: hit != nil)
+    // Dwell model (spec: URL_TYPOGRAPHIC_DWELL). We do NOT react to proximity or
+    // motion. We find the object *under* the pointer and hand its identity + the
+    // current time to the dwell clock; the clock decides Rest/Awake/ActionHint.
+    lastPointer = point
+    guard let geometry = renderedGeometry() else {
+      clearHover()
+      return
+    }
+    let object = objectUnderPointer(point, geometry: geometry)
+    hoveredLinkObject = object
+    hoveredLinkHit = object.flatMap { obj in
+      obj.segments.first.map { TerminalLinkHit(target: obj.target, row: $0.row, range: $0.cols, text: obj.text) }
+    }
+    // Hover *signal* (drives the lightweight open-link toast) reflects the pointer
+    // being over an interactive object — immediate. The *visual* reveal (weight) is
+    // still strictly dwell-gated below; only the non-visual signal is instant.
+    setHoveringLink(object != nil)
+    dwell.setObject(object?.id, at: CACurrentMediaTime())
+    applyDwellState(pointer: point, object: object, geometry: geometry)
+  }
+
+  private func setHoveringLink(_ isHovering: Bool) {
+    guard isHoveringLink != isHovering else { return }
+    isHoveringLink = isHovering
+    linkHoverHandler?(isHovering)
+  }
+
+  /// The semantic object whose cells the pointer is directly over, or nil. Unlike
+  /// the old flashlight model there is no neighbor scan and no distance — dwell
+  /// only wakes what the pointer actually rests on.
+  private func objectUnderPointer(
+    _ point: NSPoint,
+    geometry: RenderedGridGeometry
+  ) -> SemanticLinkObject? {
+    let frame = geometry.frame
+    guard frame.rows > 0, frame.cols > 0, let coordinate = geometry.coordinate(at: point) else {
+      return nil
+    }
+    return SemanticLinkObjectResolver.object(
+      at: coordinate.row,
+      col: coordinate.col,
+      in: frame,
+      pathValidator: pathExistenceValidator
+    )
+  }
+
+  /// Translate the current dwell phase (or ⌘ Explore Mode) into the reveal
+  /// intensity target and the GPU ring cursor, then keep the display-link tween
+  /// and a wake-up scheduled so a still pointer still crosses the dwell thresholds.
+  private func applyDwellState(
+    pointer: NSPoint,
+    object: SemanticLinkObject?,
+    geometry: RenderedGridGeometry
+  ) {
+    let now = CACurrentMediaTime()
+    let phase = dwell.phase(at: now)
+    // Explore Mode forces full reveal regardless of dwell; otherwise the object
+    // must have reached Awake for the *weight* boost.
+    let awake = commandLinkMode || phase >= .awake
+
+    // The ring cursor appears the INSTANT the pointer is over an object — decoupled
+    // from the dwell-gated weight boost, so contact feels immediate while the
+    // glyph thickening still waits out its dwell delay.
+    updateRingCursor(pointer: pointer, show: object != nil)
+
+    setRevealTarget(awake ? 1 : 0)
+    scheduleDwellWakeup(at: now)
+  }
+
+  /// Move/show/hide the ring cursor layer. Centered on the pointer, no magnetism.
+  /// Wrapped in a no-actions `CATransaction` so `position` changes are exact
+  /// (Core Animation's implicit position animation would make the ring lag). This
+  /// touches ONLY the compositor — no Metal present, no `transientOverlayDidChange`.
+  private func updateRingCursor(pointer: NSPoint, show: Bool) {
+    guard show else {
+      if ringCursorVisible {
+        ringCursorVisible = false
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ringCursorLayer.isHidden = true
+        CATransaction.commit()
+      }
+      setCursorHidden(false)
+      return
+    }
+    ensureRingCursorAttached()
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    if !ringCursorVisible {
+      ringCursorVisible = true
+      applyRingCursorColor()
+      ringCursorLayer.isHidden = false
+    }
+    // Layer coords match the view's flipped/unflipped space; PTYGridView is not
+    // flipped, so view point maps straight to layer position.
+    ringCursorLayer.position = pointer
+    CATransaction.commit()
+    setCursorHidden(true)
+  }
+
+  private func ensureRingCursorAttached() {
+    if ringCursorLayer.superlayer == nil {
+      wantsLayer = true
+      layer?.addSublayer(ringCursorLayer)
+    }
+  }
+
+  private func makeRingCursorLayer() -> CALayer {
+    let layer = CALayer()
+    let diameter = cellSize.height * 0.56
+    let ringWidth: CGFloat = 1.25
+    layer.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
+    layer.backgroundColor = NSColor.clear.cgColor
+    layer.borderWidth = ringWidth
+    layer.cornerRadius = diameter / 2
+    layer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+    layer.isHidden = true
+    // Zero delegate so it never runs implicit content actions from its host view.
+    layer.actions = ["position": NSNull(), "hidden": NSNull(), "bounds": NSNull()]
+    return layer
+  }
+
+  /// Solid two-tone ring chosen from the background's brightness (not theme name,
+  /// so custom themes work): light bg → dark-grey ring, dark bg → near-white ring.
+  private func applyRingCursorColor() {
+    let lightBackground = palette.background.relativeLuminanceValue >= 0.5
+    let tone = lightBackground
+      ? NSColor(calibratedWhite: 0.24, alpha: 1)
+      : NSColor(calibratedWhite: 0.96, alpha: 1)
+    ringCursorLayer.borderColor = tone.cgColor
+  }
+
+  /// Transition-guarded cursor hide so `NSCursor.hide()`/`unhide()` stay balanced
+  /// (they are counted — a repeated hide would strand the cursor).
+  private func setCursorHidden(_ hidden: Bool) {
+    guard hidden != isCursorHidden else { return }
+    isCursorHidden = hidden
+    if hidden {
+      NSCursor.hide()
+    } else {
+      NSCursor.unhide()
+    }
+  }
+
+  /// Schedule a single wake-up at the next dwell threshold so a *stationary*
+  /// pointer still transitions Rest→Awake→ActionHint without a mouse event. Uses
+  /// the display link (already running while a tween is live) plus a one-shot
+  /// timer for the idle case.
+  private func scheduleDwellWakeup(at now: TimeInterval) {
+    guard !commandLinkMode, let delay = dwell.timeUntilNextTransition(at: now), delay > 0 else { return }
+    dwellWakeupTimer?.invalidate()
+    let timer = Timer(timeInterval: delay + 0.001, repeats: false) { [weak self] _ in
+      guard let self else { return }
+      MainActor.assumeIsolated {
+        self.dwellTick()
+      }
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    dwellWakeupTimer = timer
+  }
+
+  /// Re-evaluate dwell for the stationary pointer (fired by the wake-up timer).
+  private func dwellTick() {
+    guard let point = lastPointer, let geometry = renderedGeometry() else { return }
+    applyDwellState(pointer: point, object: hoveredLinkObject, geometry: geometry)
+  }
+
+  private func clearHover() {
+    hoveredLinkObject = nil
+    hoveredLinkHit = nil
+    dwell.setObject(nil, at: CACurrentMediaTime())
+    dwellWakeupTimer?.invalidate()
+    dwellWakeupTimer = nil
+    updateRingCursor(pointer: .zero, show: false)
+    setCursorHidden(false)
+    setHoveringLink(false)
+    setRevealTarget(commandLinkMode ? 1 : 0)
   }
 
   private func updateLinkHover(isHovering: Bool) {
     if !isHovering {
-      hoveredLinkHit = nil
+      lastPointer = nil
+      clearHover()
     }
-    guard isHoveringLink != isHovering else { return }
-    isHoveringLink = isHovering
+  }
+
+  /// Drive the reveal intensity toward `target` (0 or 1). In Explore Mode (⌘ held)
+  /// the target stays 1 regardless. The display link owns the 120–180ms tween;
+  /// Reduce Motion snaps.
+  private func setRevealTarget(_ target: CGFloat) {
+    let clamped = min(1, max(0, commandLinkMode ? 1 : target))
+    if reduceMotionEnabled {
+      linkHoverIntensity = clamped
+      linkHoverIntensityTarget = clamped
+      needsDisplay = true
+      transientOverlayDidChangeHandler?()
+    } else {
+      linkHoverIntensityTarget = clamped
+      startLinkHoverDisplayLinkIfNeeded()
+    }
+  }
+
+  private var reduceMotionEnabled: Bool {
+    NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+  }
+
+  private func startLinkHoverDisplayLinkIfNeeded() {
+    let atTarget = abs(linkHoverIntensity - linkHoverIntensityTarget) < 0.001
+    guard !atTarget else { return }
+    guard linkHoverDisplayLink == nil, window != nil else { return }
+    let link = displayLink(target: self, selector: #selector(handleLinkHoverDisplayLink(_:)))
+    link.add(to: .main, forMode: .common)
+    linkHoverLastTickTime = CACurrentMediaTime()
+    linkHoverDisplayLink = link
+  }
+
+  @objc private func handleLinkHoverDisplayLink(_ link: CADisplayLink) {
+    let now = link.targetTimestamp
+    // Ease toward target (fade-out on leave, ⌘ Explore in/out).
+    let dt = max(0, now - linkHoverLastTickTime)
+    linkHoverLastTickTime = now
+    let animationDuration: CGFloat = 0.16
+    let step = animationDuration > 0 ? CGFloat(dt) / animationDuration : 1
+    let delta = linkHoverIntensityTarget - linkHoverIntensity
+    if abs(delta) < 0.004 {
+      linkHoverIntensity = linkHoverIntensityTarget
+    } else {
+      linkHoverIntensity += delta * min(1, step * 2.0)
+    }
     needsDisplay = true
     transientOverlayDidChangeHandler?()
-    linkHoverHandler?(isHovering)
+
+    if abs(linkHoverIntensity - linkHoverIntensityTarget) < 0.001 {
+      link.invalidate()
+      linkHoverDisplayLink = nil
+    }
+  }
+
+  private func stopLinkHoverDisplayLink() {
+    linkHoverDisplayLink?.invalidate()
+    linkHoverDisplayLink = nil
   }
 
   private func updateSelectionHead(at point: NSPoint) {
@@ -3404,6 +3853,17 @@ struct RenderedGridGeometry: Equatable, Sendable {
       x: inset.width + CGFloat(max(0, col)) * cellSize.width,
       y: inset.height + CGFloat(max(0, row)) * cellSize.height + translationY,
       width: cellSize.width,
+      height: cellSize.height
+    )
+  }
+
+  func rectForCellRange(row: Int, cols: Range<Int>) -> NSRect {
+    let lower = max(0, cols.lowerBound)
+    let upper = max(lower, cols.upperBound)
+    return NSRect(
+      x: inset.width + CGFloat(lower) * cellSize.width,
+      y: inset.height + CGFloat(max(0, row)) * cellSize.height + translationY,
+      width: CGFloat(upper - lower) * cellSize.width,
       height: cellSize.height
     )
   }

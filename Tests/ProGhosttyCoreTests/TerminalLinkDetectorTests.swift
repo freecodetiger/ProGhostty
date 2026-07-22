@@ -5,6 +5,22 @@ import Testing
 
 @Suite("Terminal link detector")
 struct TerminalLinkDetectorTests {
+  @Test func bareWordBecomesPathHitOnlyWhenValidatorConfirmsIt() throws {
+    let frame = frame(rows: ["dist  screenshots  hello"], cols: 32)
+    let existing: Set<String> = ["dist", "screenshots"]
+    let validator: (String) -> Bool = { existing.contains($0) }
+
+    // "dist" exists → clickable file-path hit.
+    let dist = try #require(TerminalLinkDetector.hitTest(row: 0, col: 1, in: frame, pathValidator: validator))
+    #expect(dist.target == .filePath(TerminalFilePathTarget(rawPath: "dist")))
+
+    // "hello" is not on disk → not a hit even with a validator.
+    #expect(TerminalLinkDetector.hitTest(row: 0, col: 20, in: frame, pathValidator: validator) == nil)
+
+    // Without a validator, bare words are never path hits.
+    #expect(TerminalLinkDetector.hitTest(row: 0, col: 1, in: frame) == nil)
+  }
+
   @Test func detectsHTTPURLAsURLTarget() throws {
     let frame = frame(rows: ["open https://example.com/docs now"], cols: 40)
 

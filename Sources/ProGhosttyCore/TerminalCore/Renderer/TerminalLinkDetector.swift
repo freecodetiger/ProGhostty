@@ -42,16 +42,39 @@ public struct TerminalLinkHit: Equatable, Sendable {
 public enum TerminalLinkDetector {
   private static let pathPattern =
     #"(?<![A-Za-z0-9_])((?:~\/|\.{1,2}\/|/)[^\s<>"']+|(?:[A-Za-z0-9._@%+=~-]+/)+[A-Za-z0-9._@%+=~-]+\.[A-Za-z0-9._@%+=~-]+(?::\d+){0,2})"#
+  /// Compiled once — recompiling per row on every `mouseMoved` was a per-move stall.
+  private static let pathRegex: NSRegularExpression? = try? NSRegularExpression(pattern: pathPattern)
   private static let trailingCharacters = CharacterSet(charactersIn: ".,;!?)]}")
 
   public static func hitTest(row: Int, col: Int, in frame: GhosttyTerminalFrame) -> TerminalLinkHit? {
-    if let hit = hits(inRow: row, frame: frame).first(where: { $0.contains(row: row, col: col) }) {
+    hitTest(row: row, col: col, in: frame, pathValidator: nil)
+  }
+
+  /// - Parameter pathValidator: optional predicate that returns true for a raw
+  ///   token that resolves to an existing file/dir under the session cwd. When
+  ///   provided, bare words (no `/`, no extension) that validate — e.g. `src`,
+  ///   `dist` — also become clickable path hits.
+  public static func hitTest(
+    row: Int,
+    col: Int,
+    in frame: GhosttyTerminalFrame,
+    pathValidator: ((String) -> Bool)?
+  ) -> TerminalLinkHit? {
+    if let hit = hits(inRow: row, frame: frame, pathValidator: pathValidator).first(where: { $0.contains(row: row, col: col) }) {
       return hit
     }
     return suffixAnchoredPathHit(row: row, col: col, frame: frame)
   }
 
   public static func hits(inRow row: Int, frame: GhosttyTerminalFrame) -> [TerminalLinkHit] {
+    hits(inRow: row, frame: frame, pathValidator: nil)
+  }
+
+  public static func hits(
+    inRow row: Int,
+    frame: GhosttyTerminalFrame,
+    pathValidator: ((String) -> Bool)?
+  ) -> [TerminalLinkHit] {
     guard row >= 0, row < frame.rows, frame.cols > 0 else { return [] }
     let urlHits = TerminalURLDetector.hits(inRow: row, frame: frame).map {
       TerminalLinkHit(target: .url($0.url), row: $0.row, range: $0.range, text: $0.text)
@@ -65,7 +88,67 @@ public enum TerminalLinkDetector {
       !urlHits.contains { rangesOverlap($0.range, suffixHit.range) }
         && !pathHits.contains { rangesOverlap($0.range, suffixHit.range) }
     }
-    return urlHits + pathHits + suffixPathHits
+    var result = urlHits + pathHits + suffixPathHits
+    if let pathValidator {
+      let existing = result
+      let bareHits = bareWordPathHits(inRow: row, frame: frame, validator: pathValidator).filter { bare in
+        !existing.contains { rangesOverlap($0.range, bare.range) }
+      }
+      result += bareHits
+    }
+    return result
+  }
+
+  /// Bare filename-like tokens (no `/`, no scheme) that the filesystem validator
+  /// confirms exist under the cwd. Lets `dist`, `src`, `README` be clickable when
+  /// they are real entries, without matching arbitrary prose (which won't exist).
+  private static func bareWordPathHits(
+    inRow row: Int,
+    frame: GhosttyTerminalFrame,
+    validator: (String) -> Bool
+  ) -> [TerminalLinkHit] {
+    guard let text = text(inRow: row, frame: frame) else { return [] }
+    let characters = Array(text)
+    var hits: [TerminalLinkHit] = []
+    var index = 0
+    let count = characters.count
+    while index < count {
+      // Skip delimiters.
+      while index < count, isBareDelimiter(characters[index]) { index += 1 }
+      guard index < count else { break }
+      let start = index
+      while index < count, !isBareDelimiter(characters[index]) { index += 1 }
+      let token = String(characters[start..<index])
+      guard isPlausibleBareName(token), validator(token) else { continue }
+      hits.append(
+        TerminalLinkHit(
+          target: .filePath(TerminalFilePathTarget(rawPath: token)),
+          row: row,
+          range: start..<index,
+          text: token
+        )
+      )
+    }
+    return hits
+  }
+
+  private static func isBareDelimiter(_ character: Character) -> Bool {
+    guard let scalar = character.unicodeScalars.first, character.unicodeScalars.count == 1 else {
+      return true
+    }
+    return CharacterSet.whitespacesAndNewlines.contains(scalar)
+      || "\"'<>(){}[]|:;,".unicodeScalars.contains(scalar)
+  }
+
+  /// A conservative filter so we only fs-check tokens that look like a file or
+  /// folder name (avoids validating every prose word and long junk).
+  private static func isPlausibleBareName(_ token: String) -> Bool {
+    guard token.count >= 2, token.count <= 64 else { return false }
+    if token.hasPrefix("/") || token.hasPrefix("~") || token.hasPrefix(".") { return false }
+    if token.contains("/") { return false } // handled by the path pattern already
+    let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-")
+    return token.unicodeScalars.allSatisfy { allowed.contains($0) }
+      && token.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
   }
 
   private static func visiblePathHits(inRow row: Int, frame: GhosttyTerminalFrame) -> [TerminalLinkHit] {
@@ -74,7 +157,7 @@ public enum TerminalLinkDetector {
     let line = rows.map(\.text).joined()
     let nsLine = line as NSString
     let fullRange = NSRange(location: 0, length: nsLine.length)
-    guard let regex = try? NSRegularExpression(pattern: pathPattern) else { return [] }
+    guard let regex = pathRegex else { return [] }
     return regex.matches(in: line, options: [], range: fullRange).flatMap { match in
       pathHits(from: nsLine.substring(with: match.range(at: 1)), range: match.range(at: 1), rows: rows)
     }.filter { hit in
@@ -246,7 +329,7 @@ public enum TerminalLinkDetector {
   }
 
   private static func isCompletePathCandidate(_ text: String) -> Bool {
-    guard let regex = try? NSRegularExpression(pattern: pathPattern) else { return false }
+    guard let regex = pathRegex else { return false }
     let nsText = text as NSString
     let fullRange = NSRange(location: 0, length: nsText.length)
     return regex.matches(in: text, options: [], range: fullRange).contains { match in
