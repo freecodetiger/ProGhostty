@@ -381,46 +381,9 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     let haloOverlays = overlays.filter { $0.kind == .semanticHalo }
     let flatOverlays = overlays.filter { $0.kind != .semanticHalo }
     let haloVertices = buildHaloVertices(overlays: haloOverlays)
-    // GPU ring cursor: a clean stroked SDF ring centered on the pointer (no
-    // magnetism). Reuses the halo SDF pipeline in ring mode. Kept in its OWN
-    // buffer, drawn LAST (above glyphs + weight boost) — it is the cursor, so it
-    // must sit on top of the text instead of being beneath and bitten into by the
-    // awoken (weight-boosted) glyphs.
-    var puckVertices: [HaloVertex] = []
-    if let puck = view.currentCursorPuck, puck.strength > 0.01 {
-      let center = CGPoint(x: puck.center.x * pixelScale, y: puck.center.y * pixelScale)
-      let radius = cellSize.height * 0.28
-      let ringWidth = Float(max(1, 1.25 * pixelScale))
-      let margin: CGFloat = 2 * pixelScale
-      let rect = CGRect(
-        x: center.x - radius - margin,
-        y: center.y - radius - margin,
-        width: (radius + margin) * 2,
-        height: (radius + margin) * 2
-      )
-      // Solid two-tone ring, chosen from the background's brightness (not the
-      // theme name, so custom themes work): light background → solid dark-grey
-      // ring, dark background → solid near-white ring. Solid (opaque) so the edge
-      // stays clean instead of the muddy blend a translucent ring makes over text.
-      let lightBackground = palette.background.relativeLuminanceValue >= 0.5
-      let ringTone: NSColor = lightBackground
-        ? NSColor(calibratedWhite: 0.24, alpha: 1) // soft dark grey, not hard black
-        : NSColor(calibratedWhite: 0.96, alpha: 1) // near-white
-      let puckColor = ringTone.withAlphaComponent(min(1, puck.strength)).metalRGBA
-      let puckOverlay = MetalOverlayPrimitive(
-        kind: .semanticHalo,
-        phase: .aboveGlyphs,
-        rect: rect,
-        color: puckColor,
-        halo: MetalOverlayPrimitive.HaloGeometry(
-          coreHalfSize: SIMD2<Float>(Float(radius), Float(radius)),
-          cornerRadius: Float(radius),
-          feather: 1,
-          ringWidth: ringWidth
-        )
-      )
-      puckVertices = buildHaloVertices(overlays: [puckOverlay])
-    }
+    // The ring cursor is no longer drawn in the Metal pass — it is an independent
+    // CALayer composited by Core Animation above this content (see PTYGridView
+    // `ringCursorLayer`), so it never enters this full-rebuild present path.
     let overlayBelowVertices = buildOverlayVertices(
       overlays: flatOverlays.filter { $0.phase == .beneathGlyphs }
     )
@@ -500,7 +463,6 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       let backgroundBuffer = makeBuffer(vertices: backgroundVertices),
       let overlayBelowBuffer = makeBuffer(vertices: overlayBelowVertices),
       let haloBuffer = makeBuffer(haloVertices: haloVertices),
-      let puckBuffer = makeBuffer(haloVertices: puckVertices),
       let glyphBuffer = makeBuffer(vertices: glyphVertices),
       let overlayAboveBuffer = makeBuffer(vertices: overlayAboveVertices),
       let markedTextGlyphBuffer = makeBuffer(vertices: markedTextGlyphDraw.vertices),
@@ -518,7 +480,6 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
       backgroundBuffer,
       overlayBelowBuffer,
       haloBuffer,
-      puckBuffer,
       glyphBuffer,
       overlayAboveBuffer,
       markedTextGlyphBuffer,
@@ -639,15 +600,6 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
               encoder.setFragmentTexture(textureSlice.texture, index: 0)
               encoder.drawPrimitives(type: .triangle, vertexStart: textureSlice.vertexStart, vertexCount: textureSlice.vertexCount)
             }
-          }
-
-          // GPU ring cursor drawn LAST, on top of glyphs (incl. weight-boosted
-          // ones) so the cursor sits over the text instead of being bitten into.
-          if !puckVertices.isEmpty {
-            encoder.setRenderPipelineState(haloPipeline)
-            encoder.setVertexBuffer(puckBuffer, offset: 0, index: 0)
-            setUniforms()
-            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: puckVertices.count)
           }
 
           encoder.endEncoding()

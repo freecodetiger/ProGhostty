@@ -1031,15 +1031,14 @@ public class PTYGridView: NSView {
   private var linkHoverDisplayLink: CADisplayLink?
   private var linkHoverLastTickTime: CFTimeInterval = 0
   private let linkPopover = SemanticLinkPopover()
-  /// GPU-drawn ring cursor (SDF, crisp) shown over an awoken semantic object. No
-  /// magnetism — the ring is centered on the pointer — and every `mouseMoved`
-  /// forces a present so it tracks the pointer. While it is shown the hardware
-  /// arrow is hidden.
-  struct CursorPuck: Equatable {
-    var center: CGPoint
-    var strength: CGFloat
-  }
-  private var cursorPuck: CursorPuck?
+  /// Ring cursor shown over an awoken semantic object. It is an independent
+  /// `CALayer` composited by Core Animation ABOVE the Metal content — moving it is
+  /// one `position` assignment, wrapped in a no-actions transaction, so it never
+  /// enters the terminal's full-rebuild Metal present path (which drops/blocks
+  /// frames and made the old GPU puck stutter). Same compositor path as the
+  /// hardware cursor → smooth by construction. While it shows, the arrow is hidden.
+  private lazy var ringCursorLayer: CALayer = makeRingCursorLayer()
+  private var ringCursorVisible = false
   private var isCursorHidden = false
   /// When false, the grid is inert to the mouse: no link hover ring, no dwell
   /// weight reveal, no ⌘ Explore, only the plain iBeam cursor. The ⌘P side-input
@@ -2081,7 +2080,7 @@ public class PTYGridView: NSView {
       lastPointer = nil
       linkHoverIntensity = 0
       linkHoverIntensityTarget = 0
-      cursorPuck = nil
+      updateRingCursor(pointer: .zero, show: false)
       setCursorHidden(false)
     }
   }
@@ -2323,12 +2322,6 @@ public class PTYGridView: NSView {
   /// 0…1 animated reveal intensity for the renderer — drives the glyph weight
   /// boost (spec §4) and the ↗ opacity.
   public var currentLinkHoverIntensity: CGFloat { linkHoverIntensity }
-
-  /// GPU ring cursor, in view pixels (center + 0…1 strength). Centered on the
-  /// pointer; the renderer draws a crisp SDF ring there.
-  public var currentCursorPuck: (center: CGPoint, strength: CGFloat)? {
-    cursorPuck.map { ($0.center, $0.strength) }
-  }
 
   /// Placement for the trailing ↗ Action Hint (spec §5): the cell just past the
   /// logical end of the dwelled URL object. Fades in place by opacity only. Only
@@ -2936,14 +2929,6 @@ public class PTYGridView: NSView {
     setHoveringLink(object != nil)
     dwell.setObject(object?.id, at: CACurrentMediaTime())
     applyDwellState(pointer: point, object: object, geometry: geometry)
-    // The GPU ring cursor is centered on the pointer, so it must be re-presented
-    // on every move even when the reveal intensity is unchanged (otherwise it
-    // freezes at the last position — the old puck-stutter bug). Cheap: no state
-    // rebuild, just a re-present of the current frame with the new puck center.
-    if cursorPuck != nil {
-      needsDisplay = true
-      transientOverlayDidChangeHandler?()
-    }
   }
 
   private func setHoveringLink(_ isHovering: Bool) {
@@ -2988,24 +2973,73 @@ public class PTYGridView: NSView {
     // The ring cursor appears the INSTANT the pointer is over an object — decoupled
     // from the dwell-gated weight boost, so contact feels immediate while the
     // glyph thickening still waits out its dwell delay.
-    updateCursorPuck(pointer: pointer, show: object != nil)
+    updateRingCursor(pointer: pointer, show: object != nil)
 
     setRevealTarget(awake ? 1 : 0)
     scheduleDwellWakeup(at: now)
   }
 
-  /// Show/hide the GPU ring cursor, centered on the pointer. Shown immediately on
-  /// contact (its own full strength, not the weight tween) so the arrow→ring swap
-  /// is instant. No magnetic pull — the ring follows the pointer, which is what
-  /// makes it cheap enough to present every move. Hides the hardware arrow while shown.
-  private func updateCursorPuck(pointer: NSPoint, show: Bool) {
+  /// Move/show/hide the ring cursor layer. Centered on the pointer, no magnetism.
+  /// Wrapped in a no-actions `CATransaction` so `position` changes are exact
+  /// (Core Animation's implicit position animation would make the ring lag). This
+  /// touches ONLY the compositor — no Metal present, no `transientOverlayDidChange`.
+  private func updateRingCursor(pointer: NSPoint, show: Bool) {
     guard show else {
-      if cursorPuck != nil { cursorPuck = nil }
+      if ringCursorVisible {
+        ringCursorVisible = false
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ringCursorLayer.isHidden = true
+        CATransaction.commit()
+      }
       setCursorHidden(false)
       return
     }
-    cursorPuck = CursorPuck(center: pointer, strength: 1)
+    ensureRingCursorAttached()
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    if !ringCursorVisible {
+      ringCursorVisible = true
+      applyRingCursorColor()
+      ringCursorLayer.isHidden = false
+    }
+    // Layer coords match the view's flipped/unflipped space; PTYGridView is not
+    // flipped, so view point maps straight to layer position.
+    ringCursorLayer.position = pointer
+    CATransaction.commit()
     setCursorHidden(true)
+  }
+
+  private func ensureRingCursorAttached() {
+    if ringCursorLayer.superlayer == nil {
+      wantsLayer = true
+      layer?.addSublayer(ringCursorLayer)
+    }
+  }
+
+  private func makeRingCursorLayer() -> CALayer {
+    let layer = CALayer()
+    let diameter = cellSize.height * 0.56
+    let ringWidth: CGFloat = 1.25
+    layer.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
+    layer.backgroundColor = NSColor.clear.cgColor
+    layer.borderWidth = ringWidth
+    layer.cornerRadius = diameter / 2
+    layer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+    layer.isHidden = true
+    // Zero delegate so it never runs implicit content actions from its host view.
+    layer.actions = ["position": NSNull(), "hidden": NSNull(), "bounds": NSNull()]
+    return layer
+  }
+
+  /// Solid two-tone ring chosen from the background's brightness (not theme name,
+  /// so custom themes work): light bg → dark-grey ring, dark bg → near-white ring.
+  private func applyRingCursorColor() {
+    let lightBackground = palette.background.relativeLuminanceValue >= 0.5
+    let tone = lightBackground
+      ? NSColor(calibratedWhite: 0.24, alpha: 1)
+      : NSColor(calibratedWhite: 0.96, alpha: 1)
+    ringCursorLayer.borderColor = tone.cgColor
   }
 
   /// Transition-guarded cursor hide so `NSCursor.hide()`/`unhide()` stay balanced
@@ -3049,7 +3083,7 @@ public class PTYGridView: NSView {
     dwell.setObject(nil, at: CACurrentMediaTime())
     dwellWakeupTimer?.invalidate()
     dwellWakeupTimer = nil
-    cursorPuck = nil
+    updateRingCursor(pointer: .zero, show: false)
     setCursorHidden(false)
     setHoveringLink(false)
     setRevealTarget(commandLinkMode ? 1 : 0)
