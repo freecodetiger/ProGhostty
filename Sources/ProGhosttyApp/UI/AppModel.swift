@@ -71,6 +71,7 @@ final class AppModel: ObservableObject {
   private let paneWorkspaceController: PaneWorkspaceController
   private let updateChecker = AppUpdateChecker()
   private let focusStore = TerminalFocusStore()
+  private let projectInfoPopover = ProjectInfoPopover()
   private let workspaceStore: WorkspaceStore?
   private let settingsStore: SettingsStore
   private let terminalActionDispatcher = TerminalActionDispatcher()
@@ -1533,6 +1534,60 @@ final class AppModel: ObservableObject {
   func openWorkspaceSwitcher() {
     syncWorkspaceSwitcherState()
     isWorkspaceSwitcherPresented = true
+  }
+
+  /// Open the titlebar project-info panel for the active pane's cwd. Seeds the
+  /// panel with the path immediately, then fills git info off the main thread.
+  func openProjectInfoPanel(from view: NSView, anchor: NSRect) {
+    guard let cwd = selectedCwd else { return }
+    let url = URL(fileURLWithPath: cwd)
+    let initial = ProjectInfo(
+      absolutePath: cwd,
+      displayName: url.lastPathComponent.isEmpty ? cwd : url.lastPathComponent,
+      // Cheap synchronous guess so the panel opens in the right shape: a git repo
+      // shows the git structure (loading), a plain dir shows "not a repo" — no
+      // shape change when the async result lands. Confirmed/refined by the fetch.
+      isGitRepository: Self.isInsideGitWorkTree(cwd),
+      branch: nil,
+      modifiedCount: 0,
+      addedCount: 0,
+      recentCommits: [],
+      remoteURL: nil
+    )
+    let callbacks = ProjectInfoPopover.Callbacks(
+      openRemote: { NSWorkspace.shared.open($0) },
+      copyPath: { path in
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+      },
+      revealInFinder: { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: $0)]) }
+    )
+    projectInfoPopover.present(
+      initial: initial,
+      anchor: anchor,
+      in: view,
+      palette: terminalPalette,
+      usesDarkAppearance: usesDarkAppearance,
+      text: appText,
+      callbacks: callbacks,
+      load: { ProjectInfoService.fetch(cwd: cwd) }
+    )
+  }
+
+  /// Cheap synchronous check: is `cwd` inside a git work tree? Walks up looking
+  /// for a `.git` entry (dir for a normal repo, file for a worktree/submodule).
+  /// Bounded ancestor walk — no subprocess, safe to call on the click.
+  private static func isInsideGitWorkTree(_ cwd: String) -> Bool {
+    var dir = URL(fileURLWithPath: cwd).standardizedFileURL
+    let fm = FileManager.default
+    // Cap the walk so a pathological path can't spin; real trees are far shallower.
+    for _ in 0..<64 {
+      if fm.fileExists(atPath: dir.appendingPathComponent(".git").path) { return true }
+      let parent = dir.deletingLastPathComponent()
+      if parent.path == dir.path { break }
+      dir = parent
+    }
+    return false
   }
 
   func closeWorkspaceSwitcher() {

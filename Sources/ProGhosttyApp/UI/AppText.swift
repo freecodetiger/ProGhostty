@@ -150,6 +150,15 @@ struct AppText {
   var linkModified: String { text("Modified", "修改于") }
   var linkCreated: String { text("Created", "创建于") }
   var linkFolder: String { text("Folder", "文件夹") }
+  var projectLoading: String { text("Loading…", "加载中…") }
+  var projectNotGitRepo: String { text("Not a git repository", "非 git 仓库") }
+  var projectClean: String { text("Clean", "干净") }
+  var projectModified: String { text("modified", "处修改") }
+  var projectAdded: String { text("added", "个新增") }
+  var projectRecentCommits: String { text("Recent commits", "最近提交") }
+  var projectOpenRemote: String { text("Open Remote", "打开远端仓库") }
+  var projectCopyPath: String { text("Copy Path", "复制路径") }
+  var projectRevealInFinder: String { text("Reveal in Finder", "在访达中显示") }
   var relativePathMissingCwdToast: String { text("No working directory for relative path", "没有用于解析相对路径的工作目录") }
   var revealPathFailedToast: String { text("Could not reveal path", "无法在访达中定位路径") }
   var splitRequiresMoreSpaceToast: String { text("Split needs more screen space", "屏幕空间不足，无法继续分屏") }
