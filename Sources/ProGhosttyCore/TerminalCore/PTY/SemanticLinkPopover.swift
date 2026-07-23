@@ -17,11 +17,11 @@ final class SemanticLinkPopover {
   /// Present the popover titled `title` with `items`, anchored at `point`.
   /// `palette` sources the hover colors from the active terminal theme so the menu
   /// matches the terminal (consistent across light/dark, no system accent blue).
-  func present(title: String, items: [Item], at point: NSPoint, in view: NSView, palette: TerminalSurfacePalette) {
+  func present(title: String, headerIcon: NSImage? = nil, detailRows: [FileDetailFormatter.Row] = [], items: [Item], at point: NSPoint, in view: NSView, palette: TerminalSurfacePalette) {
     // A popover requires an on-screen host window; skip if detached (e.g. tests).
     guard view.window != nil, !items.isEmpty else { return }
     dismiss()
-    let controller = SemanticLinkPopoverController(title: title, items: items, palette: palette)
+    let controller = SemanticLinkPopoverController(title: title, headerIcon: headerIcon, detailRows: detailRows, items: items, palette: palette)
     let popover = NSPopover()
     popover.behavior = .transient
     popover.animates = true
@@ -46,12 +46,16 @@ final class SemanticLinkPopover {
 @MainActor
 private final class SemanticLinkPopoverController: NSViewController {
   private let titleText: String
+  private let headerIcon: NSImage?
+  private let detailRows: [FileDetailFormatter.Row]
   private let items: [SemanticLinkPopover.Item]
   private let palette: TerminalSurfacePalette
   var onClose: (() -> Void)?
 
-  init(title: String, items: [SemanticLinkPopover.Item], palette: TerminalSurfacePalette) {
+  init(title: String, headerIcon: NSImage?, detailRows: [FileDetailFormatter.Row], items: [SemanticLinkPopover.Item], palette: TerminalSurfacePalette) {
     self.titleText = title
+    self.headerIcon = headerIcon
+    self.detailRows = detailRows
     self.items = items
     self.palette = palette
     super.init(nibName: nil, bundle: nil)
@@ -63,13 +67,6 @@ private final class SemanticLinkPopoverController: NSViewController {
   override func loadView() {
     let container = NSView()
     container.wantsLayer = true
-
-    let titleLabel = NSTextField(labelWithString: titleText)
-    titleLabel.font = .systemFont(ofSize: 11, weight: .regular)
-    titleLabel.textColor = palette.foreground.withAlphaComponent(0.6)
-    titleLabel.lineBreakMode = .byTruncatingMiddle
-    titleLabel.translatesAutoresizingMaskIntoConstraints = false
-    titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
     let buttons = items.map { item in
       makeActionButton(title: item.title, symbol: item.symbol) { [weak self] in
@@ -85,15 +82,22 @@ private final class SemanticLinkPopoverController: NSViewController {
     buttonStack.alignment = .leading
     buttonStack.spacing = 2
     buttonStack.translatesAutoresizingMaskIntoConstraints = false
-    // Stretch each row so the hover highlight spans the popover width.
     for button in buttons {
       button.widthAnchor.constraint(equalTo: buttonStack.widthAnchor).isActive = true
     }
 
-    let stack = NSStackView(views: [titleLabel, buttonStack])
+    // Header: file-type / site icon + prominent name. Info rows: icon + value.
+    let header = makeHeader()
+    var rowViews: [NSView] = detailRows.map { makeDetailRow(symbol: $0.symbol, text: $0.text) }
+    if !rowViews.isEmpty {
+      rowViews.insert(makeSeparator(), at: 0)
+    }
+
+    let stack = NSStackView(views: [header] + rowViews + [makeSeparator(), buttonStack])
     stack.orientation = .vertical
     stack.alignment = .leading
-    stack.spacing = 10
+    stack.spacing = 6
+    stack.setCustomSpacing(rowViews.isEmpty ? 10 : 8, after: header)
     stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
     stack.translatesAutoresizingMaskIntoConstraints = false
     container.addSubview(stack)
@@ -103,11 +107,67 @@ private final class SemanticLinkPopoverController: NSViewController {
       stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
       stack.topAnchor.constraint(equalTo: container.topAnchor),
       stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-      titleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 300),
+      header.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
       buttonStack.leadingAnchor.constraint(equalTo: stack.leadingAnchor, constant: 12),
       buttonStack.trailingAnchor.constraint(equalTo: stack.trailingAnchor, constant: -12),
     ])
     view = container
+  }
+
+  private func makeHeader() -> NSView {
+    let titleLabel = NSTextField(labelWithString: titleText)
+    titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+    titleLabel.textColor = palette.foreground.withAlphaComponent(0.9)
+    titleLabel.lineBreakMode = .byTruncatingMiddle
+    titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+    guard let headerIcon else { return titleLabel }
+    let iconView = NSImageView()
+    iconView.image = headerIcon
+    iconView.imageScaling = .scaleProportionallyUpOrDown
+    iconView.symbolConfiguration = .init(pointSize: 18, weight: .regular)
+    iconView.contentTintColor = palette.foreground.withAlphaComponent(0.85)
+    iconView.translatesAutoresizingMaskIntoConstraints = false
+    iconView.widthAnchor.constraint(equalToConstant: 22).isActive = true
+    iconView.heightAnchor.constraint(equalToConstant: 22).isActive = true
+
+    let row = NSStackView(views: [iconView, titleLabel])
+    row.orientation = .horizontal
+    row.alignment = .centerY
+    row.spacing = 8
+    return row
+  }
+
+  private func makeDetailRow(symbol: String, text: String) -> NSView {
+    let iconView = NSImageView()
+    iconView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+    iconView.symbolConfiguration = .init(pointSize: 10, weight: .regular)
+    iconView.contentTintColor = palette.foreground.withAlphaComponent(0.45)
+    iconView.translatesAutoresizingMaskIntoConstraints = false
+    iconView.widthAnchor.constraint(equalToConstant: 13).isActive = true
+
+    let label = NSTextField(labelWithString: text)
+    label.font = .systemFont(ofSize: 11, weight: .regular)
+    label.textColor = palette.foreground.withAlphaComponent(0.5)
+    label.lineBreakMode = .byTruncatingMiddle
+    label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    label.widthAnchor.constraint(lessThanOrEqualToConstant: 300).isActive = true
+
+    let row = NSStackView(views: [iconView, label])
+    row.orientation = .horizontal
+    row.alignment = .centerY
+    row.spacing = 6
+    return row
+  }
+
+  private func makeSeparator() -> NSView {
+    let line = NSView()
+    line.wantsLayer = true
+    line.layer?.backgroundColor = palette.foreground.withAlphaComponent(0.12).cgColor
+    line.translatesAutoresizingMaskIntoConstraints = false
+    line.heightAnchor.constraint(equalToConstant: 1).isActive = true
+    line.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
+    return line
   }
 
   private func makeActionButton(title: String, symbol: String, action: @escaping () -> Void) -> NSButton {

@@ -150,6 +150,8 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
   public func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?) {}
   public func setLinkTargetHandler(_ handler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?) {}
   public func setPathExistenceProvider(_ provider: (@MainActor (TerminalSessionID, String) -> Bool)?) {}
+  public func setFileInfoProvider(_ provider: (@MainActor (TerminalSessionID, TerminalFilePathTarget) -> TerminalFileFacts?)?) {}
+  public func applySemanticLinkText(_ text: SemanticLinkText) {}
 
   private func run(command: String, session id: TerminalSessionID) {
     guard let state = sessions[id] else { return }
