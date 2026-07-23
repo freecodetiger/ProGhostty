@@ -2363,6 +2363,56 @@ struct TerminalSurfaceTests {
     #expect(openedTarget == nil)
   }
 
+  @MainActor @Test func ptyGridDragStartingOnLinkSelectsOnlyDraggedSpanNotStaleAnchor() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["edit Sources/App.swift here"], cols: 32, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    var openedTarget: TerminalLinkTarget?
+    gridView.openLinkTargetHandler = { openedTarget = $0 }
+
+    // Press on the link (col 8, inside "Sources/App.swift") and drag a few cells.
+    let start = PTYGridView.textGlyphRect(row: 0, col: 8, cellSize: cellSize, inset: inset)
+    let end = PTYGridView.textGlyphRect(row: 0, col: 12, cellSize: cellSize, inset: inset)
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: gridView))
+    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: end.midX, y: end.midY), in: gridView))
+    gridView.mouseUp(with: try mouseEvent(.leftMouseUp, viewPoint: NSPoint(x: end.midX, y: end.midY), in: gridView))
+
+    // Anchor was set at the press point (not a stale one), so the selection is the
+    // small dragged span — and dragging cancelled the pending click, so nothing opened.
+    #expect(gridView.selectedText == "rces/")
+    #expect(openedTarget == nil)
+  }
+
+  @MainActor @Test func ptyGridPlainClickOnLinkLeavesNoSelection() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["edit Sources/App.swift"], cols: 32, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+
+    // A single click that never drags: mouseDown sets an empty anchor, mouseUp
+    // clears it (and would open the popover if a window were attached).
+    let rect = PTYGridView.textGlyphRect(row: 0, col: 8, cellSize: cellSize, inset: inset)
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: rect.midX, y: rect.midY), in: gridView))
+    gridView.mouseUp(with: try mouseEvent(.leftMouseUp, viewPoint: NSPoint(x: rect.midX, y: rect.midY), in: gridView))
+
+    #expect(gridView.selectedText == nil)
+  }
+
   @MainActor @Test func ptyGridCommandClickOpensOSC8HyperlinkMetadata() throws {
     let gridView = PTYGridView()
     var frame = frameWithText(rows: ["project docs"], cols: 24, cursorX: 0, cursorY: 0)
