@@ -12,9 +12,10 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
   let toast: AppModel.TitlebarToast?
   let onWorkspaceSwitcher: () -> Void
   let onToastClick: () -> Void
+  let onSubtitleClick: (NSView, NSRect) -> Void
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(onWorkspaceSwitcher: onWorkspaceSwitcher, onToastClick: onToastClick)
+    Coordinator(onWorkspaceSwitcher: onWorkspaceSwitcher, onToastClick: onToastClick, onSubtitleClick: onSubtitleClick)
   }
 
   func makeNSView(context: Context) -> NSView {
@@ -31,6 +32,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     context.coordinator.toast = toast
     context.coordinator.onWorkspaceSwitcher = onWorkspaceSwitcher
     context.coordinator.onToastClick = onToastClick
+    context.coordinator.onSubtitleClick = onSubtitleClick
 
     if let window = view.window {
       apply(to: window, context: context)
@@ -58,6 +60,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     var toast: AppModel.TitlebarToast?
     var onWorkspaceSwitcher: () -> Void
     var onToastClick: () -> Void
+    var onSubtitleClick: (NSView, NSRect) -> Void
     private var isSubtitleHovered = false
 
     private weak var installedWindow: NSWindow?
@@ -73,9 +76,10 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     private let notificationObservers = NotificationObserverBag()
     private var appearanceGeneration = 0
 
-    init(onWorkspaceSwitcher: @escaping () -> Void, onToastClick: @escaping () -> Void) {
+    init(onWorkspaceSwitcher: @escaping () -> Void, onToastClick: @escaping () -> Void, onSubtitleClick: @escaping (NSView, NSRect) -> Void) {
       self.onWorkspaceSwitcher = onWorkspaceSwitcher
       self.onToastClick = onToastClick
+      self.onSubtitleClick = onSubtitleClick
       subtitleWidthConstraint = subtitleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360)
       super.init()
       titlebarBackgroundView.identifier = ProGhosttyWindowAppearance.titlebarBackgroundIdentifier
@@ -107,6 +111,11 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       subtitleLabel.onHoverChanged = { [weak self] isHovered in
         self?.isSubtitleHovered = isHovered
         self?.updateSubtitle()
+      }
+      subtitleLabel.onClick = { [weak self] label in
+        guard let self, self.subtitle != nil else { return }
+        // Anchor the panel at the label's frame in its own coordinates.
+        self.onSubtitleClick(label, label.bounds)
       }
       titlebarControlsStack.orientation = .horizontal
       titlebarControlsStack.alignment = .centerY
@@ -410,6 +419,7 @@ private final class TitlebarBackgroundView: NSView {
 
 private final class TitlebarHoverLabel: NSTextField {
   var onHoverChanged: ((Bool) -> Void)?
+  var onClick: ((NSView) -> Void)?
   private var hoverTrackingArea: NSTrackingArea?
 
   override func updateTrackingAreas() {
@@ -435,6 +445,14 @@ private final class TitlebarHoverLabel: NSTextField {
   override func mouseExited(with event: NSEvent) {
     super.mouseExited(with: event)
     onHoverChanged?(false)
+  }
+
+  override func mouseDown(with event: NSEvent) {
+    guard onClick != nil, !isHidden else {
+      super.mouseDown(with: event)
+      return
+    }
+    onClick?(self)
   }
 }
 

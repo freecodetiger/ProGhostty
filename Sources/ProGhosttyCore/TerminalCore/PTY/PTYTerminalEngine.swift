@@ -1031,6 +1031,12 @@ public class PTYGridView: NSView {
   private var selectionAutoScrollTimer: Timer?
   private var selectionAutoScrollDirection = 0
   private var selectionDragPoint: NSPoint?
+  /// A plain (non-⌘) click landed on a link/file. We do NOT open the popover on
+  /// mouseDown — a drag or macOS three-finger-drag also begins with mouseDown, and
+  /// opening there would hijack selection and fire on every drag. Instead we hold
+  /// the hit here, cancel it if the pointer actually drags, and open on mouseUp
+  /// only if it survived as a genuine single click.
+  private var pendingLinkClick: (hit: TerminalLinkHit, origin: NSPoint)?
   private var commandLinkMode = false
   private var isHoveringLink = false
   private var hoveredLinkHit: TerminalLinkHit?
@@ -1060,6 +1066,9 @@ public class PTYGridView: NSView {
   /// hardware cursor → smooth by construction. While it shows, the arrow is hidden.
   private lazy var ringCursorLayer: CALayer = makeRingCursorLayer()
   private var ringCursorVisible = false
+  /// TEMP kill-switch for the GPU ring cursor. When false, interactive content
+  /// keeps the plain arrow (the real cursor is never hidden/swapped).
+  private let ringCursorEnabled = false
   private var isCursorHidden = false
   /// When false, the grid is inert to the mouse: no link hover ring, no dwell
   /// weight reveal, no ⌘ Explore, only the plain iBeam cursor. The ⌘P side-input
@@ -2002,6 +2011,7 @@ public class PTYGridView: NSView {
     activationHandler?()
     window?.makeFirstResponder(self)
     stopSelectionAutoScroll()
+    pendingLinkClick = nil
     let eventPoint = convert(event.locationInWindow, from: nil)
     if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) {
       // ⌘-click opens immediately — the power-user path (spec §6, decided).
@@ -2014,11 +2024,15 @@ public class PTYGridView: NSView {
         }
         return
       }
-    } else if let hit = linkHit(at: eventPoint) {
-      // Plain click on a URL or file path → pointer-anchored actions Popover.
-      presentLinkPopover(for: hit.target, at: eventPoint)
-      return
+    } else if event.clickCount == 1, let hit = linkHit(at: eventPoint) {
+      // Plain single click on a link: defer to mouseUp. A drag (incl. macOS
+      // three-finger-drag) also starts here — opening now would hijack selection
+      // and fire mid-drag. Hold the hit; mouseDragged cancels it, mouseUp opens it.
+      pendingLinkClick = (hit, eventPoint)
     }
+    // Always establish the selection anchor at the press point — even on a link.
+    // Otherwise a drag beginning on a link keeps a stale anchor from a prior
+    // interaction and selects a huge unintended span.
     let oldDirtyRects = selectionDirtyRects()
     let geometry = renderedGeometry()
     let point = geometry?.selectionPoint(at: eventPoint)
@@ -2085,6 +2099,11 @@ public class PTYGridView: NSView {
   public override func mouseDragged(with event: NSEvent) {
     let oldDirtyRects = selectionDirtyRects()
     let point = convert(event.locationInWindow, from: nil)
+    // A real drag means this gesture is a selection / three-finger-drag, not a
+    // click: cancel the pending link open so mouseUp won't fire the popover.
+    if let pending = pendingLinkClick, point.distance(to: pending.origin) > 3 {
+      pendingLinkClick = nil
+    }
     selectionDragPoint = point
     updateSelectionHead(at: point)
     updateSelectionAutoScroll(at: point)
@@ -2095,6 +2114,15 @@ public class PTYGridView: NSView {
     isDraggingSelectionStorage = false
     selectionDragPoint = nil
     stopSelectionAutoScroll()
+    // A plain single click that stayed on the link (never dragged) → open now.
+    if let pending = pendingLinkClick {
+      pendingLinkClick = nil
+      // Clear the empty anchor-only selection created in mouseDown so it doesn't
+      // linger as a zero-width selection under the popover.
+      selectionAnchor = nil
+      selectionHead = nil
+      presentLinkPopover(for: pending.hit.target, at: pending.origin)
+    }
     super.mouseUp(with: event)
   }
 
@@ -2103,6 +2131,7 @@ public class PTYGridView: NSView {
     if window == nil {
       isDraggingSelectionStorage = false
       selectionDragPoint = nil
+      pendingLinkClick = nil
       stopSelectionAutoScroll()
       // Tear down the display link when detached; a live link retaining the view
       // off-window leaks and fires against a dead render path.
@@ -2953,9 +2982,18 @@ public class PTYGridView: NSView {
       return
     }
     let object = objectUnderPointer(point, geometry: geometry)
+    let hoverChanged = object?.id != hoveredLinkObject?.id
     hoveredLinkObject = object
     hoveredLinkHit = object.flatMap { obj in
       obj.segments.first.map { TerminalLinkHit(target: obj.target, row: $0.row, range: $0.cols, text: obj.text) }
+    }
+    // The hovered object's cells are carved out of the iBeam field in
+    // resetCursorRects (they get the plain arrow). That carve is only reflected
+    // once cursor rects rebuild — so when the hovered object *changes*, invalidate
+    // them now, in this same mouse event, or the pointer shows a stale iBeam for a
+    // frame before some unrelated invalidation rebuilds them (the visible flicker).
+    if hoverChanged {
+      window?.invalidateCursorRects(for: self)
     }
     // Hover *signal* (drives the lightweight open-link toast) reflects the pointer
     // being over an interactive object — immediate. The *visual* reveal (weight) is
@@ -3018,6 +3056,9 @@ public class PTYGridView: NSView {
   /// (Core Animation's implicit position animation would make the ring lag). This
   /// touches ONLY the compositor — no Metal present, no `transientOverlayDidChange`.
   private func updateRingCursor(pointer: NSPoint, show: Bool) {
+    // TEMP: ring cursor disabled — keep the plain arrow on interactive content.
+    // Force the hide path so the real cursor is never swapped for the GPU ring.
+    let show = show && ringCursorEnabled
     guard show else {
       if ringCursorVisible {
         ringCursorVisible = false
@@ -4248,5 +4289,11 @@ private extension NSMenuItem {
       .lowercased()
     return normalizedTitle.contains("autofill")
       || normalizedTitle.contains("自动填充")
+  }
+}
+
+private extension NSPoint {
+  func distance(to other: NSPoint) -> CGFloat {
+    hypot(x - other.x, y - other.y)
   }
 }
