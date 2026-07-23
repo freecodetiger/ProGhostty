@@ -300,6 +300,14 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
   public func setPathExistenceProvider(_ provider: (@MainActor (TerminalSessionID, String) -> Bool)?) {
     surfaceRegistry.setPathExistenceProvider(provider)
   }
+
+  public func setFileInfoProvider(_ provider: (@MainActor (TerminalSessionID, TerminalFilePathTarget) -> TerminalFileFacts?)?) {
+    surfaceRegistry.setFileInfoProvider(provider)
+  }
+
+  public func applySemanticLinkText(_ text: SemanticLinkText) {
+    surfaceRegistry.applySemanticLinkText(text)
+  }
 }
 
 @MainActor
@@ -942,6 +950,19 @@ public class PTYGridView: NSView {
   /// the session cwd, so `dist`, `src`, `README` become clickable. Provided by the
   /// registry (which knows the cwd). Nil disables bare-word path detection.
   public var pathExistenceValidator: ((String) -> Bool)?
+  /// Resolves a clicked file target to its absolute path + quiet detail lines
+  /// (path, modified/created times, size) for the popover. Provided by the
+  /// registry (which knows the session cwd + filesystem). Nil → popover shows
+  /// only actions and Copy Path falls back to the raw token.
+  /// Resolves a clicked file target to its raw filesystem facts (absolute path,
+  /// isDirectory, dates, size). Provided by the registry (which knows the session
+  /// cwd + filesystem). Core's view layer formats + iconifies them for the
+  /// popover. Nil → popover shows only actions and Copy Path falls back to the
+  /// raw token.
+  public var fileInfoProvider: ((TerminalFilePathTarget) -> TerminalFileFacts?)?
+  /// Localized popover labels, pushed from the App layer (which owns the language
+  /// setting). Defaults to English so Core works standalone.
+  public var semanticLinkText = SemanticLinkText()
   public var pasteboard = NSPasteboard.general
 
   private var frameSnapshot: GhosttyTerminalFrame?
@@ -2010,29 +2031,42 @@ public class PTYGridView: NSView {
   private func presentLinkPopover(for target: TerminalLinkTarget, at point: NSPoint) {
     let items: [SemanticLinkPopover.Item]
     let title: String
+    var detailRows: [FileDetailFormatter.Row] = []
+    var headerIcon: NSImage?
     switch target {
     case .url(let url):
       title = url.absoluteString
+      headerIcon = NSImage(systemSymbolName: "safari", accessibilityDescription: nil)
       items = [
-        SemanticLinkPopover.Item(title: "Open in Browser", symbol: "safari") { [weak self] in
+        SemanticLinkPopover.Item(title: semanticLinkText.openInBrowser, symbol: "safari") { [weak self] in
           self?.activateLink(target)
         },
-        SemanticLinkPopover.Item(title: "Copy Link", symbol: "doc.on.doc") { [weak self] in
+        SemanticLinkPopover.Item(title: semanticLinkText.copyLink, symbol: "link") { [weak self] in
           self?.copyToPasteboard(url.absoluteString)
         },
       ]
     case .filePath(let filePath):
-      title = filePath.rawPath
+      let facts = fileInfoProvider?(filePath)
+      let absolute = facts?.absolutePath ?? filePath.rawPath
+      title = facts.map { URL(fileURLWithPath: $0.absolutePath).lastPathComponent } ?? filePath.rawPath
+      if let facts {
+        detailRows = FileDetailFormatter.rows(for: facts, text: semanticLinkText)
+        // System file icon (Finder-accurate) for existing paths; symbol fallback.
+        headerIcon = NSWorkspace.shared.icon(forFile: facts.absolutePath)
+      } else {
+        headerIcon = NSImage(systemSymbolName: "doc", accessibilityDescription: nil)
+      }
+      let revealTitle = facts?.isDirectory == true ? semanticLinkText.openFolder : semanticLinkText.revealInFinder
       items = [
-        SemanticLinkPopover.Item(title: "Reveal in Finder", symbol: "folder") { [weak self] in
+        SemanticLinkPopover.Item(title: revealTitle, symbol: "folder") { [weak self] in
           self?.activateLink(target)
         },
-        SemanticLinkPopover.Item(title: "Copy Path", symbol: "doc.on.doc") { [weak self] in
-          self?.copyToPasteboard(filePath.rawPath)
+        SemanticLinkPopover.Item(title: semanticLinkText.copyPath, symbol: "doc.on.clipboard") { [weak self] in
+          self?.copyToPasteboard(absolute)
         },
       ]
     }
-    linkPopover.present(title: title, items: items, at: point, in: self, palette: palette)
+    linkPopover.present(title: title, headerIcon: headerIcon, detailRows: detailRows, items: items, at: point, in: self, palette: palette)
   }
 
   private func activateLink(_ target: TerminalLinkTarget) {

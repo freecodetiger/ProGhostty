@@ -79,4 +79,6 @@ public enum TerminalEvent: Sendable {
   func setLinkHoverHandler(_ handler: (@MainActor (TerminalSessionID, Bool) -> Void)?)
   func setLinkTargetHandler(_ handler: (@MainActor (TerminalSessionID, TerminalLinkTarget) -> Void)?)
   func setPathExistenceProvider(_ provider: (@MainActor (TerminalSessionID, String) -> Bool)?)
+  func setFileInfoProvider(_ provider: (@MainActor (TerminalSessionID, TerminalFilePathTarget) -> TerminalFileFacts?)?)
+  func applySemanticLinkText(_ text: SemanticLinkText)
 }

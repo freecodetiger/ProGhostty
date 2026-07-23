@@ -21,6 +21,25 @@ public struct TerminalFilePathTarget: Equatable, Sendable {
   }
 }
 
+/// Raw filesystem facts for a clicked file target, resolved by the App layer
+/// (which owns cwd + filesystem). Core's view layer formats + iconifies these
+/// for the popover, so localization/symbols/icons all live next to the UI.
+public struct TerminalFileFacts: Sendable, Equatable {
+  public var absolutePath: String
+  public var isDirectory: Bool
+  public var modified: Date?
+  public var created: Date?
+  public var size: Int?
+
+  public init(absolutePath: String, isDirectory: Bool, modified: Date?, created: Date?, size: Int?) {
+    self.absolutePath = absolutePath
+    self.isDirectory = isDirectory
+    self.modified = modified
+    self.created = created
+    self.size = size
+  }
+}
+
 public struct TerminalLinkHit: Equatable, Sendable {
   public var target: TerminalLinkTarget
   public var row: Int

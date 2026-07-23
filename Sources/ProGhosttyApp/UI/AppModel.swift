@@ -169,6 +169,9 @@ final class AppModel: ObservableObject {
     surfaceRegistry.setPathExistenceProvider { [weak self] sourceSession, token in
       self?.bareTokenResolvesToExistingPath(token, from: sourceSession) ?? false
     }
+    surfaceRegistry.setFileInfoProvider { [weak self] sourceSession, target in
+      self?.terminalFileInfo(target, from: sourceSession)
+    }
     applyTerminalAppearance()
 
     Task { await consumeEvents() }
@@ -898,6 +901,23 @@ final class AppModel: ObservableObject {
       }?.cwdBySession[sourceSession]
   }
 
+  private func terminalFileInfo(
+    _ target: TerminalFilePathTarget,
+    from sourceSession: TerminalSessionID
+  ) -> TerminalFileFacts? {
+    guard let url = try? TerminalFilePathResolver.resolve(target, cwd: sessionCwd(for: sourceSession))
+    else { return nil }
+    let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+    let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+    return TerminalFileFacts(
+      absolutePath: url.path,
+      isDirectory: isDir,
+      modified: attrs?[.modificationDate] as? Date,
+      created: attrs?[.creationDate] as? Date,
+      size: isDir ? nil : attrs?[.size] as? Int
+    )
+  }
+
   private func revealTerminalFilePath(_ target: TerminalFilePathTarget, from sourceSession: TerminalSessionID) {
     let cwd = sessionManager.workingDirectory(for: sourceSession)
       ?? workspaceRuntimes.first { runtime in
@@ -1248,6 +1268,7 @@ final class AppModel: ObservableObject {
       cjkFallbackFamily: settings.cjkFallbackFontFamily
     )
     surfaceRegistry.applyRendererOptions(settings.terminalRendererOptions)
+    surfaceRegistry.applySemanticLinkText(appText.semanticLinkText)
     applyFocusedTerminalSurface()
     for window in NSApp.windows
       where window !== settingsWindowController?.window

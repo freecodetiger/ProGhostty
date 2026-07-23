@@ -142,6 +142,14 @@ struct AppText {
   var settingsSavedToast: String { text("Settings saved", "设置已保存") }
   var openLinkHintToast: String { text("⌘ Click to open link", "按住 ⌘ 点击打开链接") }
   var pathNotFoundToast: String { text("Path not found", "路径不存在") }
+  var linkOpenInBrowser: String { text("Open in Browser", "在浏览器中打开") }
+  var linkCopyLink: String { text("Copy Link", "复制链接") }
+  var linkRevealInFinder: String { text("Reveal in Finder", "在访达中显示") }
+  var linkOpenFolder: String { text("Open Folder", "打开文件夹") }
+  var linkCopyPath: String { text("Copy Path", "复制路径") }
+  var linkModified: String { text("Modified", "修改于") }
+  var linkCreated: String { text("Created", "创建于") }
+  var linkFolder: String { text("Folder", "文件夹") }
   var relativePathMissingCwdToast: String { text("No working directory for relative path", "没有用于解析相对路径的工作目录") }
   var revealPathFailedToast: String { text("Could not reveal path", "无法在访达中定位路径") }
   var splitRequiresMoreSpaceToast: String { text("Split needs more screen space", "屏幕空间不足，无法继续分屏") }
@@ -191,6 +199,22 @@ struct AppText {
 
   func localized(_ english: String, _ simplifiedChinese: String) -> String {
     text(english, simplifiedChinese)
+  }
+
+  /// Bundle of localized labels + locale for the semantic-object popover, pushed
+  /// into Core (which builds the popover but can't see `AppText`).
+  var semanticLinkText: SemanticLinkText {
+    SemanticLinkText(
+      openInBrowser: linkOpenInBrowser,
+      copyLink: linkCopyLink,
+      revealInFinder: linkRevealInFinder,
+      openFolder: linkOpenFolder,
+      copyPath: linkCopyPath,
+      modifiedLabel: linkModified,
+      createdLabel: linkCreated,
+      folderLabel: linkFolder,
+      locale: Locale(identifier: language == "zh-Hans" ? "zh_Hans" : "en")
+    )
   }
 
   private func text(_ english: String, _ simplifiedChinese: String) -> String {

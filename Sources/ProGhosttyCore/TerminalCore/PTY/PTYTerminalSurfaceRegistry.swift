@@ -66,7 +66,11 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   /// Per-session predicate: does a bare token resolve to an existing file/dir under
   /// that session's cwd? Enables bare-word path detection (e.g. `src`, `dist`).
   private var pathExistenceProvider: (@MainActor (TerminalSessionID, String) -> Bool)?
+  /// Per-session resolver: a clicked file target → its absolute path + popover
+  /// detail lines. Owns cwd resolution + filesystem access (App layer).
+  private var fileInfoProvider: (@MainActor (TerminalSessionID, TerminalFilePathTarget) -> TerminalFileFacts?)?
   private var viewportScrollHandler: (@MainActor (TerminalSessionID, Int) -> Bool)?
+  private var semanticLinkText = SemanticLinkText()
   private var rendererOptions = TerminalRendererOptions()
   private let isMetalDirectAvailable: Bool
   private let makeDirectRenderer: (TerminalRendererOptions) -> any TerminalLiveRendererBackend
@@ -192,6 +196,10 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     gridView.pathExistenceValidator = pathExistenceProvider.map { provider in
       { token in provider(id, token) }
     }
+    gridView.fileInfoProvider = fileInfoProvider.map { provider in
+      { target in provider(id, target) }
+    }
+    gridView.semanticLinkText = semanticLinkText
     gridView.pasteboard = .general
     gridView.applyPalette(palette)
     gridView.applyFont(family: fontFamily, size: fontSize, cjkFallbackFamily: cjkFallbackFamily)
@@ -399,6 +407,22 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       surface.gridView.pathExistenceValidator = provider.map { provider in
         { token in provider(id, token) }
       }
+    }
+  }
+
+  public func setFileInfoProvider(_ provider: (@MainActor (TerminalSessionID, TerminalFilePathTarget) -> TerminalFileFacts?)?) {
+    fileInfoProvider = provider
+    for (id, surface) in surfaces {
+      surface.gridView.fileInfoProvider = provider.map { provider in
+        { target in provider(id, target) }
+      }
+    }
+  }
+
+  public func applySemanticLinkText(_ text: SemanticLinkText) {
+    semanticLinkText = text
+    for surface in surfaces.values {
+      surface.gridView.semanticLinkText = text
     }
   }
 
