@@ -59,8 +59,9 @@ public struct TerminalLinkHit: Equatable, Sendable {
 }
 
 public enum TerminalLinkDetector {
+  /// `/` requires `(?!/)` so `//`, `///`, `//comment` are not treated as paths.
   private static let pathPattern =
-    #"(?<![A-Za-z0-9_])((?:~\/|\.{1,2}\/|/)[^\s<>"']+|(?:[A-Za-z0-9._@%+=~-]+/)+[A-Za-z0-9._@%+=~-]+\.[A-Za-z0-9._@%+=~-]+(?::\d+){0,2})"#
+    #"(?<![A-Za-z0-9_])((?:~\/|\.{1,2}\/|/(?!/))[^\s<>"']+|(?:[A-Za-z0-9._@%+=~-]+/)+[A-Za-z0-9._@%+=~-]+\.[A-Za-z0-9._@%+=~-]+(?::\d+){0,2})"#
   /// Compiled once — recompiling per row on every `mouseMoved` was a per-move stall.
   private static let pathRegex: NSRegularExpression? = try? NSRegularExpression(pattern: pathPattern)
   private static let trailingCharacters = CharacterSet(charactersIn: ".,;!?)]}")

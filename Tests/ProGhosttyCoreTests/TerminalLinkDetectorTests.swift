@@ -192,6 +192,27 @@ struct TerminalLinkDetectorTests {
     #expect(TerminalLinkDetector.hitTest(row: 0, col: 2, in: frame) == nil)
   }
 
+  @Test func doesNotTreatDoubleSlashAsPath() {
+    let frame = frame(rows: ["//"], cols: 4)
+    #expect(TerminalLinkDetector.hitTest(row: 0, col: 0, in: frame) == nil)
+  }
+
+  @Test func doesNotTreatTripleSlashAsPath() {
+    let frame = frame(rows: ["///"], cols: 5)
+    #expect(TerminalLinkDetector.hitTest(row: 0, col: 1, in: frame) == nil)
+  }
+
+  @Test func doesNotTreatDoubleSlashCommentAsPath() {
+    let frame = frame(rows: ["// this is a comment"], cols: 24)
+    #expect(TerminalLinkDetector.hitTest(row: 0, col: 2, in: frame) == nil)
+  }
+
+  @Test func stillDetectsRealAbsolutePathAfterDoubleSlashIsIgnored() throws {
+    let frame = frame(rows: ["// some comment /real/path here"], cols: 36)
+    let hit = try #require(TerminalLinkDetector.hitTest(row: 0, col: 20, in: frame))
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "/real/path")))
+  }
+
   private func frame(rows: [String], cols: Int) -> GhosttyTerminalFrame {
     let cells = rows.flatMap { row in
       let padded = row.padding(toLength: cols, withPad: " ", startingAt: 0)
