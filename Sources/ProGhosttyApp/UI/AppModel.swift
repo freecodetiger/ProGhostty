@@ -5,6 +5,10 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
+  /// Weak back-link so the NSApplicationDelegate can reach running sessions when
+  /// ⌘Q / terminate needs a confirmation check.
+  static weak var shared: AppModel?
+
   struct WorkspaceRuntime: Identifiable, Equatable {
     var layout: WorkspaceLayout
     var workspace: Workspace?
@@ -173,6 +177,7 @@ final class AppModel: ObservableObject {
     surfaceRegistry.setFileInfoProvider { [weak self] sourceSession, target in
       self?.terminalFileInfo(target, from: sourceSession)
     }
+    AppModel.shared = self
     applyTerminalAppearance()
 
     Task { await consumeEvents() }
@@ -1461,6 +1466,37 @@ final class AppModel: ObservableObject {
     alert.addButton(withTitle: text.deleteWorkspace)
     alert.addButton(withTitle: text.cancel)
     alert.buttons.first?.keyEquivalent = "\r"
+    return alert.runModal() == .alertFirstButtonReturn
+  }
+
+  /// Check every pane in every workspace for a foreground process. Called from
+  /// the AppDelegate's `applicationShouldTerminate` so ⌘Q gets the same guard as
+  /// closing a single pane.
+  func hasAnyForegroundSession() -> Bool {
+    for runtime in workspaceRuntimes {
+      for leaf in PaneTreeReducer.listLeaves(in: runtime.layout.root) {
+        if sessionManager.hasForegroundProcess(in: leaf.sessionId) { return true }
+      }
+    }
+    return false
+  }
+
+  /// RunLoop-blocking confirmation dialog for ⌘Q-style termination. Mirrors
+  /// `confirmPaneCloseWithForegroundProcess` but with a quit-specific message.
+  func confirmQuitWithForegroundProcess() -> Bool {
+    let text = appText
+    let alert = NSAlert()
+    alert.messageText = text.localized(
+      "A foreground process is running. Quit anyway?",
+      "有前台进程正在运行。确定退出吗？"
+    )
+    alert.informativeText = text.localized(
+      "Quitting will close all panes and terminate any running processes.",
+      "退出将关闭所有分屏并终止所有运行中的进程。"
+    )
+    alert.addButton(withTitle: text.localized("Quit", "退出"))
+    alert.addButton(withTitle: text.cancel)
+    alert.alertStyle = .warning
     return alert.runModal() == .alertFirstButtonReturn
   }
 

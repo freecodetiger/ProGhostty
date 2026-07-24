@@ -96,4 +96,16 @@ final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
     true
   }
+
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    guard let model = AppModel.shared else { return .terminateNow }
+    guard model.hasAnyForegroundSession() else { return .terminateNow }
+    // The confirmation dialog blocks the main run-loop until answered, so we
+    // can return synchronous reply; just make sure to move the defer-ring of
+    // termination to after the dialog returns.
+    if model.confirmQuitWithForegroundProcess() {
+      return .terminateNow
+    }
+    return .terminateCancel
+  }
 }
