@@ -39,9 +39,11 @@ struct RootView: View {
         backgroundColor: model.terminalBackgroundColor,
         usesDarkAppearance: model.usesDarkAppearance,
         toast: model.titlebarToast,
+        paneLabel: model.activePaneLabel,
         onWorkspaceSwitcher: { model.openWorkspaceSwitcher() },
         onToastClick: { model.openTitlebarToastAction() },
-        onSubtitleClick: { view, anchor in model.openProjectInfoPanel(from: view, anchor: anchor) }
+        onSubtitleClick: { view, anchor in model.openProjectInfoPanel(from: view, anchor: anchor) },
+        onPaneLabelClick: { model.startRenamePane() }
       )
       .frame(width: 0, height: 0)
     )
@@ -57,8 +59,10 @@ struct RootView: View {
       TerminalShortcutHost(
         closePaneBinding: model.settings.keyboardShortcuts.shortcut(for: .closePane),
         sideInputBinding: model.settings.keyboardShortcuts.shortcut(for: .sideInput),
+        renamePaneBinding: model.settings.keyboardShortcuts.shortcut(for: .renamePane),
         onClosePane: { model.closeSelectedPane() },
-        onOpenSideInput: { model.openSideInput() }
+        onOpenSideInput: { model.openSideInput() },
+        onRenamePane: { model.startRenamePane() }
       )
       .frame(width: 0, height: 0)
     )
@@ -253,15 +257,19 @@ private extension NSColor {
 private struct TerminalShortcutHost: NSViewRepresentable {
   let closePaneBinding: KeyboardShortcutBinding
   let sideInputBinding: KeyboardShortcutBinding
+  let renamePaneBinding: KeyboardShortcutBinding
   let onClosePane: () -> Void
   let onOpenSideInput: () -> Void
+  let onRenamePane: () -> Void
 
   func makeNSView(context: Context) -> KeyView {
     let view = KeyView()
     view.closePaneBinding = closePaneBinding
     view.sideInputBinding = sideInputBinding
+    view.renamePaneBinding = renamePaneBinding
     view.onClosePane = onClosePane
     view.onOpenSideInput = onOpenSideInput
+    view.onRenamePane = onRenamePane
     view.installMonitor()
     return view
   }
@@ -269,8 +277,10 @@ private struct TerminalShortcutHost: NSViewRepresentable {
   func updateNSView(_ view: KeyView, context: Context) {
     view.closePaneBinding = closePaneBinding
     view.sideInputBinding = sideInputBinding
+    view.renamePaneBinding = renamePaneBinding
     view.onClosePane = onClosePane
     view.onOpenSideInput = onOpenSideInput
+    view.onRenamePane = onRenamePane
     view.installMonitor()
   }
 
@@ -281,8 +291,10 @@ private struct TerminalShortcutHost: NSViewRepresentable {
   final class KeyView: NSView {
     var closePaneBinding: KeyboardShortcutBinding?
     var sideInputBinding: KeyboardShortcutBinding?
+    var renamePaneBinding: KeyboardShortcutBinding?
     var onClosePane: (() -> Void)?
     var onOpenSideInput: (() -> Void)?
+    var onRenamePane: (() -> Void)?
     private var monitor: Any?
 
     func installMonitor() {
@@ -297,6 +309,10 @@ private struct TerminalShortcutHost: NSViewRepresentable {
         }
         if sideInputBinding?.matches(key: event.proGhosttyShortcutKey, modifiers: event.proGhosttyShortcutModifiers) == true {
           onOpenSideInput?()
+          return nil
+        }
+        if renamePaneBinding?.matches(key: event.proGhosttyShortcutKey, modifiers: event.proGhosttyShortcutModifiers) == true {
+          onRenamePane?()
           return nil
         }
         return event

@@ -61,6 +61,13 @@ struct ProGhosttyApp: App {
 
         Divider()
 
+        Button("Rename Pane") {
+          model.startRenamePane()
+        }
+        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .renamePane).swiftUIShortcut)
+
+        Divider()
+
         Button("Focus Previous Pane") {
           model.focusNeighbor(offset: -1)
         }

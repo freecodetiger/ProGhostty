@@ -40,6 +40,35 @@ public final class PaneWorkspaceController {
     return workspaceLayouts[index]
   }
 
+  /// Assigns a user label to the pane identified by `paneID`. An empty label
+  /// clears it (returns to nil). Returns true when the pane was found.
+  @discardableResult
+  public func renamePane(workspaceID: UUID, paneID: UUID, label: String) -> Bool {
+    guard let index = workspaceLayouts.firstIndex(where: { $0.id == workspaceID }) else {
+      return false
+    }
+    let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+    let newLabel: String? = trimmed.isEmpty ? nil : trimmed
+    var didChange = false
+    workspaceLayouts[index].root = PaneTreeReducer.mapLeaves(in: workspaceLayouts[index].root) { pane in
+      guard pane.paneId == paneID else { return pane }
+      guard pane.label != newLabel else { return pane }
+      var updated = pane
+      updated.label = newLabel
+      didChange = true
+      return updated
+    }
+    return didChange
+  }
+
+  /// Returns the user-assigned label for a pane, or nil if not set / not found.
+  public func paneLabel(workspaceID: UUID, paneID: UUID) -> String? {
+    guard let workspace = workspaceLayouts.first(where: { $0.id == workspaceID }),
+          let pane = PaneTreeReducer.findPane(in: workspace.root, paneId: paneID)
+    else { return nil }
+    return pane.label
+  }
+
   /// Updates the recorded working directory for every pane bound to `session`
   /// and returns the mutated layout. Returns nil if no workspace owns the
   /// session.

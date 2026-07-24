@@ -51,6 +51,7 @@ private struct TerminalTreeLayoutView: NSViewControllerRepresentable {
       onSelect: { model.selectPane($0) },
       onSplit: { paneID, axis in model.splitPane(paneID, axis: axis) },
       onClose: { paneID in model.closePane(paneID) },
+      onRename: { model.startRenamePane() },
       onPasteDroppedPaths: { paneID, text in model.pasteDroppedPaths(text, intoPane: paneID) },
       menuText: model.appText,
       keyboardShortcuts: model.settings.keyboardShortcuts,
@@ -92,6 +93,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
   private var onSelect: ((UUID) -> Void)?
   private var onSplit: ((UUID, SplitAxis) -> Void)?
   private var onClose: ((UUID) -> Void)?
+  private var onRename: (() -> Void)?
   private var onPasteDroppedPaths: ((UUID, String) -> Void)?
   private var menuText = AppText(language: "system")
   private var keyboardShortcuts = KeyboardShortcutSettings.defaults
@@ -124,6 +126,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     onSelect: @escaping (UUID) -> Void,
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
+    onRename: @escaping () -> Void,
     onPasteDroppedPaths: @escaping (UUID, String) -> Void,
     menuText: AppText,
     keyboardShortcuts: KeyboardShortcutSettings,
@@ -150,6 +153,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     self.onSelect = onSelect
     self.onSplit = onSplit
     self.onClose = onClose
+    self.onRename = onRename
     self.onPasteDroppedPaths = onPasteDroppedPaths
     self.menuText = menuText
     self.keyboardShortcuts = keyboardShortcuts
@@ -253,6 +257,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
         onSelect: { [weak self] paneID in self?.onSelect?(paneID) },
         onSplit: { [weak self] paneID, axis in self?.onSplit?(paneID, axis) },
         onClose: { [weak self] paneID in self?.onClose?(paneID) },
+            onRename: { [weak self] in self?.onRename?() },
         onPasteDroppedPaths: { [weak self] paneID, text in self?.onPasteDroppedPaths?(paneID, text) },
         menuText: menuText,
         palette: palette,
@@ -501,6 +506,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       onSelect: { [weak self] paneID in self?.onSelect?(paneID) },
       onSplit: { [weak self] paneID, axis in self?.onSplit?(paneID, axis) },
       onClose: { [weak self] paneID in self?.onClose?(paneID) },
+        onRename: { [weak self] in self?.onRename?() },
       onPasteDroppedPaths: { [weak self] paneID, text in self?.onPasteDroppedPaths?(paneID, text) },
       menuText: menuText,
       palette: palette,
@@ -847,6 +853,7 @@ final class TerminalPaneViewController: NSViewController {
     onSelect: @escaping (UUID) -> Void,
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
+    onRename: @escaping () -> Void,
     onPasteDroppedPaths: @escaping (UUID, String) -> Void,
     menuText: AppText,
     palette: TerminalSurfacePalette,
@@ -890,6 +897,7 @@ final class TerminalPaneViewController: NSViewController {
       onSelect: onSelect,
       onSplit: onSplit,
       onClose: onClose,
+        onRename: onRename,
       text: menuText,
       keyboardShortcuts: keyboardShortcuts,
       onWorkspaceSwitcher: onWorkspaceSwitcher,
@@ -1168,6 +1176,7 @@ final class TerminalPaneViewController: NSViewController {
     onSelect: @escaping (UUID) -> Void,
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
+    onRename: @escaping () -> Void,
     text: AppText,
     keyboardShortcuts: KeyboardShortcutSettings,
     onWorkspaceSwitcher: @escaping () -> Void,
@@ -1194,6 +1203,11 @@ final class TerminalPaneViewController: NSViewController {
       isEnabled: {
         NSPasteboard.general.string(forType: .string)?.isEmpty == false
       }
+    ))
+    menu.addItem(.separator())
+    menu.addItem(ClosureMenuItem(
+      title: text.renamePane,
+      handler: { onRename() }
     ))
     menu.addItem(.separator())
     menu.addItem(SplitControlMenuItem(

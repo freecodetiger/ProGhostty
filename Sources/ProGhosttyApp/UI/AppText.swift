@@ -20,6 +20,9 @@ struct AppText {
   var splitRight: String { text("Split Right", "向右分屏") }
   var splitDown: String { text("Split Down", "向下分屏") }
   var closePane: String { text("Close Pane", "关闭分屏") }
+  var renamePane: String { text("Rename Pane", "重命名面板") }
+  var renamePanePlaceholder: String { text("Pane name", "面板名称") }
+  var ok: String { text("OK", "确定") }
   var closePaneConfirmationTitle: String { text("Close pane?", "关闭分屏？") }
   var closePaneConfirmationMessage: String {
     text(
@@ -240,6 +243,7 @@ struct AppText {
     case .closePane: return text.closePane
     case .focusPreviousPane: return text.focusPreviousPane
     case .focusNextPane: return text.focusNextPane
+    case .renamePane: return text.renamePane
     }
   }
 }

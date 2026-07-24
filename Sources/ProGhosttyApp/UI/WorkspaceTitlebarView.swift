@@ -10,12 +10,14 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
   let backgroundColor: NSColor
   let usesDarkAppearance: Bool
   let toast: AppModel.TitlebarToast?
+  let paneLabel: String?
   let onWorkspaceSwitcher: () -> Void
   let onToastClick: () -> Void
   let onSubtitleClick: (NSView, NSRect) -> Void
+  let onPaneLabelClick: () -> Void
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(onWorkspaceSwitcher: onWorkspaceSwitcher, onToastClick: onToastClick, onSubtitleClick: onSubtitleClick)
+    Coordinator(onWorkspaceSwitcher: onWorkspaceSwitcher, onToastClick: onToastClick, onSubtitleClick: onSubtitleClick, onPaneLabelClick: onPaneLabelClick)
   }
 
   func makeNSView(context: Context) -> NSView {
@@ -30,9 +32,11 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     context.coordinator.backgroundColor = backgroundColor
     context.coordinator.usesDarkAppearance = usesDarkAppearance
     context.coordinator.toast = toast
+    context.coordinator.paneLabel = paneLabel
     context.coordinator.onWorkspaceSwitcher = onWorkspaceSwitcher
     context.coordinator.onToastClick = onToastClick
     context.coordinator.onSubtitleClick = onSubtitleClick
+    context.coordinator.onPaneLabelClick = onPaneLabelClick
 
     if let window = view.window {
       apply(to: window, context: context)
@@ -58,28 +62,47 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     var backgroundColor: NSColor = .black
     var usesDarkAppearance = true
     var toast: AppModel.TitlebarToast?
+    var paneLabel: String?
     var onWorkspaceSwitcher: () -> Void
     var onToastClick: () -> Void
     var onSubtitleClick: (NSView, NSRect) -> Void
+    var onPaneLabelClick: () -> Void
     private var isSubtitleHovered = false
 
     private weak var installedWindow: NSWindow?
     private let titlebarControlsStack = NSStackView()
     private let subtitleLabel = TitlebarHoverLabel(labelWithString: "")
+    private let paneLabelLabel: NSTextField = {
+      let label = NSTextField(labelWithString: "")
+      label.font = .systemFont(ofSize: 12, weight: .medium)
+      label.alignment = .left
+      label.lineBreakMode = .byTruncatingMiddle
+      label.maximumNumberOfLines = 1
+      label.drawsBackground = false
+      label.isBordered = false
+      label.isEditable = false
+      label.isSelectable = false
+      label.translatesAutoresizingMaskIntoConstraints = false
+      label.setContentHuggingPriority(.defaultLow, for: .horizontal)
+      label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+      return label
+    }()
     private let toastView = TitlebarToastCapsuleView()
     private let button = NSButton(title: "ProGhostty", target: nil, action: nil)
     private let titlebarBackgroundView = TitlebarBackgroundView()
     private let subtitleWidthConstraint: NSLayoutConstraint
     private var titlebarBackgroundConstraints: [NSLayoutConstraint] = []
     private var subtitleConstraints: [NSLayoutConstraint] = []
+    private var paneLabelConstraints: [NSLayoutConstraint] = []
     private var titlebarControlsConstraints: [NSLayoutConstraint] = []
     private let notificationObservers = NotificationObserverBag()
     private var appearanceGeneration = 0
 
-    init(onWorkspaceSwitcher: @escaping () -> Void, onToastClick: @escaping () -> Void, onSubtitleClick: @escaping (NSView, NSRect) -> Void) {
+    init(onWorkspaceSwitcher: @escaping () -> Void, onToastClick: @escaping () -> Void, onSubtitleClick: @escaping (NSView, NSRect) -> Void, onPaneLabelClick: @escaping () -> Void) {
       self.onWorkspaceSwitcher = onWorkspaceSwitcher
       self.onToastClick = onToastClick
       self.onSubtitleClick = onSubtitleClick
+      self.onPaneLabelClick = onPaneLabelClick
       subtitleWidthConstraint = subtitleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 360)
       super.init()
       titlebarBackgroundView.identifier = ProGhosttyWindowAppearance.titlebarBackgroundIdentifier
@@ -117,6 +140,8 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         // Anchor the panel at the label's frame in its own coordinates.
         self.onSubtitleClick(label, label.bounds)
       }
+      let paneLabelClick = NSClickGestureRecognizer(target: self, action: #selector(paneLabelClicked))
+      paneLabelLabel.addGestureRecognizer(paneLabelClick)
       titlebarControlsStack.orientation = .horizontal
       titlebarControlsStack.alignment = .centerY
       titlebarControlsStack.spacing = 8
@@ -144,7 +169,19 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       button.title = title
       button.toolTip = tooltip
       updateSubtitle()
+      updatePaneLabel()
       updateToast()
+    }
+
+    private func updatePaneLabel() {
+      guard let paneLabel, !paneLabel.isEmpty else {
+        paneLabelLabel.isHidden = true
+        return
+      }
+      paneLabelLabel.isHidden = false
+      paneLabelLabel.stringValue = paneLabel
+      paneLabelLabel.textColor = button.contentTintColor
+      refreshAccessoryLayout()
     }
 
     func updateWindowAppearance(_ window: NSWindow) {
@@ -314,6 +351,21 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         NSLayoutConstraint.activate(subtitleConstraints)
       }
 
+      // Pane label: left side, right of traffic lights.
+      if paneLabelLabel.superview !== host {
+        NSLayoutConstraint.deactivate(paneLabelConstraints)
+        paneLabelConstraints.removeAll()
+        paneLabelLabel.removeFromSuperview()
+        host.addSubview(paneLabelLabel, positioned: .above, relativeTo: nil)
+        paneLabelConstraints = [
+          paneLabelLabel.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 80),
+          paneLabelLabel.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
+          paneLabelLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
+          paneLabelLabel.trailingAnchor.constraint(lessThanOrEqualTo: subtitleLabel.leadingAnchor, constant: -12),
+        ]
+        NSLayoutConstraint.activate(paneLabelConstraints)
+      }
+
       keepTitlebarViewsOrdered(in: window)
     }
 
@@ -367,6 +419,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         window.standardWindowButton(.miniaturizeButton),
         window.standardWindowButton(.zoomButton),
         subtitleLabel,
+        paneLabelLabel,
         titlebarControlsStack,
       ].compactMap { $0 }
 
@@ -392,6 +445,10 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
 
     @objc private func openWorkspaceSwitcher() {
       onWorkspaceSwitcher()
+    }
+
+    @objc private func paneLabelClicked() {
+      onPaneLabelClick()
     }
 
     @objc private func openToastAction() {

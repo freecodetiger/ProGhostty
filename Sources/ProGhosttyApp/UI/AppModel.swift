@@ -399,6 +399,44 @@ final class AppModel: ObservableObject {
     sideInputStore.open(paneID: selectedPaneID, sessionID: selectedSessionID)
   }
 
+  // MARK: Pane rename
+
+  func startRenamePane() {
+    guard selectedPaneID != nil else { return }
+    let current = activePaneLabel ?? ""
+    let alert = NSAlert()
+    alert.messageText = appText.renamePane
+    alert.informativeText = ""
+    alert.alertStyle = .informational
+    alert.addButton(withTitle: appText.ok)
+    alert.addButton(withTitle: appText.cancel)
+
+    let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+    textField.stringValue = current
+    textField.font = .systemFont(ofSize: 13)
+    textField.placeholderString = appText.renamePanePlaceholder
+    alert.accessoryView = textField
+    textField.selectText(nil)
+
+    alert.window.initialFirstResponder = textField
+    let response = alert.runModal()
+    if response == .alertFirstButtonReturn {
+      commitRenamePane(textField.stringValue)
+    }
+  }
+
+  func commitRenamePane(_ name: String) {
+    guard let activeWorkspaceID, let selectedPaneID else { return }
+    let changed = paneWorkspaceController.renamePane(
+      workspaceID: activeWorkspaceID,
+      paneID: selectedPaneID,
+      label: name
+    )
+    if changed, let index = workspaceRuntimes.firstIndex(where: { $0.id == activeWorkspaceID }) {
+      persistWorkspaceRuntime(at: index)
+    }
+  }
+
   func updateSideInputText(_ text: String, for paneID: UUID) {
     sideInputStore.updateText(text, for: paneID)
   }
@@ -480,6 +518,13 @@ final class AppModel: ObservableObject {
     \(activeWorkspaceTitle)
     \(paneCount) \(paneLabel) · \(workspaceCount) running \(workspaceLabel)
     """
+  }
+
+  /// User-assigned pane label, shown as an independent titlebar module left
+  /// of the cwd-derived subtitle (which stays centered).
+  var activePaneLabel: String? {
+    guard let activeWorkspaceID, let selectedPaneID else { return nil }
+    return paneWorkspaceController.paneLabel(workspaceID: activeWorkspaceID, paneID: selectedPaneID)
   }
 
   var activePaneTitlebarLabel: String? {

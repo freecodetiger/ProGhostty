@@ -14,6 +14,8 @@ public struct TerminalPane: Identifiable, Codable, Equatable, Sendable {
   public var sessionId: TerminalSessionID
   public var title: String
   public var cwd: String?
+  /// User-assigned display label; nil = not set (label hidden).
+  public var label: String?
 
   public var id: UUID { paneId }
   public var sessionID: TerminalSessionID { sessionId }
@@ -22,12 +24,14 @@ public struct TerminalPane: Identifiable, Codable, Equatable, Sendable {
     paneId: UUID = UUID(),
     sessionId: TerminalSessionID,
     title: String = "zsh",
-    cwd: String? = nil
+    cwd: String? = nil,
+    label: String? = nil
   ) {
     self.paneId = paneId
     self.sessionId = sessionId
     self.title = title
     self.cwd = cwd
+    self.label = label
   }
 
   public init(id: UUID = UUID(), sessionID: TerminalSessionID) {
