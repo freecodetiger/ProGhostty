@@ -403,26 +403,13 @@ final class AppModel: ObservableObject {
 
   func startRenamePane() {
     guard selectedPaneID != nil else { return }
-    let current = activePaneLabel ?? ""
-    let alert = NSAlert()
-    alert.messageText = appText.renamePane
-    alert.informativeText = ""
-    alert.alertStyle = .informational
-    alert.addButton(withTitle: appText.ok)
-    alert.addButton(withTitle: appText.cancel)
-
-    let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-    textField.stringValue = current
-    textField.font = .systemFont(ofSize: 13)
-    textField.placeholderString = appText.renamePanePlaceholder
-    alert.accessoryView = textField
-    textField.selectText(nil)
-
-    alert.window.initialFirstResponder = textField
-    let response = alert.runModal()
-    if response == .alertFirstButtonReturn {
-      commitRenamePane(textField.stringValue)
-    }
+    guard
+      let name = confirmationPrompts.promptRenamePane(
+        currentLabel: activePaneLabel ?? "",
+        text: appText
+      )
+    else { return }
+    commitRenamePane(name)
   }
 
   func commitRenamePane(_ name: String) {
@@ -1459,29 +1446,20 @@ final class AppModel: ObservableObject {
     shellIntegrationState = "layout restored"
   }
 
+  // MARK: Confirmation prompts (thin forwarders → ConfirmationPrompts)
+
+  private let confirmationPrompts = ConfirmationPrompts()
+
   private func confirmLayoutRestoreClosingPanes(count: Int) -> Bool {
-    let alert = NSAlert()
-    alert.messageText = "Restore layout?"
-    alert.informativeText = "Restoring this layout will close \(count) pane session\(count == 1 ? "" : "s")."
-    alert.alertStyle = .warning
-    alert.addButton(withTitle: "Restore")
-    alert.addButton(withTitle: "Cancel")
-    return alert.runModal() == .alertFirstButtonReturn
+    confirmationPrompts.confirmLayoutRestoreClosingPanes(count: count)
   }
 
   private func confirmWorkspaceDeletion(_ workspace: Workspace, runningPaneCount: Int) -> Bool {
-    let text = appText
-    let alert = NSAlert()
-    alert.messageText = text.deleteWorkspaceConfirmationTitle
-    alert.informativeText = text.deleteWorkspaceConfirmationMessage(
-      workspace.name,
-      runningPaneCount: runningPaneCount
+    confirmationPrompts.confirmWorkspaceDeletion(
+      workspace,
+      runningPaneCount: runningPaneCount,
+      text: appText
     )
-    alert.alertStyle = .warning
-    alert.addButton(withTitle: text.deleteWorkspace)
-    alert.addButton(withTitle: text.cancel)
-    alert.buttons.first?.keyEquivalent = "\r"
-    return alert.runModal() == .alertFirstButtonReturn
   }
 
   /// Check every pane in every workspace for a foreground process. Called from
@@ -1499,32 +1477,11 @@ final class AppModel: ObservableObject {
   /// RunLoop-blocking confirmation dialog for ⌘Q-style termination. Mirrors
   /// `confirmPaneCloseWithForegroundProcess` but with a quit-specific message.
   func confirmQuitWithForegroundProcess() -> Bool {
-    let text = appText
-    let alert = NSAlert()
-    alert.messageText = text.localized(
-      "A foreground process is running. Quit anyway?",
-      "有前台进程正在运行。确定退出吗？"
-    )
-    alert.informativeText = text.localized(
-      "Quitting will close all panes and terminate any running processes.",
-      "退出将关闭所有分屏并终止所有运行中的进程。"
-    )
-    alert.addButton(withTitle: text.localized("Quit", "退出"))
-    alert.addButton(withTitle: text.cancel)
-    alert.alertStyle = .warning
-    return alert.runModal() == .alertFirstButtonReturn
+    confirmationPrompts.confirmQuitWithForegroundProcess(text: appText)
   }
 
   private func confirmPaneCloseWithForegroundProcess() -> Bool {
-    let text = appText
-    let alert = NSAlert()
-    alert.messageText = text.closePaneConfirmationTitle
-    alert.informativeText = text.closePaneConfirmationMessage
-    alert.alertStyle = .warning
-    alert.addButton(withTitle: text.closePane)
-    alert.addButton(withTitle: text.cancel)
-    alert.buttons.first?.keyEquivalent = "\r"
-    return alert.runModal() == .alertFirstButtonReturn
+    confirmationPrompts.confirmPaneCloseWithForegroundProcess(text: appText)
   }
 
   @discardableResult
