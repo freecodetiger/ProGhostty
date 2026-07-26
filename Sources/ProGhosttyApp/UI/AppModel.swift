@@ -104,6 +104,9 @@ final class AppModel: ObservableObject {
   private let settingsStore: SettingsStore
   private let terminalActionDispatcher = TerminalActionDispatcher()
   private let utilityWindows = UtilityWindowController()
+  /// The live settings window, if open — used by the window-close guard to
+  /// leave utility windows unguarded.
+  var settingsWindow: NSWindow? { utilityWindows.settingsWindow }
   private lazy var windowSizing = TerminalWindowSizingController { [weak self] window in
     window === self?.utilityWindows.settingsWindow
   }
