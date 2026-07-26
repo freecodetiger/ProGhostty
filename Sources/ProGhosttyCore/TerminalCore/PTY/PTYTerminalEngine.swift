@@ -669,9 +669,7 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
         sessions[id] = state
         continuation.yield(.cwdChanged(session: id, cwd: cwd))
       }
-      if sequence.command == "0" || sequence.command == "1" || sequence.command == "2",
-        let title = sequence.parameters.last
-      {
+      if let title = TitleTracker.title(from: sequence) {
         continuation.yield(.titleChanged(session: id, title: title))
       }
     }
