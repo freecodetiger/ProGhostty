@@ -14,6 +14,9 @@ final class AppModel: ObservableObject {
     var layout: WorkspaceLayout
     var workspace: Workspace?
     var cwdBySession: [TerminalSessionID: String]
+    /// Titles reported by programs via OSC 0/1/2. Runtime-only — programs are
+    /// gone after a restart, so this is never persisted (unlike pane labels).
+    var reportedTitleBySession: [TerminalSessionID: String] = [:]
 
     var id: UUID {
       layout.id
@@ -493,6 +496,15 @@ final class AppModel: ObservableObject {
     return "📁 \(component)"
   }
 
+  /// Program-reported (OSC 0/1/2) title for the focused pane. Shown in the
+  /// titlebar pane module only when no manual label overrides it.
+  var activePaneAutoTitle: String? {
+    guard settings.programTitleReportingEnabled,
+          let session = selectedSessionID
+    else { return nil }
+    return activeWorkspace?.reportedTitleBySession[session]
+  }
+
   var activePaneTitlebarTooltip: String? {
     guard let cwd = selectedCwd else { return nil }
     return cwd
@@ -760,6 +772,7 @@ final class AppModel: ObservableObject {
       guard let updatedLayout = paneWorkspaceController.workspaceLayout(id: activeWorkspaceID) else { return }
       runtime.layout = updatedLayout
       runtime.cwdBySession[closed.sessionId] = nil
+      runtime.reportedTitleBySession[closed.sessionId] = nil
       paneSplitAvailabilityController.remove(paneID: closed.paneId)
       workspaceRuntimes[index] = runtime
       persistWorkspaceRuntime(at: index)
@@ -1186,6 +1199,7 @@ final class AppModel: ObservableObject {
     for session in removedSessions {
       sessionManager.closeSession(session)
       workspaceRuntimes[index].cwdBySession[session] = nil
+      workspaceRuntimes[index].reportedTitleBySession[session] = nil
     }
 
     let restored = paneWorkspaceController.restoreLayout(workspaceID: activeWorkspaceID, layout: saved) ?? saved
@@ -1475,7 +1489,12 @@ final class AppModel: ObservableObject {
           workspace.layout.root = layoutUpdatingPaneCwd(workspace.layout.root, session: session, cwd: cwd)
         }
       }
+      // A fresh prompt fired OSC 7 — the foreground program is gone, so its
+      // reported title must not linger (e.g. "vim" after :q).
+      updateReportedTitle(nil, for: session)
       objectWillChange.send()
+    case .titleChanged(let session, let title):
+      updateReportedTitle(AutoTitleSanitizer.sanitize(title), for: session)
     case .osc(let session, let sequence):
       shellIntegrationState = "available"
       handleProGhosttyControlOsc(session: session, sequence: sequence)
@@ -1514,6 +1533,20 @@ final class AppModel: ObservableObject {
       session: session,
       source: notification.source
     ))
+  }
+
+  /// Records (or clears, with nil) the program-reported title for a session.
+  /// Skips identical values so repeated reports don't churn observers.
+  private func updateReportedTitle(_ title: String?, for session: TerminalSessionID) {
+    guard
+      let index = workspaceRuntimes.firstIndex(where: { runtime in
+        PaneTreeReducer.listLeaves(in: runtime.layout.root).contains { $0.sessionId == session }
+      }),
+      workspaceRuntimes[index].reportedTitleBySession[session] != title
+    else {
+      return
+    }
+    workspaceRuntimes[index].reportedTitleBySession[session] = title
   }
 
   private func updateWorkspaceForSession(_ id: TerminalSessionID, persist: Bool = false, _ update: (inout WorkspaceRuntime) -> Void) {
