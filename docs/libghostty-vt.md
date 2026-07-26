@@ -72,5 +72,5 @@ Short term:
 Long term:
 
 - Study `Vendor/ghostty/macos` and `GhosttyKit.xcframework` generation.
-- Keep all full libghostty/GhosttyKit calls isolated in `LibGhosttyTerminalEngine`.
+- Keep all full libghostty/GhosttyKit calls isolated in `GhosttyVTBridge`.
 - Do not let UI/product code depend on Ghostty C/Zig APIs directly.

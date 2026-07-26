@@ -82,4 +82,4 @@ App 层只应触达以上协议与值类型。触达 `GhosttyVTBridge`、C 头�
 - `TerminalInputRouter` — 输入路径现由 `TerminalInputStateMachine` + `TerminalSurfaceRegistry` 的 handler 承接。
 - `WorkspaceManager` / `WorkspaceTemplate` — 工作区职责收敛进 `PaneWorkspaceController`。
 
-引用了这些名字的旧文档（`guide.md`、`docs/architecture/terminal-core-positioning.md`）在这些点上已过期，以当前代码为准。
+曾引用这些名字的过时文档（`guide.md`、`docs/architecture/terminal-core-positioning.md`）已删除；任何残留提及以当前代码为准。

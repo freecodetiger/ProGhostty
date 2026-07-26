@@ -147,4 +147,4 @@ PROGHOSTTY_RENDER_DEBUG=1 .build/arm64-apple-macosx/release/ProGhostty.app/Conte
 ## 现状备注（避免踩到过期文档）
 
 - 项目正按 `.claude/ARCHITECTURE_PLAN.md` 增量重构（拆 `AppModel` / `PTYGridView`、收敛像素滚动）。骨架健康，**不重写**。
-- 已删除的旧类型：`LibGhosttyTerminalEngine`、`TerminalInputRouter`、`WorkspaceManager`、`WorkspaceTemplate`。部分老文档（`guide.md`、`docs/architecture/terminal-core-positioning.md`）仍提到它们——**以当前代码和本文件为准**。
+- 已删除的旧类型：`LibGhosttyTerminalEngine`、`TerminalInputRouter`、`WorkspaceManager`、`WorkspaceTemplate`。若任何文档仍提到它们——**以当前代码和本文件为准**（曾经点名的过时文档 `guide.md`、`docs/architecture/terminal-core-positioning.md` 已删除）。

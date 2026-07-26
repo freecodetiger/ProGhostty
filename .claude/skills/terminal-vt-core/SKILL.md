@@ -69,4 +69,4 @@ PTY 字节
 
 ## 深入参考
 
-`docs/architecture/terminal-core-positioning.md`（产品方向；注意 `LibGhosttyTerminalEngine` 已过期）、`docs/libghostty-vt.md`（vendored 构建）、`docs/architecture/ghostty-html-compatibility.md`。测试：`GhosttyVTBridgeTests`、`OscParserTests`、`PTYLaunchTests`、`TerminalInputStateMachineTests`、`GhosttyHTMLAttributedAdapterTests`。
+`CLAUDE.md`（产品方向与核心原则）、`docs/architecture/ownership-map.md`（职责归属）、`docs/libghostty-vt.md`（vendored 构建）、`docs/architecture/ghostty-html-compatibility.md`。测试：`GhosttyVTBridgeTests`、`OscParserTests`、`PTYLaunchTests`、`TerminalInputStateMachineTests`、`GhosttyHTMLAttributedAdapterTests`。
