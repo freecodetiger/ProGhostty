@@ -347,7 +347,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         host.addSubview(titlebarControlsStack, positioned: .above, relativeTo: nil)
         titlebarControlsConstraints = [
           titlebarControlsStack.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-          titlebarControlsStack.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
+          titlebarModuleCenterY(for: titlebarControlsStack, in: window, host: host),
           titlebarControlsStack.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
         ]
         NSLayoutConstraint.activate(titlebarControlsConstraints)
@@ -360,8 +360,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         host.addSubview(subtitleLabel, positioned: .above, relativeTo: nil)
         subtitleConstraints = [
           subtitleLabel.centerXAnchor.constraint(equalTo: host.centerXAnchor),
-          subtitleLabel.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
-          subtitleLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
+          titlebarModuleCenterY(for: subtitleLabel, in: window, host: host),
           subtitleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: host.leadingAnchor, constant: 120),
           subtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: titlebarControlsStack.leadingAnchor, constant: -12),
         ]
@@ -376,8 +375,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         host.addSubview(paneLabelLabel, positioned: .above, relativeTo: nil)
         paneLabelConstraints = [
           paneLabelLabel.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 80),
-          paneLabelLabel.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
-          paneLabelLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
+          titlebarModuleCenterY(for: paneLabelLabel, in: window, host: host),
           paneLabelLabel.trailingAnchor.constraint(lessThanOrEqualTo: subtitleLabel.leadingAnchor, constant: -12),
         ]
         NSLayoutConstraint.activate(paneLabelConstraints)
@@ -449,6 +447,16 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
           overlayHost.addSubview(directChild, positioned: .above, relativeTo: nil)
         }
       }
+    }
+
+    /// Vertically centers a titlebar module on the traffic-light buttons so
+    /// text and buttons share one optical line regardless of titlebar height.
+    /// Falls back to the old fixed top inset when no close button exists.
+    private func titlebarModuleCenterY(for view: NSView, in window: NSWindow, host: NSView) -> NSLayoutConstraint {
+      if let closeButton = window.standardWindowButton(.closeButton) {
+        return view.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor)
+      }
+      return view.topAnchor.constraint(equalTo: host.topAnchor, constant: 5)
     }
 
     private func titlebarHost(in window: NSWindow) -> NSView? {
