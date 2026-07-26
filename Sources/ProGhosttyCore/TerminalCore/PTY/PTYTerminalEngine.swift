@@ -900,18 +900,6 @@ struct GridCoordinate: Comparable {
   }
 }
 
-private struct GridSelectionPoint: Comparable {
-  var absoluteRow: Int
-  var col: Int
-
-  static func < (lhs: GridSelectionPoint, rhs: GridSelectionPoint) -> Bool {
-    if lhs.absoluteRow == rhs.absoluteRow {
-      return lhs.col < rhs.col
-    }
-    return lhs.absoluteRow < rhs.absoluteRow
-  }
-}
-
 public class PTYGridView: NSView {
   private static let selectionAutoScrollEdgeInset: CGFloat = 24
   private static let selectionAutoScrollInterval: TimeInterval = 1.0 / 15.0
@@ -1025,8 +1013,7 @@ public class PTYGridView: NSView {
   private(set) public var maxDrawDuration: TimeInterval = 0
   private var totalDrawDuration: TimeInterval = 0
   private var drawCount = 0
-  private var selectionAnchor: GridSelectionPoint?
-  private var selectionHead: GridSelectionPoint?
+  private var selection = GridSelectionModel()
   private var isDraggingSelectionStorage = false
   private var selectionAutoScrollTimer: Timer?
   private var selectionAutoScrollDirection = 0
@@ -2036,8 +2023,7 @@ public class PTYGridView: NSView {
     let oldDirtyRects = selectionDirtyRects()
     let geometry = renderedGeometry()
     let point = geometry?.selectionPoint(at: eventPoint)
-    selectionAnchor = point
-    selectionHead = point
+    selection.begin(at: point)
     isDraggingSelectionStorage = point != nil
     invalidateSelectionRects(oldDirtyRects)
   }
@@ -2119,8 +2105,7 @@ public class PTYGridView: NSView {
       pendingLinkClick = nil
       // Clear the empty anchor-only selection created in mouseDown so it doesn't
       // linger as a zero-width selection under the popover.
-      selectionAnchor = nil
-      selectionHead = nil
+      selection.clear()
       presentLinkPopover(for: pending.hit.target, at: pending.origin)
     }
     super.mouseUp(with: event)
@@ -3230,10 +3215,10 @@ public class PTYGridView: NSView {
 
   private func updateSelectionHead(at point: NSPoint) {
     guard let geometry = renderedGeometry() else {
-      selectionHead = nil
+      selection.head = nil
       return
     }
-    selectionHead = geometry.selectionPoint(at: clampedSelectionPoint(point, geometry: geometry))
+    selection.head = geometry.selectionPoint(at: clampedSelectionPoint(point, geometry: geometry))
   }
 
   private func clampedSelectionPoint(_ point: NSPoint, geometry: RenderedGridGeometry) -> NSPoint {
@@ -3501,28 +3486,11 @@ public class PTYGridView: NSView {
   }
 
   private func normalizedSelectionPointRange() -> (lower: GridSelectionPoint, upper: GridSelectionPoint)? {
-    guard let anchor = selectionAnchor, let head = selectionHead, anchor != head else { return nil }
-    if anchor < head {
-      return (anchor, head)
-    }
-    return (head, anchor)
+    selection.normalizedPointRange()
   }
 
   private func normalizedSelectionRange(in geometry: RenderedGridGeometry) -> (lower: GridCoordinate, upper: GridCoordinate)? {
-    guard let range = normalizedSelectionPointRange(), geometry.frame.rows > 0 else { return nil }
-    let firstAbsoluteRow = geometry.absoluteBaseRow
-    let lastAbsoluteRow = geometry.absoluteBaseRow + geometry.frame.rows - 1
-    let lowerAbsoluteRow = max(range.lower.absoluteRow, firstAbsoluteRow)
-    let upperAbsoluteRow = min(range.upper.absoluteRow, lastAbsoluteRow)
-    guard lowerAbsoluteRow <= upperAbsoluteRow else { return nil }
-
-    let lowerCol = lowerAbsoluteRow == range.lower.absoluteRow ? range.lower.col : 0
-    let upperCol = upperAbsoluteRow == range.upper.absoluteRow ? range.upper.col : max(0, geometry.frame.cols - 1)
-    guard lowerCol <= upperCol || lowerAbsoluteRow < upperAbsoluteRow else { return nil }
-    return (
-      GridCoordinate(row: lowerAbsoluteRow - geometry.absoluteBaseRow, col: lowerCol),
-      GridCoordinate(row: upperAbsoluteRow - geometry.absoluteBaseRow, col: upperCol)
-    )
+    selection.normalizedRange(in: geometry)
   }
 
   private func isSelected(
@@ -3530,8 +3498,7 @@ public class PTYGridView: NSView {
     col: Int,
     in range: (lower: GridCoordinate, upper: GridCoordinate)
   ) -> Bool {
-    let coordinate = GridCoordinate(row: row, col: col)
-    return coordinate >= range.lower && coordinate <= range.upper
+    GridSelectionModel.isSelected(row: row, col: col, in: range)
   }
 
   private static func cellSize(for font: NSFont) -> CGSize {
@@ -3761,8 +3728,10 @@ public struct GridMarkedTextOverlay: Equatable, Sendable {
 
 extension PTYGridView {
   func testSetSelection(anchor: GridSelectionCoordinate, head: GridSelectionCoordinate) {
-    selectionAnchor = GridSelectionPoint(absoluteRow: anchor.row, col: anchor.col)
-    selectionHead = GridSelectionPoint(absoluteRow: head.row, col: head.col)
+    selection = GridSelectionModel(
+      anchor: GridSelectionPoint(absoluteRow: anchor.row, col: anchor.col),
+      head: GridSelectionPoint(absoluteRow: head.row, col: head.col)
+    )
   }
 }
 
