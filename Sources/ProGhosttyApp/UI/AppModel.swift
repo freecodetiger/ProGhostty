@@ -505,7 +505,7 @@ final class AppModel: ObservableObject {
   }
 
   var activeTitlebarLabel: String {
-    compactTitlebarTitle(activeWorkspaceTitle)
+    TitleFormatting.compactTitlebarTitle(activeWorkspaceTitle)
   }
 
   var activeTitlebarTooltip: String? {
@@ -528,7 +528,7 @@ final class AppModel: ObservableObject {
   }
 
   var activePaneTitlebarLabel: String? {
-    guard let cwd = selectedCwd, let component = compactPathComponent(cwd) else { return nil }
+    guard let cwd = selectedCwd, let component = TitleFormatting.compactPathComponent(cwd) else { return nil }
     return "📁 \(component)"
   }
 
@@ -1001,7 +1001,7 @@ final class AppModel: ObservableObject {
       requestedRootPath: rootPath,
       defaultWorkingDirectory: settings.defaultWorkingDirectory
     )
-    let workspace = Workspace(name: normalizedWorkspaceName(name), rootPath: resolvedRootPath)
+    let workspace = Workspace(name: TitleFormatting.normalizedWorkspaceName(name), rootPath: resolvedRootPath)
     try? workspaceStore?.save(workspace)
     refreshWorkspaces()
     createAndActivateWorkspace(workspace: workspace)
@@ -1045,7 +1045,7 @@ final class AppModel: ObservableObject {
   }
 
   func renameWorkspaceFromSwitcher(_ workspaceListID: UUID, to name: String) {
-    let nextName = normalizedWorkspaceName(name)
+    let nextName = TitleFormatting.normalizedWorkspaceName(name)
     if let runtimeIndex = workspaceRuntimes.firstIndex(where: { runtime in
       runtime.workspace?.id == workspaceListID || runtime.id == workspaceListID
     }) {
@@ -1387,36 +1387,6 @@ final class AppModel: ObservableObject {
         self.titlebarToast = nil
       }
     }
-  }
-
-  private func compactTitlebarTitle(_ title: String) -> String {
-    let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return "ProGhostty" }
-    return compactPathComponent(trimmed) ?? trimmed
-  }
-
-  private func compactPathComponent(_ path: String?) -> String? {
-    guard let path, !path.isEmpty else { return nil }
-    if path == "/" { return "/" }
-    if path == NSHomeDirectory() { return "~" }
-    guard path.hasPrefix("/") || path.hasPrefix("~") else { return path }
-    let component = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath).lastPathComponent
-    return component.isEmpty ? path : component
-  }
-
-  private func displayPath(_ path: String?) -> String? {
-    guard let path, !path.isEmpty else { return nil }
-    let home = NSHomeDirectory()
-    if path == home { return "~" }
-    if path.hasPrefix(home + "/") {
-      return "~" + path.dropFirst(home.count)
-    }
-    return path
-  }
-
-  private func normalizedWorkspaceName(_ name: String) -> String {
-    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? "Workspace" : trimmed
   }
 
   private var effectiveThemeName: String {
