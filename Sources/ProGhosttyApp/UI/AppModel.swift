@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import ProGhosttyCore
 import SwiftUI
@@ -42,8 +43,6 @@ final class AppModel: ObservableObject {
   @Published var activeWorkspaceID: UUID?
   @Published var isWorkspaceSwitcherPresented = false
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
-  @Published var titlebarToast: TitlebarToast?
-  @Published var inAppNotification: InAppNotification?
   @Published var commandLine = ""
   @Published var sideInputStore = TerminalSideInputStore.empty
   @Published var workspaces: [Workspace] = []
@@ -55,17 +54,42 @@ final class AppModel: ObservableObject {
   }
   @Published var isCheckingForUpdates = false
   @Published var systemNotificationsAuthorized = true
-  @Published var shellIntegrationState = "partial"
-  @Published var agentNotifyHooksStatus = AgentNotifyHookStatus(
-    scriptsReady: false,
-    codexConfigured: false,
-    claudeConfigured: false,
-    detail: nil
+
+  /// Notification presentation state lives in NotificationPresenter (debt
+  /// spec 3-7); objectWillChange is chained in init so these forwarders keep
+  /// driving SwiftUI exactly like the former @Published properties.
+  let notifications = NotificationPresenter()
+
+  var titlebarToast: TitlebarToast? { notifications.titlebarToast }
+  var inAppNotification: InAppNotification? { notifications.inAppNotification }
+  var shellIntegrationState: String {
+    get { notifications.statusLine }
+    set { notifications.statusLine = newValue }
+  }
+  /// Install/uninstall gate for the notifications toggle lives in
+  /// AgentNotifyGateController (debt spec 3-9); objectWillChange is chained in
+  /// init and these forwarders keep the SettingsView reads/bindings working.
+  private(set) lazy var agentNotifyGate = AgentNotifyGateController(
+    hookManager: agentNotificationHookManager,
+    setNotificationsEnabledSetting: { [weak self] enabled in
+      self?.settings.notificationsEnabled = enabled
+    },
+    didEnableNotifications: { [weak self] in
+      self?.requestNotificationAuthorizationOnEnable()
+    }
   )
-  @Published var agentNotifyHookError: String?
-  @Published var isInstallingAgentNotifyHooks = false
-  @Published var showAgentNotifyInstallSheet = false
-  @Published var showAgentNotifyUninstallSheet = false
+
+  var agentNotifyHooksStatus: AgentNotifyHookStatus { agentNotifyGate.hooksStatus }
+  var agentNotifyHookError: String? { agentNotifyGate.hookError }
+  var isInstallingAgentNotifyHooks: Bool { agentNotifyGate.isInstalling }
+  var showAgentNotifyInstallSheet: Bool {
+    get { agentNotifyGate.showInstallSheet }
+    set { agentNotifyGate.showInstallSheet = newValue }
+  }
+  var showAgentNotifyUninstallSheet: Bool {
+    get { agentNotifyGate.showUninstallSheet }
+    set { agentNotifyGate.showUninstallSheet = newValue }
+  }
 
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
@@ -84,8 +108,7 @@ final class AppModel: ObservableObject {
     window === self?.utilityWindows.settingsWindow
   }
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
-  private var titlebarToastTask: Task<Void, Never>?
-  private var inAppNotificationTask: Task<Void, Never>?
+  private var cancellables: Set<AnyCancellable> = []
   private let paneSplitAvailabilityController = PaneSplitAvailabilityController()
   /// Memoized bare-token existence checks, keyed by "cwd\0token". Bounds the
   /// per-mouse-move disk stats the clickable-path detector would otherwise do.
@@ -165,6 +188,13 @@ final class AppModel: ObservableObject {
       self?.terminalFileInfo(target, from: sourceSession)
     }
     AppModel.shared = self
+    // Forwarded presenter/controller state must keep publishing through AppModel.
+    notifications.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+    agentNotifyGate.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
     applyTerminalAppearance()
 
     Task { await consumeEvents() }
@@ -189,80 +219,34 @@ final class AppModel: ObservableObject {
     NSWorkspace.shared.open(url)
   }
 
-  // MARK: Agent notify hooks (Settings gate)
+  // MARK: Agent notify hooks (Settings gate) — thin forwarders → AgentNotifyGateController
 
   func refreshAgentNotifyHookStatus() {
-    agentNotifyHooksStatus = agentNotificationHookManager.status()
+    agentNotifyGate.refreshStatus()
   }
 
-  /// Settings toggle entry: enabling requires ready hooks or an install sheet.
   func setNotificationsEnabled(_ enabled: Bool) {
-    if enabled {
-      refreshAgentNotifyHookStatus()
-      if agentNotifyHooksStatus.isReady {
-        settings.notificationsEnabled = true
-        requestNotificationAuthorizationOnEnable()
-      } else {
-        showAgentNotifyInstallSheet = true
-      }
-    } else {
-      refreshAgentNotifyHookStatus()
-      let hadHooks = agentNotifyHooksStatus.isReady
-        || agentNotifyHooksStatus.isPartial
-        || agentNotifyHooksStatus.scriptsReady
-      settings.notificationsEnabled = false
-      if hadHooks {
-        showAgentNotifyUninstallSheet = true
-      }
-    }
+    agentNotifyGate.setNotificationsEnabled(enabled)
   }
 
   func confirmInstallAgentNotifyHooks() {
-    guard !isInstallingAgentNotifyHooks else { return }
-    isInstallingAgentNotifyHooks = true
-    agentNotifyHookError = nil
-    defer { isInstallingAgentNotifyHooks = false }
-    do {
-      try agentNotificationHookManager.install()
-      refreshAgentNotifyHookStatus()
-      showAgentNotifyInstallSheet = false
-      if agentNotifyHooksStatus.isReady {
-        settings.notificationsEnabled = true
-        requestNotificationAuthorizationOnEnable()
-      } else {
-        agentNotifyHookError = agentNotifyHooksStatus.detail
-          ?? "Hooks installed but not detected as ready"
-      }
-    } catch {
-      agentNotifyHookError = error.localizedDescription
-    }
+    agentNotifyGate.confirmInstall()
   }
 
   func cancelInstallAgentNotifyHooks() {
-    showAgentNotifyInstallSheet = false
+    agentNotifyGate.cancelInstall()
   }
 
   func confirmUninstallAgentNotifyHooks(removeHooks: Bool) {
-    showAgentNotifyUninstallSheet = false
-    guard removeHooks else {
-      refreshAgentNotifyHookStatus()
-      return
-    }
-    do {
-      try agentNotificationHookManager.uninstall(removeScripts: true)
-      agentNotifyHookError = nil
-    } catch {
-      agentNotifyHookError = error.localizedDescription
-    }
-    refreshAgentNotifyHookStatus()
+    agentNotifyGate.confirmUninstall(removeHooks: removeHooks)
   }
 
   func cancelUninstallAgentNotifyHooks() {
-    showAgentNotifyUninstallSheet = false
+    agentNotifyGate.cancelUninstall()
   }
 
   func repairAgentNotifyHooks() {
-    showAgentNotifyInstallSheet = true
+    agentNotifyGate.repair()
   }
 
   private func requestNotificationAuthorizationOnEnable() {
@@ -515,62 +499,27 @@ final class AppModel: ObservableObject {
     AppText(language: settings.appLanguage)
   }
 
-  var appColorScheme: ColorScheme? {
-    guard !settings.followSystemAppearance else { return nil }
-    return ThemeManager.isDarkFamily(settings.themeName) ? .dark : .light
+  /// Live appearance derivation: settings + the current system light/dark
+  /// state, everything else computed by AppearanceViewModel (debt spec 3-6).
+  var appearance: AppearanceViewModel {
+    let match = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
+    return AppearanceViewModel(settings: settings, systemIsLight: match == .aqua)
   }
 
-  var terminalPalette: TerminalSurfacePalette {
-    ThemeManager.terminalPalette(for: effectiveThemeName)
-  }
-
-  var usesDarkAppearance: Bool {
-    ThemeManager.isDarkFamily(effectiveThemeName)
-  }
-
-  var terminalBackgroundColor: NSColor {
-    terminalPalette.background
-  }
-
-  var configurationColorScheme: ColorScheme {
-    usesDarkAppearance ? .dark : .light
-  }
-
-  var settingsThemePalette: ProGhosttySettingsThemeColors {
-    ProGhosttySettingsThemePalette.palette(for: effectiveThemeName)
-  }
-
-  var configurationWindowBackgroundColor: NSColor {
-    settingsThemePalette.windowBackground
-  }
-
-  var configurationBarBackgroundColor: NSColor {
-    settingsThemePalette.footerBackground
-  }
-
-  var configurationSectionBackgroundColor: NSColor {
-    settingsThemePalette.controlBackground
-  }
-
-  var configurationTextBackgroundColor: NSColor {
-    settingsThemePalette.textFieldBackground
-  }
-
-  var configurationSeparatorColor: NSColor {
-    settingsThemePalette.separator
-  }
-
-  var configurationPrimaryTextColor: NSColor {
-    settingsThemePalette.primaryText
-  }
-
-  var configurationSecondaryTextColor: NSColor {
-    settingsThemePalette.secondaryText
-  }
-
-  var configurationTertiaryTextColor: NSColor {
-    settingsThemePalette.tertiaryText
-  }
+  var appColorScheme: ColorScheme? { appearance.appColorScheme }
+  var terminalPalette: TerminalSurfacePalette { appearance.terminalPalette }
+  var usesDarkAppearance: Bool { appearance.usesDarkAppearance }
+  var terminalBackgroundColor: NSColor { appearance.terminalBackgroundColor }
+  var configurationColorScheme: ColorScheme { appearance.configurationColorScheme }
+  var settingsThemePalette: ProGhosttySettingsThemeColors { appearance.settingsThemePalette }
+  var configurationWindowBackgroundColor: NSColor { appearance.configurationWindowBackgroundColor }
+  var configurationBarBackgroundColor: NSColor { appearance.configurationBarBackgroundColor }
+  var configurationSectionBackgroundColor: NSColor { appearance.configurationSectionBackgroundColor }
+  var configurationTextBackgroundColor: NSColor { appearance.configurationTextBackgroundColor }
+  var configurationSeparatorColor: NSColor { appearance.configurationSeparatorColor }
+  var configurationPrimaryTextColor: NSColor { appearance.configurationPrimaryTextColor }
+  var configurationSecondaryTextColor: NSColor { appearance.configurationSecondaryTextColor }
+  var configurationTertiaryTextColor: NSColor { appearance.configurationTertiaryTextColor }
 
   var selectedSessionID: TerminalSessionID? {
     activeWorkspace?.selectedSessionID(focusStore: focusStore)
@@ -1073,9 +1022,7 @@ final class AppModel: ObservableObject {
     switch titlebarToast.style {
     case .update(let url):
       NSWorkspace.shared.open(url)
-      self.titlebarToast = nil
-      titlebarToastTask?.cancel()
-      titlebarToastTask = nil
+      notifications.dismissTitlebarToast()
     case .success, .info, .error:
       break
     }
@@ -1084,9 +1031,7 @@ final class AppModel: ObservableObject {
   func openInAppNotificationAction() {
     guard let notification = inAppNotification else { return }
     selectSession(notification.session)
-    inAppNotification = nil
-    inAppNotificationTask?.cancel()
-    inAppNotificationTask = nil
+    notifications.dismissInAppNotification()
     restoreTerminalKeyboardFocus()
   }
 
@@ -1187,36 +1132,11 @@ final class AppModel: ObservableObject {
     style: TitlebarToast.Style,
     lifetime: ProGhosttyTitlebarToastLifetime = .transient(1.8)
   ) {
-    titlebarToastTask?.cancel()
-    titlebarToastTask = nil
-    let toast = TitlebarToast(message: message, style: style, lifetime: lifetime)
-    titlebarToast = toast
-    guard let delay = lifetime.dismissDelay else { return }
-    titlebarToastTask = Task { [weak self] in
-      try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-      // Cancelling a Task does NOT stop code after the (throwing) sleep — `try?`
-      // swallows the CancellationError and execution falls through. Without this
-      // guard a rapid second toast would cancel the first task, which then
-      // immediately cleared the *new* toast (it showed for one frame). Bail if
-      // cancelled, and only clear if this is still the toast we scheduled.
-      if Task.isCancelled { return }
-      await MainActor.run {
-        guard let self, self.titlebarToast?.id == toast.id else { return }
-        self.titlebarToast = nil
-      }
-    }
+    notifications.showTitlebarToast(message, style: style, lifetime: lifetime)
   }
 
   private var effectiveThemeName: String {
-    let appearance = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
-    let systemIsLight = appearance == .aqua
-    return ThemeManager.effectiveThemeName(
-      themeName: settings.themeName,
-      followSystemAppearance: settings.followSystemAppearance,
-      softDarkPreferred: settings.softDarkPreferred,
-      softLightPreferred: settings.softLightPreferred,
-      systemIsLight: systemIsLight
-    )
+    appearance.effectiveThemeName
   }
 
   func closeUtilityOverlays() {
@@ -1585,23 +1505,12 @@ final class AppModel: ObservableObject {
   }
 
   private func showInAppNotification(_ notification: TerminalDesktopNotification, session: TerminalSessionID) {
-    let next = InAppNotification(
+    notifications.showInAppNotification(InAppNotification(
       title: notification.title,
       body: notification.body,
       session: session,
       source: notification.source
-    )
-    inAppNotification = next
-    inAppNotificationTask?.cancel()
-    inAppNotificationTask = Task { [weak self, id = next.id] in
-      try? await Task.sleep(nanoseconds: 4_000_000_000)
-      guard !Task.isCancelled else { return }
-      await MainActor.run {
-        guard self?.inAppNotification?.id == id else { return }
-        self?.inAppNotification = nil
-        self?.inAppNotificationTask = nil
-      }
-    }
+    ))
   }
 
   private func updateWorkspaceForSession(_ id: TerminalSessionID, persist: Bool = false, _ update: (inout WorkspaceRuntime) -> Void) {
