@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import ProGhosttyCore
 import SwiftUI
@@ -42,8 +43,6 @@ final class AppModel: ObservableObject {
   @Published var activeWorkspaceID: UUID?
   @Published var isWorkspaceSwitcherPresented = false
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
-  @Published var titlebarToast: TitlebarToast?
-  @Published var inAppNotification: InAppNotification?
   @Published var commandLine = ""
   @Published var sideInputStore = TerminalSideInputStore.empty
   @Published var workspaces: [Workspace] = []
@@ -55,7 +54,18 @@ final class AppModel: ObservableObject {
   }
   @Published var isCheckingForUpdates = false
   @Published var systemNotificationsAuthorized = true
-  @Published var shellIntegrationState = "partial"
+
+  /// Notification presentation state lives in NotificationPresenter (debt
+  /// spec 3-7); objectWillChange is chained in init so these forwarders keep
+  /// driving SwiftUI exactly like the former @Published properties.
+  let notifications = NotificationPresenter()
+
+  var titlebarToast: TitlebarToast? { notifications.titlebarToast }
+  var inAppNotification: InAppNotification? { notifications.inAppNotification }
+  var shellIntegrationState: String {
+    get { notifications.statusLine }
+    set { notifications.statusLine = newValue }
+  }
   @Published var agentNotifyHooksStatus = AgentNotifyHookStatus(
     scriptsReady: false,
     codexConfigured: false,
@@ -84,8 +94,7 @@ final class AppModel: ObservableObject {
     window === self?.utilityWindows.settingsWindow
   }
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
-  private var titlebarToastTask: Task<Void, Never>?
-  private var inAppNotificationTask: Task<Void, Never>?
+  private var cancellables: Set<AnyCancellable> = []
   private let paneSplitAvailabilityController = PaneSplitAvailabilityController()
   /// Memoized bare-token existence checks, keyed by "cwd\0token". Bounds the
   /// per-mouse-move disk stats the clickable-path detector would otherwise do.
@@ -165,6 +174,10 @@ final class AppModel: ObservableObject {
       self?.terminalFileInfo(target, from: sourceSession)
     }
     AppModel.shared = self
+    // Forwarded presenter state must keep publishing through AppModel.
+    notifications.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
     applyTerminalAppearance()
 
     Task { await consumeEvents() }
@@ -1038,9 +1051,7 @@ final class AppModel: ObservableObject {
     switch titlebarToast.style {
     case .update(let url):
       NSWorkspace.shared.open(url)
-      self.titlebarToast = nil
-      titlebarToastTask?.cancel()
-      titlebarToastTask = nil
+      notifications.dismissTitlebarToast()
     case .success, .info, .error:
       break
     }
@@ -1049,9 +1060,7 @@ final class AppModel: ObservableObject {
   func openInAppNotificationAction() {
     guard let notification = inAppNotification else { return }
     selectSession(notification.session)
-    inAppNotification = nil
-    inAppNotificationTask?.cancel()
-    inAppNotificationTask = nil
+    notifications.dismissInAppNotification()
     restoreTerminalKeyboardFocus()
   }
 
@@ -1152,24 +1161,7 @@ final class AppModel: ObservableObject {
     style: TitlebarToast.Style,
     lifetime: ProGhosttyTitlebarToastLifetime = .transient(1.8)
   ) {
-    titlebarToastTask?.cancel()
-    titlebarToastTask = nil
-    let toast = TitlebarToast(message: message, style: style, lifetime: lifetime)
-    titlebarToast = toast
-    guard let delay = lifetime.dismissDelay else { return }
-    titlebarToastTask = Task { [weak self] in
-      try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-      // Cancelling a Task does NOT stop code after the (throwing) sleep — `try?`
-      // swallows the CancellationError and execution falls through. Without this
-      // guard a rapid second toast would cancel the first task, which then
-      // immediately cleared the *new* toast (it showed for one frame). Bail if
-      // cancelled, and only clear if this is still the toast we scheduled.
-      if Task.isCancelled { return }
-      await MainActor.run {
-        guard let self, self.titlebarToast?.id == toast.id else { return }
-        self.titlebarToast = nil
-      }
-    }
+    notifications.showTitlebarToast(message, style: style, lifetime: lifetime)
   }
 
   private var effectiveThemeName: String {
@@ -1542,23 +1534,12 @@ final class AppModel: ObservableObject {
   }
 
   private func showInAppNotification(_ notification: TerminalDesktopNotification, session: TerminalSessionID) {
-    let next = InAppNotification(
+    notifications.showInAppNotification(InAppNotification(
       title: notification.title,
       body: notification.body,
       session: session,
       source: notification.source
-    )
-    inAppNotification = next
-    inAppNotificationTask?.cancel()
-    inAppNotificationTask = Task { [weak self, id = next.id] in
-      try? await Task.sleep(nanoseconds: 4_000_000_000)
-      guard !Task.isCancelled else { return }
-      await MainActor.run {
-        guard self?.inAppNotification?.id == id else { return }
-        self?.inAppNotification = nil
-        self?.inAppNotificationTask = nil
-      }
-    }
+    ))
   }
 
   private func updateWorkspaceForSession(_ id: TerminalSessionID, persist: Bool = false, _ update: (inout WorkspaceRuntime) -> Void) {
