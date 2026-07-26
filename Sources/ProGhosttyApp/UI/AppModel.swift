@@ -80,8 +80,10 @@ final class AppModel: ObservableObject {
   private let settingsStore: SettingsStore
   private let terminalActionDispatcher = TerminalActionDispatcher()
   private let utilityWindows = UtilityWindowController()
+  private lazy var windowSizing = TerminalWindowSizingController { [weak self] window in
+    window === self?.utilityWindows.settingsWindow
+  }
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
-  private var rememberedWorkspaceContentSizes: [UUID: NSSize] = [:]
   private var titlebarToastTask: Task<Void, Never>?
   private var inAppNotificationTask: Task<Void, Never>?
   private let paneSplitAvailabilityController = PaneSplitAvailabilityController()
@@ -1019,97 +1021,20 @@ final class AppModel: ObservableObject {
   }
 
   private func rememberActiveWorkspaceContentSize() {
-    guard
-      let activeWorkspaceID,
-      let window = terminalWindow(),
-      let contentSize = terminalWindowContentSize(window)
-    else {
-      return
-    }
-    rememberedWorkspaceContentSizes[activeWorkspaceID] = contentSize
+    guard let activeWorkspaceID else { return }
+    windowSizing.rememberContentSize(for: activeWorkspaceID)
   }
 
   private func expandTerminalWindowIfNeeded(for runtime: WorkspaceRuntime) {
-    guard let window = terminalWindow(), let currentSize = terminalWindowContentSize(window) else {
-      return
-    }
-
-    let minimum = minimumContentSize(for: runtime.layout.root)
-    applyTerminalWindowMinimumSize(to: window, minimum: minimum)
-    let target = SplitRatioLayout.workspaceSwitchTargetContentSize(
-      current: contentSize(from: currentSize),
-      remembered: rememberedWorkspaceContentSizes[runtime.id].map(contentSize(from:)),
-      layoutMinimum: minimum
-    )
-
-    if target.width > Double(currentSize.width) + 0.5 || target.height > Double(currentSize.height) + 0.5 {
-      window.setContentSize(nsSize(from: target))
-    }
+    windowSizing.expandWindowIfNeeded(for: runtime.layout.root, workspaceID: runtime.id)
   }
 
   private func applyTerminalWindowMinimumContentSize(for runtime: WorkspaceRuntime) {
-    guard let window = terminalWindow() else { return }
-    applyTerminalWindowMinimumSize(to: window, minimum: minimumContentSize(for: runtime.layout.root))
-  }
-
-  private func minimumContentSize(for root: PaneNode) -> SplitRatioLayout.ContentSize {
-    SplitRatioLayout.windowMinimumContentSize(
-      for: root,
-      baseWidth: ProGhosttyWindowSizing.minimumContentWidth,
-      baseHeight: ProGhosttyWindowSizing.minimumContentHeight
-    )
-  }
-
-  private func applyTerminalWindowMinimumSize(
-    to window: NSWindow,
-    minimum: SplitRatioLayout.ContentSize
-  ) {
-    let contentSize = nsSize(from: minimum)
-    window.contentMinSize = contentSize
-    window.minSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: contentSize)).size
-  }
-
-  private func terminalWindow() -> NSWindow? {
-    func isTerminalCandidate(_ window: NSWindow) -> Bool {
-      guard window.isVisible else { return false }
-      if window === utilityWindows.settingsWindow { return false }
-      return true
-    }
-
-    if let keyWindow = NSApp.keyWindow, isTerminalCandidate(keyWindow) {
-      return keyWindow
-    }
-    if let mainWindow = NSApp.mainWindow, isTerminalCandidate(mainWindow) {
-      return mainWindow
-    }
-    return NSApp.windows.first(where: isTerminalCandidate)
-  }
-
-  private func terminalWindowContentSize(_ window: NSWindow) -> NSSize? {
-    if let contentView = window.contentView {
-      let contentSize = contentView.bounds.size
-      if contentSize.width > 0, contentSize.height > 0 {
-        return contentSize
-      }
-    }
-    let size = window.contentLayoutRect.size
-    return size.width > 0 && size.height > 0 ? size : nil
+    windowSizing.applyMinimumContentSize(for: runtime.layout.root)
   }
 
   private func terminalWindowMaximumContentSize() -> NSSize? {
-    guard let window = terminalWindow(), let screen = window.screen ?? NSScreen.main else {
-      return nil
-    }
-    let size = window.contentRect(forFrameRect: screen.visibleFrame).size
-    return size.width > 0 && size.height > 0 ? size : nil
-  }
-
-  private func contentSize(from size: NSSize) -> SplitRatioLayout.ContentSize {
-    SplitRatioLayout.ContentSize(width: Double(size.width), height: Double(size.height))
-  }
-
-  private func nsSize(from size: SplitRatioLayout.ContentSize) -> NSSize {
-    NSSize(width: size.width, height: size.height)
+    windowSizing.maximumContentSize()
   }
 
   func checkForUpdates(manual: Bool) async {
@@ -1402,7 +1327,7 @@ final class AppModel: ObservableObject {
       removePaneSplitAvailability(for: runtimePanes)
       workspaceRuntimes.removeAll { $0.id == runtimeID }
       savedLayoutSnapshots[runtimeID] = nil
-      rememberedWorkspaceContentSizes[runtimeID] = nil
+      windowSizing.forgetContentSize(for: runtimeID)
       activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
       if let activeWorkspace {
         applyTerminalWindowMinimumContentSize(for: activeWorkspace)
@@ -1413,7 +1338,7 @@ final class AppModel: ObservableObject {
     removePaneSplitAvailability(for: closed.panes)
     workspaceRuntimes.removeAll { $0.id == closed.workspaceID }
     savedLayoutSnapshots[closed.workspaceID] = nil
-    rememberedWorkspaceContentSizes[closed.workspaceID] = nil
+    windowSizing.forgetContentSize(for: closed.workspaceID)
     activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
     if let activeWorkspace {
       applyTerminalWindowMinimumContentSize(for: activeWorkspace)
