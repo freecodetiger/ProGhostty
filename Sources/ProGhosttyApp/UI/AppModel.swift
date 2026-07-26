@@ -79,12 +79,14 @@ final class AppModel: ObservableObject {
   private let workspaceStore: WorkspaceStore?
   private let settingsStore: SettingsStore
   private let terminalActionDispatcher = TerminalActionDispatcher()
-  private var settingsWindowController: NSWindowController?
+  private let utilityWindows = UtilityWindowController()
+  private lazy var windowSizing = TerminalWindowSizingController { [weak self] window in
+    window === self?.utilityWindows.settingsWindow
+  }
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
-  private var rememberedWorkspaceContentSizes: [UUID: NSSize] = [:]
   private var titlebarToastTask: Task<Void, Never>?
   private var inAppNotificationTask: Task<Void, Never>?
-  private var paneSplitAvailability: [UUID: PaneSplitAvailability] = [:]
+  private let paneSplitAvailabilityController = PaneSplitAvailabilityController()
   /// Memoized bare-token existence checks, keyed by "cwd\0token". Bounds the
   /// per-mouse-move disk stats the clickable-path detector would otherwise do.
   private var bareTokenExistenceCache: [String: (exists: Bool, timestamp: CFTimeInterval)] = [:]
@@ -115,21 +117,6 @@ final class AppModel: ObservableObject {
     var body: String
     var session: TerminalSessionID
     var source: TerminalDesktopNotification.Source
-  }
-
-  private struct PaneSplitAvailability: Equatable {
-    var size: NSSize
-    var canSplitRight: Bool
-    var canSplitDown: Bool
-
-    func allows(axis: TerminalSplitAxis) -> Bool {
-      switch axis {
-      case .horizontal:
-        canSplitRight
-      case .vertical:
-        canSplitDown
-      }
-    }
   }
 
   init(
@@ -403,26 +390,13 @@ final class AppModel: ObservableObject {
 
   func startRenamePane() {
     guard selectedPaneID != nil else { return }
-    let current = activePaneLabel ?? ""
-    let alert = NSAlert()
-    alert.messageText = appText.renamePane
-    alert.informativeText = ""
-    alert.alertStyle = .informational
-    alert.addButton(withTitle: appText.ok)
-    alert.addButton(withTitle: appText.cancel)
-
-    let textField = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
-    textField.stringValue = current
-    textField.font = .systemFont(ofSize: 13)
-    textField.placeholderString = appText.renamePanePlaceholder
-    alert.accessoryView = textField
-    textField.selectText(nil)
-
-    alert.window.initialFirstResponder = textField
-    let response = alert.runModal()
-    if response == .alertFirstButtonReturn {
-      commitRenamePane(textField.stringValue)
-    }
+    guard
+      let name = confirmationPrompts.promptRenamePane(
+        currentLabel: activePaneLabel ?? "",
+        text: appText
+      )
+    else { return }
+    commitRenamePane(name)
   }
 
   func commitRenamePane(_ name: String) {
@@ -505,7 +479,7 @@ final class AppModel: ObservableObject {
   }
 
   var activeTitlebarLabel: String {
-    compactTitlebarTitle(activeWorkspaceTitle)
+    TitleFormatting.compactTitlebarTitle(activeWorkspaceTitle)
   }
 
   var activeTitlebarTooltip: String? {
@@ -528,7 +502,7 @@ final class AppModel: ObservableObject {
   }
 
   var activePaneTitlebarLabel: String? {
-    guard let cwd = selectedCwd, let component = compactPathComponent(cwd) else { return nil }
+    guard let cwd = selectedCwd, let component = TitleFormatting.compactPathComponent(cwd) else { return nil }
     return "📁 \(component)"
   }
 
@@ -684,10 +658,12 @@ final class AppModel: ObservableObject {
     canSplitRight: Bool,
     canSplitDown: Bool
   ) {
-    let availability = PaneSplitAvailability(size: size, canSplitRight: canSplitRight, canSplitDown: canSplitDown)
-    guard paneSplitAvailability[paneID] != availability else { return }
-    paneSplitAvailability[paneID] = availability
-    DebugLog.write("pane split availability pane=\(paneID) size=\(size) right=\(canSplitRight) down=\(canSplitDown)")
+    paneSplitAvailabilityController.update(
+      paneID,
+      size: size,
+      canSplitRight: canSplitRight,
+      canSplitDown: canSplitDown
+    )
   }
 
   func splitPane(_ paneID: UUID, axis: TerminalSplitAxis) {
@@ -744,8 +720,7 @@ final class AppModel: ObservableObject {
   }
 
   private func canSplitPaneInCurrentBounds(_ paneID: UUID, axis: TerminalSplitAxis) -> Bool {
-    guard let availability = paneSplitAvailability[paneID] else { return true }
-    return availability.allows(axis: axis)
+    paneSplitAvailabilityController.canSplit(paneID, axis: axis)
   }
 
   private func rejectSplitForInsufficientSpace(paneID: UUID, axis: TerminalSplitAxis, reason: String) {
@@ -761,64 +736,15 @@ final class AppModel: ObservableObject {
     newPaneID: UUID,
     axis: TerminalSplitAxis
   ) {
-    guard
-      let previous = paneSplitAvailability[originalPaneID],
-      let sizes = childPaneSizesAfterSplit(size: previous.size, axis: axis)
-    else {
-      return
-    }
-    paneSplitAvailability[originalPaneID] = paneSplitAvailability(for: sizes.first)
-    paneSplitAvailability[newPaneID] = paneSplitAvailability(for: sizes.second)
-    DebugLog.write("pane split availability seeded original=\(originalPaneID) new=\(newPaneID) axis=\(axis)")
-  }
-
-  private func childPaneSizesAfterSplit(
-    size: NSSize,
-    axis: TerminalSplitAxis
-  ) -> (first: NSSize, second: NSSize)? {
-    let dividerThickness = 1.0
-    switch axis {
-    case .horizontal:
-      guard let firstWidth = SplitRatioLayout.safeFirstLength(
-        totalLength: Double(size.width),
-        dividerThickness: dividerThickness,
-        ratio: 0.5
-      ) else {
-        return nil
-      }
-      let secondWidth = max(0, Double(size.width) - dividerThickness - firstWidth)
-      return (
-        NSSize(width: firstWidth, height: Double(size.height)),
-        NSSize(width: secondWidth, height: Double(size.height))
-      )
-    case .vertical:
-      guard let firstHeight = SplitRatioLayout.safeFirstLength(
-        totalLength: Double(size.height),
-        dividerThickness: dividerThickness,
-        ratio: 0.5
-      ) else {
-        return nil
-      }
-      let secondHeight = max(0, Double(size.height) - dividerThickness - firstHeight)
-      return (
-        NSSize(width: Double(size.width), height: firstHeight),
-        NSSize(width: Double(size.width), height: secondHeight)
-      )
-    }
-  }
-
-  private func paneSplitAvailability(for size: NSSize) -> PaneSplitAvailability {
-    PaneSplitAvailability(
-      size: size,
-      canSplitRight: SplitRatioLayout.canSplit(totalLength: Double(size.width), dividerThickness: 1),
-      canSplitDown: SplitRatioLayout.canSplit(totalLength: Double(size.height), dividerThickness: 1)
+    paneSplitAvailabilityController.seedAfterSplit(
+      originalPaneID: originalPaneID,
+      newPaneID: newPaneID,
+      axis: axis
     )
   }
 
   private func removePaneSplitAvailability(for panes: [TerminalPane]) {
-    for pane in panes {
-      paneSplitAvailability[pane.paneId] = nil
-    }
+    paneSplitAvailabilityController.remove(for: panes)
   }
 
   private func splitCanFitAvailableScreen(
@@ -882,7 +808,7 @@ final class AppModel: ObservableObject {
       guard let updatedLayout = paneWorkspaceController.workspaceLayout(id: activeWorkspaceID) else { return }
       runtime.layout = updatedLayout
       runtime.cwdBySession[closed.sessionId] = nil
-      paneSplitAvailability[closed.paneId] = nil
+      paneSplitAvailabilityController.remove(paneID: closed.paneId)
       workspaceRuntimes[index] = runtime
       persistWorkspaceRuntime(at: index)
       applyTerminalWindowMinimumContentSize(for: runtime)
@@ -1001,7 +927,7 @@ final class AppModel: ObservableObject {
       requestedRootPath: rootPath,
       defaultWorkingDirectory: settings.defaultWorkingDirectory
     )
-    let workspace = Workspace(name: normalizedWorkspaceName(name), rootPath: resolvedRootPath)
+    let workspace = Workspace(name: TitleFormatting.normalizedWorkspaceName(name), rootPath: resolvedRootPath)
     try? workspaceStore?.save(workspace)
     refreshWorkspaces()
     createAndActivateWorkspace(workspace: workspace)
@@ -1045,7 +971,7 @@ final class AppModel: ObservableObject {
   }
 
   func renameWorkspaceFromSwitcher(_ workspaceListID: UUID, to name: String) {
-    let nextName = normalizedWorkspaceName(name)
+    let nextName = TitleFormatting.normalizedWorkspaceName(name)
     if let runtimeIndex = workspaceRuntimes.firstIndex(where: { runtime in
       runtime.workspace?.id == workspaceListID || runtime.id == workspaceListID
     }) {
@@ -1095,97 +1021,20 @@ final class AppModel: ObservableObject {
   }
 
   private func rememberActiveWorkspaceContentSize() {
-    guard
-      let activeWorkspaceID,
-      let window = terminalWindow(),
-      let contentSize = terminalWindowContentSize(window)
-    else {
-      return
-    }
-    rememberedWorkspaceContentSizes[activeWorkspaceID] = contentSize
+    guard let activeWorkspaceID else { return }
+    windowSizing.rememberContentSize(for: activeWorkspaceID)
   }
 
   private func expandTerminalWindowIfNeeded(for runtime: WorkspaceRuntime) {
-    guard let window = terminalWindow(), let currentSize = terminalWindowContentSize(window) else {
-      return
-    }
-
-    let minimum = minimumContentSize(for: runtime.layout.root)
-    applyTerminalWindowMinimumSize(to: window, minimum: minimum)
-    let target = SplitRatioLayout.workspaceSwitchTargetContentSize(
-      current: contentSize(from: currentSize),
-      remembered: rememberedWorkspaceContentSizes[runtime.id].map(contentSize(from:)),
-      layoutMinimum: minimum
-    )
-
-    if target.width > Double(currentSize.width) + 0.5 || target.height > Double(currentSize.height) + 0.5 {
-      window.setContentSize(nsSize(from: target))
-    }
+    windowSizing.expandWindowIfNeeded(for: runtime.layout.root, workspaceID: runtime.id)
   }
 
   private func applyTerminalWindowMinimumContentSize(for runtime: WorkspaceRuntime) {
-    guard let window = terminalWindow() else { return }
-    applyTerminalWindowMinimumSize(to: window, minimum: minimumContentSize(for: runtime.layout.root))
-  }
-
-  private func minimumContentSize(for root: PaneNode) -> SplitRatioLayout.ContentSize {
-    SplitRatioLayout.windowMinimumContentSize(
-      for: root,
-      baseWidth: ProGhosttyWindowSizing.minimumContentWidth,
-      baseHeight: ProGhosttyWindowSizing.minimumContentHeight
-    )
-  }
-
-  private func applyTerminalWindowMinimumSize(
-    to window: NSWindow,
-    minimum: SplitRatioLayout.ContentSize
-  ) {
-    let contentSize = nsSize(from: minimum)
-    window.contentMinSize = contentSize
-    window.minSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: contentSize)).size
-  }
-
-  private func terminalWindow() -> NSWindow? {
-    func isTerminalCandidate(_ window: NSWindow) -> Bool {
-      guard window.isVisible else { return false }
-      if window === settingsWindowController?.window { return false }
-      return true
-    }
-
-    if let keyWindow = NSApp.keyWindow, isTerminalCandidate(keyWindow) {
-      return keyWindow
-    }
-    if let mainWindow = NSApp.mainWindow, isTerminalCandidate(mainWindow) {
-      return mainWindow
-    }
-    return NSApp.windows.first(where: isTerminalCandidate)
-  }
-
-  private func terminalWindowContentSize(_ window: NSWindow) -> NSSize? {
-    if let contentView = window.contentView {
-      let contentSize = contentView.bounds.size
-      if contentSize.width > 0, contentSize.height > 0 {
-        return contentSize
-      }
-    }
-    let size = window.contentLayoutRect.size
-    return size.width > 0 && size.height > 0 ? size : nil
+    windowSizing.applyMinimumContentSize(for: runtime.layout.root)
   }
 
   private func terminalWindowMaximumContentSize() -> NSSize? {
-    guard let window = terminalWindow(), let screen = window.screen ?? NSScreen.main else {
-      return nil
-    }
-    let size = window.contentRect(forFrameRect: screen.visibleFrame).size
-    return size.width > 0 && size.height > 0 ? size : nil
-  }
-
-  private func contentSize(from size: NSSize) -> SplitRatioLayout.ContentSize {
-    SplitRatioLayout.ContentSize(width: Double(size.width), height: Double(size.height))
-  }
-
-  private func nsSize(from size: SplitRatioLayout.ContentSize) -> NSSize {
-    NSSize(width: size.width, height: size.height)
+    windowSizing.maximumContentSize()
   }
 
   func checkForUpdates(manual: Bool) async {
@@ -1247,16 +1096,7 @@ final class AppModel: ObservableObject {
   }
 
   func closeSettingsWindow(_ window: NSWindow? = nil) {
-    if let window {
-      window.close()
-      if window === settingsWindowController?.window {
-        settingsWindowController = nil
-      }
-      return
-    }
-
-    settingsWindowController?.window?.close()
-    settingsWindowController = nil
+    utilityWindows.closeSettings(window)
   }
 
   func appVersionString() -> String {
@@ -1268,46 +1108,24 @@ final class AppModel: ObservableObject {
   }
 
   func openSettingsWindow() {
-    if let window = settingsWindowController?.window {
-      applyConfigurationWindowAppearance(to: window)
-      window.makeKeyAndOrderFront(nil)
-      NSApp.activate(ignoringOtherApps: true)
-      // show/makeKey can reinstate system title after we hide it; re-apply next turn.
-      reassertSettingsWindowChrome()
-      return
-    }
-
-    let controller = NSHostingController(
-      rootView: SettingsView()
-        .environmentObject(self)
-        .preferredColorScheme(configurationColorScheme)
+    utilityWindows.openSettings(
+      makeContent: {
+        NSHostingController(
+          rootView: SettingsView()
+            .environmentObject(self)
+            .preferredColorScheme(configurationColorScheme)
+        )
+      },
+      applyChrome: { [weak self] window in
+        self?.applyConfigurationWindowAppearance(to: window)
+      }
     )
-    let window = NSWindow(contentViewController: controller)
-    window.title = "Settings"
-    window.styleMask = [.titled, .closable, .miniaturizable]
-    window.setContentSize(NSSize(width: 640, height: 520))
-    window.minSize = NSSize(width: 560, height: 460)
-    window.isReleasedWhenClosed = false
-    window.center()
-    window.toolbarStyle = .preference
-    applyConfigurationWindowAppearance(to: window)
-
-    let windowController = NSWindowController(window: window)
-    settingsWindowController = windowController
-    windowController.showWindow(nil)
-    NSApp.activate(ignoringOtherApps: true)
-    // Preference-style titlebar materializes on show and can reset titleVisibility.
-    reassertSettingsWindowChrome()
   }
 
   /// Sidebar / split layout can briefly restore the system "Settings" title; cheap re-hide.
   func reassertSettingsWindowChrome() {
-    guard let window = settingsWindowController?.window else { return }
-    applyConfigurationWindowAppearance(to: window)
-    // Cover AppKit applying defaults after the current layout pass.
-    DispatchQueue.main.async { [weak self] in
-      guard let self, let window = self.settingsWindowController?.window else { return }
-      self.applyConfigurationWindowAppearance(to: window)
+    utilityWindows.reassertSettingsChrome { [weak self] window in
+      self?.applyConfigurationWindowAppearance(to: window)
     }
   }
 
@@ -1322,7 +1140,7 @@ final class AppModel: ObservableObject {
     surfaceRegistry.applySemanticLinkText(appText.semanticLinkText)
     applyFocusedTerminalSurface()
     for window in NSApp.windows
-      where window !== settingsWindowController?.window
+      where window !== utilityWindows.settingsWindow
     {
       ProGhosttyWindowAppearance.applyTerminalChrome(
         to: window,
@@ -1330,7 +1148,7 @@ final class AppModel: ObservableObject {
         usesDarkAppearance: usesDarkAppearance
       )
     }
-    if let window = settingsWindowController?.window {
+    if let window = utilityWindows.settingsWindow {
       applyConfigurationWindowAppearance(to: window)
     }
   }
@@ -1387,36 +1205,6 @@ final class AppModel: ObservableObject {
         self.titlebarToast = nil
       }
     }
-  }
-
-  private func compactTitlebarTitle(_ title: String) -> String {
-    let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return "ProGhostty" }
-    return compactPathComponent(trimmed) ?? trimmed
-  }
-
-  private func compactPathComponent(_ path: String?) -> String? {
-    guard let path, !path.isEmpty else { return nil }
-    if path == "/" { return "/" }
-    if path == NSHomeDirectory() { return "~" }
-    guard path.hasPrefix("/") || path.hasPrefix("~") else { return path }
-    let component = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath).lastPathComponent
-    return component.isEmpty ? path : component
-  }
-
-  private func displayPath(_ path: String?) -> String? {
-    guard let path, !path.isEmpty else { return nil }
-    let home = NSHomeDirectory()
-    if path == home { return "~" }
-    if path.hasPrefix(home + "/") {
-      return "~" + path.dropFirst(home.count)
-    }
-    return path
-  }
-
-  private func normalizedWorkspaceName(_ name: String) -> String {
-    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty ? "Workspace" : trimmed
   }
 
   private var effectiveThemeName: String {
@@ -1489,29 +1277,20 @@ final class AppModel: ObservableObject {
     shellIntegrationState = "layout restored"
   }
 
+  // MARK: Confirmation prompts (thin forwarders → ConfirmationPrompts)
+
+  private let confirmationPrompts = ConfirmationPrompts()
+
   private func confirmLayoutRestoreClosingPanes(count: Int) -> Bool {
-    let alert = NSAlert()
-    alert.messageText = "Restore layout?"
-    alert.informativeText = "Restoring this layout will close \(count) pane session\(count == 1 ? "" : "s")."
-    alert.alertStyle = .warning
-    alert.addButton(withTitle: "Restore")
-    alert.addButton(withTitle: "Cancel")
-    return alert.runModal() == .alertFirstButtonReturn
+    confirmationPrompts.confirmLayoutRestoreClosingPanes(count: count)
   }
 
   private func confirmWorkspaceDeletion(_ workspace: Workspace, runningPaneCount: Int) -> Bool {
-    let text = appText
-    let alert = NSAlert()
-    alert.messageText = text.deleteWorkspaceConfirmationTitle
-    alert.informativeText = text.deleteWorkspaceConfirmationMessage(
-      workspace.name,
-      runningPaneCount: runningPaneCount
+    confirmationPrompts.confirmWorkspaceDeletion(
+      workspace,
+      runningPaneCount: runningPaneCount,
+      text: appText
     )
-    alert.alertStyle = .warning
-    alert.addButton(withTitle: text.deleteWorkspace)
-    alert.addButton(withTitle: text.cancel)
-    alert.buttons.first?.keyEquivalent = "\r"
-    return alert.runModal() == .alertFirstButtonReturn
   }
 
   /// Check every pane in every workspace for a foreground process. Called from
@@ -1529,32 +1308,11 @@ final class AppModel: ObservableObject {
   /// RunLoop-blocking confirmation dialog for ⌘Q-style termination. Mirrors
   /// `confirmPaneCloseWithForegroundProcess` but with a quit-specific message.
   func confirmQuitWithForegroundProcess() -> Bool {
-    let text = appText
-    let alert = NSAlert()
-    alert.messageText = text.localized(
-      "A foreground process is running. Quit anyway?",
-      "有前台进程正在运行。确定退出吗？"
-    )
-    alert.informativeText = text.localized(
-      "Quitting will close all panes and terminate any running processes.",
-      "退出将关闭所有分屏并终止所有运行中的进程。"
-    )
-    alert.addButton(withTitle: text.localized("Quit", "退出"))
-    alert.addButton(withTitle: text.cancel)
-    alert.alertStyle = .warning
-    return alert.runModal() == .alertFirstButtonReturn
+    confirmationPrompts.confirmQuitWithForegroundProcess(text: appText)
   }
 
   private func confirmPaneCloseWithForegroundProcess() -> Bool {
-    let text = appText
-    let alert = NSAlert()
-    alert.messageText = text.closePaneConfirmationTitle
-    alert.informativeText = text.closePaneConfirmationMessage
-    alert.alertStyle = .warning
-    alert.addButton(withTitle: text.closePane)
-    alert.addButton(withTitle: text.cancel)
-    alert.buttons.first?.keyEquivalent = "\r"
-    return alert.runModal() == .alertFirstButtonReturn
+    confirmationPrompts.confirmPaneCloseWithForegroundProcess(text: appText)
   }
 
   @discardableResult
@@ -1569,7 +1327,7 @@ final class AppModel: ObservableObject {
       removePaneSplitAvailability(for: runtimePanes)
       workspaceRuntimes.removeAll { $0.id == runtimeID }
       savedLayoutSnapshots[runtimeID] = nil
-      rememberedWorkspaceContentSizes[runtimeID] = nil
+      windowSizing.forgetContentSize(for: runtimeID)
       activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
       if let activeWorkspace {
         applyTerminalWindowMinimumContentSize(for: activeWorkspace)
@@ -1580,7 +1338,7 @@ final class AppModel: ObservableObject {
     removePaneSplitAvailability(for: closed.panes)
     workspaceRuntimes.removeAll { $0.id == closed.workspaceID }
     savedLayoutSnapshots[closed.workspaceID] = nil
-    rememberedWorkspaceContentSizes[closed.workspaceID] = nil
+    windowSizing.forgetContentSize(for: closed.workspaceID)
     activeWorkspaceID = paneWorkspaceController.activeWorkspaceID
     if let activeWorkspace {
       applyTerminalWindowMinimumContentSize(for: activeWorkspace)

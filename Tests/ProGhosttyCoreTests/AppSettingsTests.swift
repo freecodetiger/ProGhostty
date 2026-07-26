@@ -6,7 +6,7 @@ import Testing
 @Suite("App settings")
 struct AppSettingsTests {
   @Test func fontOptionsRecommendCommonTerminalFontsBeyondNameSubstringFilter() {
-    let options = FontManager.fontOptions(
+    let options = FontCatalog.fontOptions(
       availableFamilies: ["Fira Code", "Hack", "Iosevka", "Proportional Sans"],
       currentFamily: "Hack",
       searchText: "",
@@ -18,7 +18,7 @@ struct AppSettingsTests {
   }
 
   @Test func fontOptionsCanSearchAcrossAllInstalledFonts() {
-    let options = FontManager.fontOptions(
+    let options = FontCatalog.fontOptions(
       availableFamilies: ["Fira Code", "Hack", "Proportional Sans"],
       currentFamily: "Hack",
       searchText: "sans",
@@ -30,7 +30,7 @@ struct AppSettingsTests {
   }
 
   @Test func fontOptionsPreserveCurrentCustomFontWhenMissingFromInstalledList() {
-    let options = FontManager.fontOptions(
+    let options = FontCatalog.fontOptions(
       availableFamilies: ["Fira Code", "Menlo"],
       currentFamily: "Custom Terminal Font",
       searchText: "",
@@ -42,7 +42,7 @@ struct AppSettingsTests {
   }
 
   @Test func cjkFallbackOptionsRecommendChineseFontsAndPreserveCustomSelection() {
-    let options = FontManager.cjkFallbackOptions(
+    let options = FontCatalog.cjkFallbackOptions(
       availableFamilies: ["Fira Code", "PingFang SC", "Sarasa Mono SC", "Proportional Sans"],
       currentFamily: "Custom CJK Font",
       searchText: "",

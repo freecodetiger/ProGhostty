@@ -495,18 +495,18 @@ struct SettingsView: View {
 
   @ViewBuilder
   private func fontPane(text: AppText) -> some View {
-    let fontOptions = FontManager.fontOptions(
+    let fontOptions = FontCatalog.fontOptions(
       currentFamily: model.settings.fontFamily,
       searchText: fontSearchText,
       includeAllFonts: showsAllFonts
     )
-    let selectedFontOption = FontManager.fontOption(for: model.settings.fontFamily)
-    let cjkFontOptions = FontManager.cjkFallbackOptions(
+    let selectedFontOption = FontCatalog.fontOption(for: model.settings.fontFamily)
+    let cjkFontOptions = FontCatalog.cjkFallbackOptions(
       currentFamily: model.settings.cjkFallbackFontFamily,
       searchText: cjkFontSearchText,
       includeAllFonts: showsAllCJKFonts
     )
-    let selectedCJKFontOption = model.settings.cjkFallbackFontFamily.map(FontManager.fontOption(for:))
+    let selectedCJKFontOption = model.settings.cjkFallbackFontFamily.map(FontCatalog.fontOption(for:))
 
     SettingsSection(text.font) {
       // Primary font — the first-class control, always visible.

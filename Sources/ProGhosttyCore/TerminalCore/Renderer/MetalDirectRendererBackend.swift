@@ -113,7 +113,7 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   private var palette = TerminalSurfacePalette.dark
   private var diagnosticsState = TerminalRendererDiagnostics(backend: .metalDirect)
   private var glyphAtlas = MetalGlyphAtlas(
-    fontFamily: FontManager.defaultMonospacedFontName(),
+    fontFamily: FontCatalog.defaultMonospacedFontName(),
     fontSize: 14,
     backingScale: NSScreen.main?.backingScaleFactor ?? 1
   )

@@ -984,7 +984,7 @@ struct TerminalRendererBackendTests {
     let engine = try MetalDirectRenderEngine(device: device)
     let view = MetalDirectRendererView(device: device)
     let glyphAtlas = MetalGlyphAtlas(
-      fontFamily: FontManager.defaultMonospacedFontName(),
+      fontFamily: FontCatalog.defaultMonospacedFontName(),
       fontSize: 14,
       backingScale: 1
     )

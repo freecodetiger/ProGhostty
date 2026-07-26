@@ -830,6 +830,27 @@ public final class PTYTerminalSurfaceView: NSView {
     !liveGridView.isHidden
   }
 
+  // MARK: App-facing surface operations
+  // The App layer talks to the surface, not to the grid view inside it — cell
+  // geometry and selection/interaction stay renderer-domain implementation
+  // details (debt spec D3 smell fix).
+
+  public var terminalCellSize: CGSize { liveGridView.terminalCellSize }
+  public var terminalContentInset: CGSize { liveGridView.terminalContentInset }
+  public var hasTextSelection: Bool { liveGridView.selectedText?.isEmpty == false }
+
+  public func setInteractionEnabled(_ enabled: Bool) {
+    liveGridView.setInteractionEnabled(enabled)
+  }
+
+  public func copySelection() {
+    liveGridView.copy(nil)
+  }
+
+  public func pasteFromPasteboard() {
+    liveGridView.paste(nil)
+  }
+
   init(scrollView: NSScrollView, liveGridView: PTYGridView) {
     self.scrollView = scrollView
     self.liveGridView = liveGridView
@@ -900,18 +921,6 @@ struct GridCoordinate: Comparable {
   }
 }
 
-private struct GridSelectionPoint: Comparable {
-  var absoluteRow: Int
-  var col: Int
-
-  static func < (lhs: GridSelectionPoint, rhs: GridSelectionPoint) -> Bool {
-    if lhs.absoluteRow == rhs.absoluteRow {
-      return lhs.col < rhs.col
-    }
-    return lhs.absoluteRow < rhs.absoluteRow
-  }
-}
-
 public class PTYGridView: NSView {
   private static let selectionAutoScrollEdgeInset: CGFloat = 24
   private static let selectionAutoScrollInterval: TimeInterval = 1.0 / 15.0
@@ -968,7 +977,7 @@ public class PTYGridView: NSView {
   private var frameSnapshot: GhosttyTerminalFrame?
   private var scrollFrameSnapshot: GhosttyTerminalScrollFrame?
   private var palette = TerminalSurfacePalette.dark
-  private var fontFamily = FontManager.defaultMonospacedFontName()
+  private var fontFamily = FontCatalog.defaultMonospacedFontName()
   private var cjkFallbackFamily: String?
   private var fontSize: CGFloat = 14
   private var font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
@@ -1025,8 +1034,7 @@ public class PTYGridView: NSView {
   private(set) public var maxDrawDuration: TimeInterval = 0
   private var totalDrawDuration: TimeInterval = 0
   private var drawCount = 0
-  private var selectionAnchor: GridSelectionPoint?
-  private var selectionHead: GridSelectionPoint?
+  private var selection = GridSelectionModel()
   private var isDraggingSelectionStorage = false
   private var selectionAutoScrollTimer: Timer?
   private var selectionAutoScrollDirection = 0
@@ -1370,7 +1378,7 @@ public class PTYGridView: NSView {
   }
 
   public static func visualScrollTranslationY(for viewport: TerminalViewport) -> CGFloat {
-    0
+    RenderedGridGeometry.visualScrollTranslationY(for: viewport)
   }
 
   public static func visualScrollTranslationY(
@@ -1378,12 +1386,15 @@ public class PTYGridView: NSView {
     hasOverscanRows: Bool,
     cellHeight: CGFloat
   ) -> CGFloat {
-    guard hasOverscanRows, cellHeight > 0 else { return 0 }
-    return min(max(viewport.visualOffsetY, -cellHeight), cellHeight)
+    RenderedGridGeometry.visualScrollTranslationY(
+      for: viewport,
+      hasOverscanRows: hasOverscanRows,
+      cellHeight: cellHeight
+    )
   }
 
   public static func contentDirtyRect(forDrawing dirtyRect: NSRect, viewport: TerminalViewport) -> NSRect {
-    dirtyRect.offsetBy(dx: 0, dy: -visualScrollTranslationY(for: viewport))
+    RenderedGridGeometry.contentDirtyRect(forDrawing: dirtyRect, viewport: viewport)
   }
 
   public static func contentDirtyRect(
@@ -1392,13 +1403,11 @@ public class PTYGridView: NSView {
     hasOverscanRows: Bool,
     cellHeight: CGFloat
   ) -> NSRect {
-    dirtyRect.offsetBy(
-      dx: 0,
-      dy: -visualScrollTranslationY(
-        for: viewport,
-        hasOverscanRows: hasOverscanRows,
-        cellHeight: cellHeight
-      )
+    RenderedGridGeometry.contentDirtyRect(
+      forDrawing: dirtyRect,
+      viewport: viewport,
+      hasOverscanRows: hasOverscanRows,
+      cellHeight: cellHeight
     )
   }
 
@@ -1413,12 +1422,7 @@ public class PTYGridView: NSView {
     cellSize: CGSize,
     inset: CGSize
   ) -> NSRect {
-    NSRect(
-      x: inset.width,
-      y: inset.height,
-      width: CGFloat(max(0, cols)) * cellSize.width,
-      height: CGFloat(max(0, rows)) * cellSize.height
-    )
+    RenderedGridGeometry.terminalContentClipRect(cols: cols, rows: rows, cellSize: cellSize, inset: inset)
   }
 
   public static func textGlyphRects(
@@ -1427,24 +1431,11 @@ public class PTYGridView: NSView {
     cellSize: CGSize,
     inset: CGSize
   ) -> [NSRect] {
-    let count = min(run.text.unicodeScalars.count, run.range.count)
-    return (0..<count).map { offset in
-      textGlyphRect(
-        row: row,
-        col: run.range.lowerBound + offset,
-        cellSize: cellSize,
-        inset: inset
-      )
-    }
+    RenderedGridGeometry.textGlyphRects(for: run, row: row, cellSize: cellSize, inset: inset)
   }
 
   public static func textGlyphRect(row: Int, col: Int, cellSize: CGSize, inset: CGSize) -> NSRect {
-    NSRect(
-      x: inset.width + CGFloat(max(0, col)) * cellSize.width,
-      y: inset.height + CGFloat(max(0, row)) * cellSize.height,
-      width: cellSize.width,
-      height: cellSize.height
-    )
+    RenderedGridGeometry.textGlyphRect(row: row, col: col, cellSize: cellSize, inset: inset)
   }
 
   public static func urlCursorRects(
@@ -1454,46 +1445,13 @@ public class PTYGridView: NSView {
     verticalOffsetY: CGFloat = 0,
     linkInteractionActive: Bool = true
   ) -> [NSRect] {
-    guard linkInteractionActive else { return [] }
-    return urlCursorRects(
-      urlHitsByRow: urlHitsByRow(in: frame),
+    RenderedGridGeometry.urlCursorRects(
+      frame: frame,
       cellSize: cellSize,
       inset: inset,
-      verticalOffsetY: verticalOffsetY
+      verticalOffsetY: verticalOffsetY,
+      linkInteractionActive: linkInteractionActive
     )
-  }
-
-  private static func urlHitsByRow(
-    in frame: GhosttyTerminalFrame,
-    pathValidator: ((String) -> Bool)? = nil
-  ) -> [Int: [TerminalLinkHit]] {
-    guard frame.rows > 0, frame.cols > 0 else { return [:] }
-    var hitsByRow: [Int: [TerminalLinkHit]] = [:]
-    for row in 0..<frame.rows {
-      let hits = TerminalLinkDetector.hits(inRow: row, frame: frame, pathValidator: pathValidator)
-      if !hits.isEmpty {
-        hitsByRow[row] = hits
-      }
-    }
-    return hitsByRow
-  }
-
-  private static func urlCursorRects(
-    urlHitsByRow: [Int: [TerminalLinkHit]],
-    cellSize: CGSize,
-    inset: CGSize,
-    verticalOffsetY: CGFloat = 0
-  ) -> [NSRect] {
-    urlHitsByRow.keys.sorted().flatMap { row in
-      (urlHitsByRow[row] ?? []).map { hit in
-        NSRect(
-          x: inset.width + CGFloat(hit.range.lowerBound) * cellSize.width,
-          y: inset.height + CGFloat(row) * cellSize.height + verticalOffsetY,
-          width: CGFloat(hit.range.count) * cellSize.width,
-          height: cellSize.height
-        )
-      }
-    }
   }
 
   public override func scrollWheel(with event: NSEvent) {
@@ -2036,8 +1994,7 @@ public class PTYGridView: NSView {
     let oldDirtyRects = selectionDirtyRects()
     let geometry = renderedGeometry()
     let point = geometry?.selectionPoint(at: eventPoint)
-    selectionAnchor = point
-    selectionHead = point
+    selection.begin(at: point)
     isDraggingSelectionStorage = point != nil
     invalidateSelectionRects(oldDirtyRects)
   }
@@ -2119,8 +2076,7 @@ public class PTYGridView: NSView {
       pendingLinkClick = nil
       // Clear the empty anchor-only selection created in mouseDown so it doesn't
       // linger as a zero-width selection under the popover.
-      selectionAnchor = nil
-      selectionHead = nil
+      selection.clear()
       presentLinkPopover(for: pending.hit.target, at: pending.origin)
     }
     super.mouseUp(with: event)
@@ -2240,7 +2196,7 @@ public class PTYGridView: NSView {
     // rows); mixing it with the renderer's expanded-frame row space shifted every
     // link by overscanTopRows once scrolled off the top.
     guard commandLinkMode, let geometry = renderedGeometry() else { return [] }
-    let hitsByRow = Self.urlHitsByRow(in: geometry.frame, pathValidator: pathExistenceValidator)
+    let hitsByRow = RenderedGridGeometry.urlHitsByRow(in: geometry.frame, pathValidator: pathExistenceValidator)
     return hitsByRow.keys.sorted().flatMap { row in
       (hitsByRow[row] ?? []).map { GridSelectionCellRange(row: $0.row, cols: $0.range) }
     }
@@ -2270,9 +2226,9 @@ public class PTYGridView: NSView {
     // pointing-hand regions when ⌘ is held. Running it every time cursor rects
     // are invalidated — which happens on every scroll tick — is pure waste and,
     // on a full screen of path-like text, heavy enough to stall the main thread.
-    let urlHitsByRow = commandLinkMode ? Self.urlHitsByRow(in: frame, pathValidator: pathExistenceValidator) : [:]
+    let urlHitsByRow = commandLinkMode ? RenderedGridGeometry.urlHitsByRow(in: frame, pathValidator: pathExistenceValidator) : [:]
     if commandLinkMode {
-      for rect in Self.urlCursorRects(
+      for rect in RenderedGridGeometry.urlCursorRects(
         urlHitsByRow: urlHitsByRow,
         cellSize: cellSize,
         inset: contentInset,
@@ -2797,7 +2753,7 @@ public class PTYGridView: NSView {
   }
 
   private func font(forCJKText text: String, bold: Bool) -> NSFont {
-    guard FontManager.containsCJK(text) else {
+    guard FontCatalog.containsCJK(text) else {
       return bold ? boldFont : font
     }
     return (bold ? cjkBoldFont : cjkFont) ?? (bold ? boldFont : font)
@@ -2847,19 +2803,11 @@ public class PTYGridView: NSView {
   }
 
   private func extendedFrame(from scrollFrame: GhosttyTerminalScrollFrame) -> GhosttyTerminalFrame {
-    var frame = scrollFrame.viewport
-    frame.rows = scrollFrame.overscanTop.count + scrollFrame.viewport.rows + scrollFrame.overscanBottom.count
-    frame.cursorY += scrollFrame.overscanTop.count
-    frame.cells = scrollFrame.overscanTop.flatMap(\.cells)
-      + scrollFrame.viewport.cells
-      + scrollFrame.overscanBottom.flatMap(\.cells)
-    return frame
+    RenderedGridGeometry.extendedFrame(from: scrollFrame)
   }
 
   private func absoluteBaseRow(for scrollFrame: GhosttyTerminalScrollFrame) -> Int {
-    guard let viewportStartRow = scrollFrame.viewportStartRow else { return 0 }
-    let cappedViewportStart = min(viewportStartRow, UInt64(Int.max))
-    return max(0, Int(cappedViewportStart) - scrollFrame.overscanTop.count)
+    RenderedGridGeometry.absoluteBaseRow(for: scrollFrame)
   }
 
   private func visibleRowCount() -> Int {
@@ -3230,10 +3178,10 @@ public class PTYGridView: NSView {
 
   private func updateSelectionHead(at point: NSPoint) {
     guard let geometry = renderedGeometry() else {
-      selectionHead = nil
+      selection.head = nil
       return
     }
-    selectionHead = geometry.selectionPoint(at: clampedSelectionPoint(point, geometry: geometry))
+    selection.head = geometry.selectionPoint(at: clampedSelectionPoint(point, geometry: geometry))
   }
 
   private func clampedSelectionPoint(_ point: NSPoint, geometry: RenderedGridGeometry) -> NSPoint {
@@ -3435,9 +3383,9 @@ public class PTYGridView: NSView {
       let viewportFrame = frameSnapshot,
       viewportFrame.cursorX == 0,
       let geometry = renderedGeometry(),
-      shouldInferPromptCursor(for: viewportFrame, in: geometry),
-      let coordinate = (viewportFrame.cursorY != 0 ? inferredPromptCursorCoordinateOnCursorRow(in: geometry) : nil)
-        ?? inferredPromptCursorCoordinate(in: geometry)
+      PromptCursorInferrer.shouldInferPromptCursor(for: viewportFrame, in: geometry),
+      let coordinate = (viewportFrame.cursorY != 0 ? PromptCursorInferrer.inferredPromptCursorCoordinateOnCursorRow(in: geometry) : nil)
+        ?? PromptCursorInferrer.inferredPromptCursorCoordinate(in: geometry)
     else {
       return nil
     }
@@ -3470,9 +3418,9 @@ public class PTYGridView: NSView {
     guard
       let currentCoordinate = geometry.coordinate(at: NSPoint(x: currentCursorRect.midX, y: currentCursorRect.midY)),
       currentCoordinate.row > cursorRow,
-      rowIsBlank(cursorRow, in: geometry),
-      rowIsInPromptInputRegion(currentCoordinate.row, in: geometry)
-        || rect(currentCursorRect, approximatelyEquals: latestPromptInputCursorRect)
+      PromptCursorInferrer.rowIsBlank(cursorRow, in: geometry),
+      PromptCursorInferrer.rowIsInPromptInputRegion(currentCoordinate.row, in: geometry)
+        || PromptCursorInferrer.rect(currentCursorRect, approximatelyEquals: latestPromptInputCursorRect)
     else {
       return nil
     }
@@ -3487,132 +3435,11 @@ public class PTYGridView: NSView {
       let rect,
       let geometry = renderedGeometry(),
       let coordinate = geometry.coordinate(at: NSPoint(x: rect.midX, y: rect.midY)),
-      rowIsInPromptInputRegion(coordinate.row, in: geometry)
+      PromptCursorInferrer.rowIsInPromptInputRegion(coordinate.row, in: geometry)
     else {
       return
     }
     latestPromptInputCursorRect = rect
-  }
-
-  private func shouldInferPromptCursor(
-    for viewportFrame: GhosttyTerminalFrame,
-    in geometry: RenderedGridGeometry
-  ) -> Bool {
-    if viewportFrame.cursorY == 0 {
-      return true
-    }
-    let row = geometry.frame.cursorY
-    let rowStart = row * geometry.frame.cols
-    let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
-    guard row >= 0, row < geometry.frame.rows, rowStart < rowEnd else {
-      return false
-    }
-    let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
-    return promptMarkerColumn(in: cells) != nil
-  }
-
-  private func inferredPromptCursorCoordinateOnCursorRow(in geometry: RenderedGridGeometry) -> GridCoordinate? {
-    let row = geometry.frame.cursorY
-    let rowStart = row * geometry.frame.cols
-    let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
-    guard row >= 0, row < geometry.frame.rows, rowStart < rowEnd else {
-      return nil
-    }
-    let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
-    guard let promptCol = promptMarkerColumn(in: cells) else {
-      return nil
-    }
-    let lowerBound = promptCol + 1
-    if let lastTextCol = cells.indices.last(where: { $0 >= lowerBound && cells[$0].scalar != " " }) {
-      return GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
-    }
-    if let cursorCol = cells.indices.last(where: { $0 >= lowerBound && isVisualInputCursorCell(cells[$0]) }) {
-      return GridCoordinate(row: row, col: cursorCol)
-    }
-    return nil
-  }
-
-  private func rowContainsPromptMarker(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
-    guard let cells = cells(inRow: row, frame: geometry.frame) else { return false }
-    return promptMarkerColumn(in: cells) != nil
-  }
-
-  private func rowIsInPromptInputRegion(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
-    guard row >= 0, row < geometry.frame.rows else { return false }
-    for candidateRow in stride(from: row, through: 0, by: -1) {
-      if rowContainsPromptMarker(candidateRow, in: geometry) {
-        return true
-      }
-    }
-    return false
-  }
-
-  private func rowIsBlank(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
-    guard let cells = cells(inRow: row, frame: geometry.frame) else { return false }
-    return cells.allSatisfy { $0.scalar == " " }
-  }
-
-  private func cells(inRow row: Int, frame: GhosttyTerminalFrame) -> [GhosttyTerminalFrame.Cell]? {
-    let rowStart = row * frame.cols
-    let rowEnd = min(rowStart + frame.cols, frame.cells.count)
-    guard row >= 0, row < frame.rows, rowStart < rowEnd else {
-      return nil
-    }
-    return Array(frame.cells[rowStart..<rowEnd])
-  }
-
-  private func rect(_ lhs: NSRect, approximatelyEquals rhs: NSRect?) -> Bool {
-    guard let rhs else { return false }
-    return abs(lhs.minX - rhs.minX) < 0.5
-      && abs(lhs.minY - rhs.minY) < 0.5
-      && abs(lhs.width - rhs.width) < 0.5
-      && abs(lhs.height - rhs.height) < 0.5
-  }
-
-  private func inferredPromptCursorCoordinate(in geometry: RenderedGridGeometry) -> GridCoordinate? {
-    var bestVisualCursor: GridCoordinate?
-    var bestTextFallback: GridCoordinate?
-    var inputRegionIsActive = false
-    for row in 0..<geometry.frame.rows {
-      guard geometry.clipRect.intersects(geometry.rowRect(row)) else { continue }
-      let rowStart = row * geometry.frame.cols
-      let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
-      guard rowStart < rowEnd else { continue }
-      let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
-      let lowerBound: Int
-      if let promptCol = promptMarkerColumn(in: cells) {
-        inputRegionIsActive = true
-        bestVisualCursor = nil
-        bestTextFallback = nil
-        lowerBound = promptCol + 1
-      } else if inputRegionIsActive {
-        lowerBound = 0
-      } else {
-        continue
-      }
-      if let cursorCol = cells.indices.last(where: { $0 >= lowerBound && isVisualInputCursorCell(cells[$0]) }) {
-        bestVisualCursor = GridCoordinate(row: row, col: cursorCol)
-      }
-      if let lastTextCol = cells.indices.last(where: { $0 >= lowerBound && cells[$0].scalar != " " }) {
-        bestTextFallback = GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
-      }
-    }
-    return bestVisualCursor ?? bestTextFallback
-  }
-
-  private func promptMarkerColumn(in cells: [GhosttyTerminalFrame.Cell]) -> Int? {
-    cells.indices.first { index in
-      switch cells[index].scalar {
-      case "›", "❯", ">", "$", "#":
-        true
-      default:
-        false
-      }
-    }
-  }
-
-  private func isVisualInputCursorCell(_ cell: GhosttyTerminalFrame.Cell) -> Bool {
-    cell.scalar == " " && (cell.inverse || !cell.usesDefaultBackground)
   }
 
   private func clippedCursorRect(_ rect: NSRect, to clipRect: NSRect) -> NSRect? {
@@ -3622,28 +3449,11 @@ public class PTYGridView: NSView {
   }
 
   private func normalizedSelectionPointRange() -> (lower: GridSelectionPoint, upper: GridSelectionPoint)? {
-    guard let anchor = selectionAnchor, let head = selectionHead, anchor != head else { return nil }
-    if anchor < head {
-      return (anchor, head)
-    }
-    return (head, anchor)
+    selection.normalizedPointRange()
   }
 
   private func normalizedSelectionRange(in geometry: RenderedGridGeometry) -> (lower: GridCoordinate, upper: GridCoordinate)? {
-    guard let range = normalizedSelectionPointRange(), geometry.frame.rows > 0 else { return nil }
-    let firstAbsoluteRow = geometry.absoluteBaseRow
-    let lastAbsoluteRow = geometry.absoluteBaseRow + geometry.frame.rows - 1
-    let lowerAbsoluteRow = max(range.lower.absoluteRow, firstAbsoluteRow)
-    let upperAbsoluteRow = min(range.upper.absoluteRow, lastAbsoluteRow)
-    guard lowerAbsoluteRow <= upperAbsoluteRow else { return nil }
-
-    let lowerCol = lowerAbsoluteRow == range.lower.absoluteRow ? range.lower.col : 0
-    let upperCol = upperAbsoluteRow == range.upper.absoluteRow ? range.upper.col : max(0, geometry.frame.cols - 1)
-    guard lowerCol <= upperCol || lowerAbsoluteRow < upperAbsoluteRow else { return nil }
-    return (
-      GridCoordinate(row: lowerAbsoluteRow - geometry.absoluteBaseRow, col: lowerCol),
-      GridCoordinate(row: upperAbsoluteRow - geometry.absoluteBaseRow, col: upperCol)
-    )
+    selection.normalizedRange(in: geometry)
   }
 
   private func isSelected(
@@ -3651,8 +3461,7 @@ public class PTYGridView: NSView {
     col: Int,
     in range: (lower: GridCoordinate, upper: GridCoordinate)
   ) -> Bool {
-    let coordinate = GridCoordinate(row: row, col: col)
-    return coordinate >= range.lower && coordinate <= range.upper
+    GridSelectionModel.isSelected(row: row, col: col, in: range)
   }
 
   private static func cellSize(for font: NSFont) -> CGSize {
@@ -3882,73 +3691,9 @@ public struct GridMarkedTextOverlay: Equatable, Sendable {
 
 extension PTYGridView {
   func testSetSelection(anchor: GridSelectionCoordinate, head: GridSelectionCoordinate) {
-    selectionAnchor = GridSelectionPoint(absoluteRow: anchor.row, col: anchor.col)
-    selectionHead = GridSelectionPoint(absoluteRow: head.row, col: head.col)
-  }
-}
-
-struct RenderedGridGeometry: Equatable, Sendable {
-  var frame: GhosttyTerminalFrame
-  var translationY: CGFloat
-  var cellSize: CGSize
-  var inset: CGSize
-  var clipRect: NSRect
-  var absoluteBaseRow: Int
-
-  init(
-    frame: GhosttyTerminalFrame,
-    translationY: CGFloat,
-    cellSize: CGSize,
-    inset: CGSize,
-    clipRect: NSRect,
-    absoluteBaseRow: Int
-  ) {
-    self.frame = frame
-    self.translationY = translationY
-    self.cellSize = cellSize
-    self.inset = inset
-    self.clipRect = clipRect
-    self.absoluteBaseRow = absoluteBaseRow
-  }
-
-  func coordinate(at point: NSPoint) -> GridCoordinate? {
-    let col = Int((point.x - inset.width) / cellSize.width)
-    let row = Int((point.y - inset.height - translationY) / cellSize.height)
-    guard row >= 0, row < frame.rows, col >= 0, col < frame.cols else { return nil }
-    return GridCoordinate(row: row, col: col)
-  }
-
-  fileprivate func selectionPoint(at point: NSPoint) -> GridSelectionPoint? {
-    guard let coordinate = coordinate(at: point) else { return nil }
-    return GridSelectionPoint(absoluteRow: absoluteBaseRow + coordinate.row, col: coordinate.col)
-  }
-
-  func rectForCell(row: Int, col: Int) -> NSRect {
-    NSRect(
-      x: inset.width + CGFloat(max(0, col)) * cellSize.width,
-      y: inset.height + CGFloat(max(0, row)) * cellSize.height + translationY,
-      width: cellSize.width,
-      height: cellSize.height
-    )
-  }
-
-  func rectForCellRange(row: Int, cols: Range<Int>) -> NSRect {
-    let lower = max(0, cols.lowerBound)
-    let upper = max(lower, cols.upperBound)
-    return NSRect(
-      x: inset.width + CGFloat(lower) * cellSize.width,
-      y: inset.height + CGFloat(max(0, row)) * cellSize.height + translationY,
-      width: CGFloat(upper - lower) * cellSize.width,
-      height: cellSize.height
-    )
-  }
-
-  func rowRect(_ row: Int) -> NSRect {
-    NSRect(
-      x: inset.width,
-      y: inset.height + CGFloat(max(0, row)) * cellSize.height + translationY,
-      width: CGFloat(frame.cols) * cellSize.width,
-      height: cellSize.height
+    selection = GridSelectionModel(
+      anchor: GridSelectionPoint(absoluteRow: anchor.row, col: anchor.col),
+      head: GridSelectionPoint(absoluteRow: head.row, col: head.col)
     )
   }
 }

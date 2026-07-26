@@ -88,7 +88,7 @@ public final class GhosttyHTMLAttributedAdapter {
 
   public init(
     palette: TerminalSurfacePalette,
-    fontFamily: String = FontManager.defaultMonospacedFontName(),
+    fontFamily: String = FontCatalog.defaultMonospacedFontName(),
     fontSize: CGFloat = 13
   ) {
     self.palette = palette

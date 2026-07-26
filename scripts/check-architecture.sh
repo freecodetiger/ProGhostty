@@ -23,11 +23,12 @@ fi
 # Rule 2: AppKit in Core is allowed only under these paths (rendering / views).
 # Everything else importing AppKit is a layering violation to review.
 #
-# Tracked exception: Settings/AppSettings.swift uses NSFont/NSFontManager for
-# font-availability queries. Removing this coupling is deferred to phase 5 of
-# ARCHITECTURE_PLAN.md (extract a FontCatalog service). Listed here so the guard
-# still catches NEW violations without failing on this known debt.
-allowed_appkit_regex='ProGhosttyCore/(TerminalCore/(Renderer/|PTY/|LibGhostty/|Mock/|TerminalModels\.swift|TerminalSurfaceStyle\.swift)|Settings/AppSettings\.swift)'
+# Tracked exception: Settings/FontCatalog.swift owns the settings domain's
+# NSFont/NSFontManager font-availability probing (extracted from AppSettings
+# per ARCHITECTURE_DEBT_SPEC 5-1; the schema file is now AppKit-free). Moving
+# the catalog fully out of Core is deferred — renderer backends also consume
+# it. Listed here so the guard still catches NEW violations.
+allowed_appkit_regex='ProGhosttyCore/(TerminalCore/(Renderer/|PTY/|LibGhostty/|Mock/|TerminalModels\.swift|TerminalSurfaceStyle\.swift)|Settings/FontCatalog\.swift)'
 while IFS= read -r file; do
   [ -z "${file}" ] && continue
   rel="${file#"${ROOT_DIR}/Sources/"}"

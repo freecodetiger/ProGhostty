@@ -11,7 +11,7 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
 
   private var sessions: [TerminalSessionID: SessionState] = [:]
   private var palette = TerminalSurfacePalette.dark
-  private var fontFamily = FontManager.defaultMonospacedFontName()
+  private var fontFamily = FontCatalog.defaultMonospacedFontName()
   private var fontSize: CGFloat = 14
   private let continuation: AsyncStream<TerminalEvent>.Continuation
   private var inputHandler: (@MainActor (TerminalSessionID, Data) -> Void)?
