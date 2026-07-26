@@ -127,14 +127,22 @@ enum AutoTitleSanitizer {
 
 ### 4.5 生命周期
 
+**核心规则：标题只属于前台程序。** 收到 `.titleChanged` 时先查 `sessionManager.hasForegroundProcess(in:)`（比较 PTY 前台进程组与 shell 进程组）：
+
+- **前台有程序**（vim/ssh/Claude Code 正在跑）→ 接受上报，sanitize 后写入。
+- **shell 自己在前台**（提示符时机）→ 这是 precmd 自动标题噪音（oh-my-zsh 等每次 prompt 都上报，会导致左模块常驻显示、并覆盖程序设的标题）；不仅忽略，还**视为清除信号**——shell 在说话就证明上一个程序的标题已过期。
+
 | 时机 | 行为 | 理由 |
 |---|---|---|
-| 收到 OSC 0/1/2 | 设置/清除（§4.2） | 核心路径 |
-| 收到 OSC 7（`.cwdChanged`） | **清除该会话的上报标题** | 提示符出现 ⇒ 前台程序已退出，避免"vim 残留"。shell 集成每次 prompt 发 OSC 7，是现成的"回到 shell"信号。无 shell 集成的用户标题会残留——与 iTerm2 等一致，可接受 |
+| 前台程序上报 OSC 0/1/2 | 设置/清除（§4.2） | 核心路径 |
+| shell 上报 OSC 0/1/2（无前台程序） | **清除** | precmd 噪音过滤 + 无 OSC 7 环境的残留兜底 |
+| 收到 OSC 7（`.cwdChanged`） | 清除该会话的上报标题 | 提示符出现 ⇒ 前台程序已退出；shell 集成每次 prompt 发 OSC 7 |
 | 会话关闭（pane 关闭路径） | 从字典移除 | 防泄漏 |
 | App 重启 | 天然为空（不落盘） | §4.1 |
 
 注意顺序：`.cwdChanged` 分支里先做现有 cwd 更新，再清标题。Claude Code 运行期间 shell 不产生提示符、不会误清；它自己连续上报的标题互相覆盖即可。
+
+推论：裸 `printf '\033]0;X\007'` 这类瞬时命令的标题**不会显示**（事件被处理时 printf 已退出、shell 已回前台）——这是有意行为，静止态左模块必须为空；手测用 `printf ...; sleep 3` 或 vim。
 
 ### 4.6 UI 变更
 
@@ -210,10 +218,12 @@ public var programTitleReportingEnabled: Bool   // default true
 按 CLAUDE.md 标准流程打包启动（`build-app-bundle.sh release` + 杀旧进程），逐条验证：
 
 ```bash
-printf '\033]0;你好;世界\007'    # 左模块出现"你好;世界"（分号完整）
-printf '\033]2;Hello ST\033\\'  # ST 终止符同样生效
-printf '\033]0;\007'            # 标题清除，模块隐藏
+printf '\033]0;你好;世界\007'; sleep 3   # sleep 期间左模块显示"你好;世界"（分号完整），提示符回来后消失
+printf '\033]2;Hello ST\033\\'; sleep 3  # ST 终止符同样生效
+printf '\033]0;你好\007'                 # 瞬时命令：不显示（shell 已回前台，属噪音过滤）——预期行为
 ```
+
+- [ ] 静止态（shell 空闲在提示符）左模块始终为空，即使 zsh 配置了 precmd 自动标题
 
 - [ ] `vim foo.txt` → 标题变化；`:q` 回 shell → 提示符后标题清除
 - [ ] 运行 `claude` 跑一个任务 → 标题随任务实时更新；退出后清除
@@ -226,7 +236,7 @@ printf '\033]0;\007'            # 标题清除，模块隐藏
 
 | 风险 | 缓解 |
 |---|---|
-| 无 shell 集成用户标题残留（退出 vim 后仍显示） | 与主流终端一致；Phase 2 用前台进程探测兜底 |
+| 无 shell 集成用户标题残留（退出 vim 后仍显示） | shell 的下一次 precmd 标题上报会触发清除（§4.5）；两种信号都没有的极简 shell 才会残留 |
 | 高频上报导致 UI 抖动 | 同值跳过已挡大半；预留 debounce 方案（§4.7） |
 | 上报标题内容不可信（转义/超长/伪装 UI 文案） | Sanitizer 强制过控制字符与长度；显示层截断 |
 

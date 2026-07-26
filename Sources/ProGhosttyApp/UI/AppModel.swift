@@ -1494,7 +1494,14 @@ final class AppModel: ObservableObject {
       updateReportedTitle(nil, for: session)
       objectWillChange.send()
     case .titleChanged(let session, let title):
-      updateReportedTitle(AutoTitleSanitizer.sanitize(title), for: session)
+      // Titles belong to foreground programs (vim, ssh, Claude Code). A report
+      // arriving while the shell itself is foreground is prompt-time noise
+      // (precmd auto-titles) — and proof that any previous program's title is
+      // stale, so it clears instead of displaying.
+      let sanitized = sessionManager.hasForegroundProcess(in: session)
+        ? AutoTitleSanitizer.sanitize(title)
+        : nil
+      updateReportedTitle(sanitized, for: session)
     case .osc(let session, let sequence):
       shellIntegrationState = "available"
       handleProGhosttyControlOsc(session: session, sequence: sequence)
