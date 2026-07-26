@@ -84,7 +84,7 @@ final class AppModel: ObservableObject {
   private var rememberedWorkspaceContentSizes: [UUID: NSSize] = [:]
   private var titlebarToastTask: Task<Void, Never>?
   private var inAppNotificationTask: Task<Void, Never>?
-  private var paneSplitAvailability: [UUID: PaneSplitAvailability] = [:]
+  private let paneSplitAvailabilityController = PaneSplitAvailabilityController()
   /// Memoized bare-token existence checks, keyed by "cwd\0token". Bounds the
   /// per-mouse-move disk stats the clickable-path detector would otherwise do.
   private var bareTokenExistenceCache: [String: (exists: Bool, timestamp: CFTimeInterval)] = [:]
@@ -115,21 +115,6 @@ final class AppModel: ObservableObject {
     var body: String
     var session: TerminalSessionID
     var source: TerminalDesktopNotification.Source
-  }
-
-  private struct PaneSplitAvailability: Equatable {
-    var size: NSSize
-    var canSplitRight: Bool
-    var canSplitDown: Bool
-
-    func allows(axis: TerminalSplitAxis) -> Bool {
-      switch axis {
-      case .horizontal:
-        canSplitRight
-      case .vertical:
-        canSplitDown
-      }
-    }
   }
 
   init(
@@ -671,10 +656,12 @@ final class AppModel: ObservableObject {
     canSplitRight: Bool,
     canSplitDown: Bool
   ) {
-    let availability = PaneSplitAvailability(size: size, canSplitRight: canSplitRight, canSplitDown: canSplitDown)
-    guard paneSplitAvailability[paneID] != availability else { return }
-    paneSplitAvailability[paneID] = availability
-    DebugLog.write("pane split availability pane=\(paneID) size=\(size) right=\(canSplitRight) down=\(canSplitDown)")
+    paneSplitAvailabilityController.update(
+      paneID,
+      size: size,
+      canSplitRight: canSplitRight,
+      canSplitDown: canSplitDown
+    )
   }
 
   func splitPane(_ paneID: UUID, axis: TerminalSplitAxis) {
@@ -731,8 +718,7 @@ final class AppModel: ObservableObject {
   }
 
   private func canSplitPaneInCurrentBounds(_ paneID: UUID, axis: TerminalSplitAxis) -> Bool {
-    guard let availability = paneSplitAvailability[paneID] else { return true }
-    return availability.allows(axis: axis)
+    paneSplitAvailabilityController.canSplit(paneID, axis: axis)
   }
 
   private func rejectSplitForInsufficientSpace(paneID: UUID, axis: TerminalSplitAxis, reason: String) {
@@ -748,64 +734,15 @@ final class AppModel: ObservableObject {
     newPaneID: UUID,
     axis: TerminalSplitAxis
   ) {
-    guard
-      let previous = paneSplitAvailability[originalPaneID],
-      let sizes = childPaneSizesAfterSplit(size: previous.size, axis: axis)
-    else {
-      return
-    }
-    paneSplitAvailability[originalPaneID] = paneSplitAvailability(for: sizes.first)
-    paneSplitAvailability[newPaneID] = paneSplitAvailability(for: sizes.second)
-    DebugLog.write("pane split availability seeded original=\(originalPaneID) new=\(newPaneID) axis=\(axis)")
-  }
-
-  private func childPaneSizesAfterSplit(
-    size: NSSize,
-    axis: TerminalSplitAxis
-  ) -> (first: NSSize, second: NSSize)? {
-    let dividerThickness = 1.0
-    switch axis {
-    case .horizontal:
-      guard let firstWidth = SplitRatioLayout.safeFirstLength(
-        totalLength: Double(size.width),
-        dividerThickness: dividerThickness,
-        ratio: 0.5
-      ) else {
-        return nil
-      }
-      let secondWidth = max(0, Double(size.width) - dividerThickness - firstWidth)
-      return (
-        NSSize(width: firstWidth, height: Double(size.height)),
-        NSSize(width: secondWidth, height: Double(size.height))
-      )
-    case .vertical:
-      guard let firstHeight = SplitRatioLayout.safeFirstLength(
-        totalLength: Double(size.height),
-        dividerThickness: dividerThickness,
-        ratio: 0.5
-      ) else {
-        return nil
-      }
-      let secondHeight = max(0, Double(size.height) - dividerThickness - firstHeight)
-      return (
-        NSSize(width: Double(size.width), height: firstHeight),
-        NSSize(width: Double(size.width), height: secondHeight)
-      )
-    }
-  }
-
-  private func paneSplitAvailability(for size: NSSize) -> PaneSplitAvailability {
-    PaneSplitAvailability(
-      size: size,
-      canSplitRight: SplitRatioLayout.canSplit(totalLength: Double(size.width), dividerThickness: 1),
-      canSplitDown: SplitRatioLayout.canSplit(totalLength: Double(size.height), dividerThickness: 1)
+    paneSplitAvailabilityController.seedAfterSplit(
+      originalPaneID: originalPaneID,
+      newPaneID: newPaneID,
+      axis: axis
     )
   }
 
   private func removePaneSplitAvailability(for panes: [TerminalPane]) {
-    for pane in panes {
-      paneSplitAvailability[pane.paneId] = nil
-    }
+    paneSplitAvailabilityController.remove(for: panes)
   }
 
   private func splitCanFitAvailableScreen(
@@ -869,7 +806,7 @@ final class AppModel: ObservableObject {
       guard let updatedLayout = paneWorkspaceController.workspaceLayout(id: activeWorkspaceID) else { return }
       runtime.layout = updatedLayout
       runtime.cwdBySession[closed.sessionId] = nil
-      paneSplitAvailability[closed.paneId] = nil
+      paneSplitAvailabilityController.remove(paneID: closed.paneId)
       workspaceRuntimes[index] = runtime
       persistWorkspaceRuntime(at: index)
       applyTerminalWindowMinimumContentSize(for: runtime)
