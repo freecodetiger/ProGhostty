@@ -40,6 +40,7 @@ struct RootView: View {
         usesDarkAppearance: model.usesDarkAppearance,
         toast: model.titlebarToast,
         paneLabel: model.activePaneLabel,
+        paneAutoTitle: model.activePaneAutoTitle,
         onWorkspaceSwitcher: { model.openWorkspaceSwitcher() },
         onToastClick: { model.openTitlebarToastAction() },
         onSubtitleClick: { view, anchor in model.openProjectInfoPanel(from: view, anchor: anchor) },

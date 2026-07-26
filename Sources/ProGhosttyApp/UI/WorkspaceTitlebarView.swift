@@ -11,6 +11,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
   let usesDarkAppearance: Bool
   let toast: AppModel.TitlebarToast?
   let paneLabel: String?
+  let paneAutoTitle: String?
   let onWorkspaceSwitcher: () -> Void
   let onToastClick: () -> Void
   let onSubtitleClick: (NSView, NSRect) -> Void
@@ -33,6 +34,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     context.coordinator.usesDarkAppearance = usesDarkAppearance
     context.coordinator.toast = toast
     context.coordinator.paneLabel = paneLabel
+    context.coordinator.paneAutoTitle = paneAutoTitle
     context.coordinator.onWorkspaceSwitcher = onWorkspaceSwitcher
     context.coordinator.onToastClick = onToastClick
     context.coordinator.onSubtitleClick = onSubtitleClick
@@ -63,6 +65,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     var usesDarkAppearance = true
     var toast: AppModel.TitlebarToast?
     var paneLabel: String?
+    var paneAutoTitle: String?
     var onWorkspaceSwitcher: () -> Void
     var onToastClick: () -> Void
     var onSubtitleClick: (NSView, NSRect) -> Void
@@ -174,14 +177,27 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     }
 
     private func updatePaneLabel() {
-      guard let paneLabel, !paneLabel.isEmpty else {
+      // Manual label wins; the program-reported title only fills the gap.
+      let manual = (paneLabel?.isEmpty == false) ? paneLabel : nil
+      let auto = (paneAutoTitle?.isEmpty == false) ? paneAutoTitle : nil
+      guard let display = manual ?? auto else {
         paneLabelLabel.isHidden = true
+        paneLabelLabel.toolTip = nil
         return
       }
       paneLabelLabel.isHidden = false
-      paneLabelLabel.stringValue = paneLabel
-      paneLabelLabel.textColor = button.contentTintColor
+      paneLabelLabel.stringValue = display
+      paneLabelLabel.textColor = manual != nil ? button.contentTintColor : autoTitleColor
+      paneLabelLabel.toolTip = manual == nil ? display : nil
       refreshAccessoryLayout()
+    }
+
+    /// One step weaker than the manual-label tint so reported titles read as
+    /// ambient state, not something the user named.
+    private var autoTitleColor: NSColor {
+      usesDarkAppearance
+        ? NSColor(calibratedWhite: 0.6, alpha: 1)
+        : .tertiaryLabelColor
     }
 
     func updateWindowAppearance(_ window: NSWindow) {
@@ -226,6 +242,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       guard generation == appearanceGeneration else { return }
       applyWindowAppearanceNow(window)
       updateSubtitle()
+      updatePaneLabel()
       updateToast()
     }
 
@@ -330,7 +347,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         host.addSubview(titlebarControlsStack, positioned: .above, relativeTo: nil)
         titlebarControlsConstraints = [
           titlebarControlsStack.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-          titlebarControlsStack.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
+          titlebarModuleCenterY(for: titlebarControlsStack, in: window, host: host),
           titlebarControlsStack.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
         ]
         NSLayoutConstraint.activate(titlebarControlsConstraints)
@@ -343,8 +360,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         host.addSubview(subtitleLabel, positioned: .above, relativeTo: nil)
         subtitleConstraints = [
           subtitleLabel.centerXAnchor.constraint(equalTo: host.centerXAnchor),
-          subtitleLabel.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
-          subtitleLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
+          titlebarModuleCenterY(for: subtitleLabel, in: window, host: host),
           subtitleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: host.leadingAnchor, constant: 120),
           subtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: titlebarControlsStack.leadingAnchor, constant: -12),
         ]
@@ -359,8 +375,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         host.addSubview(paneLabelLabel, positioned: .above, relativeTo: nil)
         paneLabelConstraints = [
           paneLabelLabel.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 80),
-          paneLabelLabel.topAnchor.constraint(equalTo: host.topAnchor, constant: 5),
-          paneLabelLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 24),
+          titlebarModuleCenterY(for: paneLabelLabel, in: window, host: host),
           paneLabelLabel.trailingAnchor.constraint(lessThanOrEqualTo: subtitleLabel.leadingAnchor, constant: -12),
         ]
         NSLayoutConstraint.activate(paneLabelConstraints)
@@ -432,6 +447,16 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
           overlayHost.addSubview(directChild, positioned: .above, relativeTo: nil)
         }
       }
+    }
+
+    /// Vertically centers a titlebar module on the traffic-light buttons so
+    /// text and buttons share one optical line regardless of titlebar height.
+    /// Falls back to the old fixed top inset when no close button exists.
+    private func titlebarModuleCenterY(for view: NSView, in window: NSWindow, host: NSView) -> NSLayoutConstraint {
+      if let closeButton = window.standardWindowButton(.closeButton) {
+        return view.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor)
+      }
+      return view.topAnchor.constraint(equalTo: host.topAnchor, constant: 5)
     }
 
     private func titlebarHost(in window: NSWindow) -> NSView? {
