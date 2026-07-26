@@ -280,7 +280,10 @@ AppKit 符号**不在 struct 本体，全在同文件 `FontManager` enum**（:34
 > UtilityWindowController · ✅ 3-4 TerminalWindowSizingController（D/F 交叉以注入的
 > isExcludedWindow 谓词解开）· ✅ D3 拆文件（TerminalPaneChrome.swift，1925→1335 行；
 > 顺带删除无引用的 KeyboardShortcutBinding menu 扩展）。
-> 每项独立 commit，三绿（639 tests）。
+> 第三波：✅ 4-2 RenderedGridGeometry 独立成文件并收编全部纯几何（PTYGridView 静态面
+> 保留为转发）· ✅ D3 两处气味修复（PTYTerminalSurfaceView 门面，App 层 liveGridView
+> 引用清零；fallback cell 几何入 Core `TerminalGridSizer.gridSize(for:font:...)`）。
+> **次手全部完成。** 每项独立 commit，三绿（639 tests）。
 > 执行中发现：架构守卫对 Core 内 AppKit 有 per-file 白名单强制（非仅 review 清单），
 > §4.2 的"深迁移 App 层"如推进需同步改守卫白名单。
 
@@ -289,8 +292,8 @@ AppKit 符号**不在 struct 本体，全在同文件 `FontManager` enum**（:34
   ✅ 3-1 TitleFormatting       ✅ 3-2 ConfirmationPrompts    ✅ 5-1 FontCatalog
 
 █ 次手（纯几何/纯推断，有样板，带私有状态搬迁）
-  ✅ 4-1 PromptCursorInferrer  4-2 RenderedGridGeometry 扩展  ✅ 4-3 GridSelectionModel
-  ✅ 3-3 PaneSplitAvailability ✅ 3-4/3-5 窗口尺寸+辅助窗口     D3 ✅拆文件+⬜两处气味修复
+  ✅ 4-1 PromptCursorInferrer  ✅ 4-2 RenderedGridGeometry     ✅ 4-3 GridSelectionModel
+  ✅ 3-3 PaneSplitAvailability ✅ 3-4/3-5 窗口尺寸+辅助窗口     ✅ D3 拆文件+两处气味修复
 
 █ 深水（先解契约，再动内核）
   3-7 NotificationPresenter（顺带收编 shellIntegrationState）
