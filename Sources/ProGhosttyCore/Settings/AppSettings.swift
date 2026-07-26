@@ -20,6 +20,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
   public var softLightPreferred: Bool
   public var appLanguage: String
   public var pgControlCommandsEnabled: Bool
+  /// Allow programs to set the pane title via OSC 0/1/2.
+  public var programTitleReportingEnabled: Bool
   public var keyboardShortcuts: KeyboardShortcutSettings
 
   public static let defaults = AppSettings(
@@ -40,6 +42,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     softLightPreferred: false,
     appLanguage: "system",
     pgControlCommandsEnabled: true,
+    programTitleReportingEnabled: true,
     keyboardShortcuts: .defaults
   )
 
@@ -61,6 +64,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     case softLightPreferred
     case appLanguage
     case pgControlCommandsEnabled
+    case programTitleReportingEnabled
     case keyboardShortcuts
   }
 
@@ -82,6 +86,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     softLightPreferred: Bool = false,
     appLanguage: String,
     pgControlCommandsEnabled: Bool,
+    programTitleReportingEnabled: Bool = true,
     keyboardShortcuts: KeyboardShortcutSettings
   ) {
     self.rendererMode = rendererMode
@@ -101,6 +106,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     self.softLightPreferred = softLightPreferred
     self.appLanguage = AppLanguageManager.normalizedLanguage(appLanguage)
     self.pgControlCommandsEnabled = pgControlCommandsEnabled
+    self.programTitleReportingEnabled = programTitleReportingEnabled
     self.keyboardShortcuts = keyboardShortcuts.mergedWithDefaults()
   }
 
@@ -131,6 +137,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
       try container.decodeIfPresent(String.self, forKey: .appLanguage) ?? Self.defaults.appLanguage
     )
     pgControlCommandsEnabled = try container.decodeIfPresent(Bool.self, forKey: .pgControlCommandsEnabled) ?? Self.defaults.pgControlCommandsEnabled
+    programTitleReportingEnabled = try container.decodeIfPresent(Bool.self, forKey: .programTitleReportingEnabled) ?? Self.defaults.programTitleReportingEnabled
     keyboardShortcuts = (
       try container.decodeIfPresent(KeyboardShortcutSettings.self, forKey: .keyboardShortcuts) ?? Self.defaults.keyboardShortcuts
     ).mergedWithDefaults()

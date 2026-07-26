@@ -108,6 +108,24 @@ struct AppSettingsTests {
     #expect(!AppSettings.defaults.notifyWhenFocused)
   }
 
+  @Test func programTitleReportingDefaultsOnAndDecodesWhenMissing() throws {
+    #expect(AppSettings.defaults.programTitleReportingEnabled)
+
+    let legacy = Data(#"{"themeName":"dark"}"#.utf8)
+    let settings = try JSONDecoder().decode(AppSettings.self, from: legacy)
+    #expect(settings.programTitleReportingEnabled)
+  }
+
+  @Test func programTitleReportingRoundTripsThroughSettingsJSON() throws {
+    var settings = AppSettings.defaults
+    settings.programTitleReportingEnabled = false
+
+    let encoded = try JSONEncoder().encode(settings)
+    let decoded = try JSONDecoder().decode(AppSettings.self, from: encoded)
+
+    #expect(!decoded.programTitleReportingEnabled)
+  }
+
   @Test func themeManagerRecognizesSoftThemes() {
     #expect(ThemeManager.normalizedThemeName("soft-dark") == "soft-dark")
     #expect(ThemeManager.normalizedThemeName("soft-light") == "soft-light")

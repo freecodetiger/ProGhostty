@@ -198,6 +198,14 @@ struct SettingsView: View {
         }
       }
       .id("terminal.cwd")
+
+      VStack(alignment: .leading, spacing: 4) {
+        Toggle(text.programTitleReporting, isOn: $model.settings.programTitleReportingEnabled)
+        Text(text.programTitleReportingCaption)
+          .font(.system(size: 12))
+          .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+      }
+      .id("terminal.programTitle")
     }
     .settingsHighlight(id: "terminal.shell", current: highlightedItemID)
   }

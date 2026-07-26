@@ -79,6 +79,11 @@ enum SettingsIndex {
       keywords: { [$0.workingDirectory, "working directory", "cwd", "工作目录", "目录"] }
     ),
     SettingsItem(
+      id: "terminal.programTitle", category: .terminal,
+      title: { $0.programTitleReporting },
+      keywords: { [$0.programTitleReporting, "title", "osc", "auto title", "标题", "自动标题"] }
+    ),
+    SettingsItem(
       id: "appearance.language", category: .appearance,
       title: { $0.appLanguage },
       keywords: { [$0.appLanguage, "language", "语言", "中文", "english"] }

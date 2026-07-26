@@ -33,6 +33,13 @@ struct AppText {
   var terminal: String { text("Terminal", "终端") }
   var defaultShell: String { text("Default shell", "默认 shell") }
   var workingDirectory: String { text("Working directory", "工作目录") }
+  var programTitleReporting: String { text("Allow programs to set the title", "允许程序设置标题") }
+  var programTitleReportingCaption: String {
+    text(
+      "Programs like vim, ssh, and Claude Code report a title while running. It shows in the titlebar until you rename the pane.",
+      "vim、ssh、Claude Code 等程序运行时会上报标题，显示在标题栏左侧；手动改名后不再覆盖。"
+    )
+  }
   var currentDirectory: String { text("Current directory", "当前目录") }
   var choose: String { text("Choose...", "选择...") }
   var appearance: String { text("Appearance", "外观") }
