@@ -104,3 +104,35 @@ jobs:
 
             ## 自 v0.4.0
             - Pattern-2 平滑像素滚动、Metal 直绘 expanded grid；最低 **macOS 14**。
+
+  deploy-site:
+    name: Redeploy download page
+    needs: macos-dmg
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout site repo
+        uses: actions/checkout@v4
+        with:
+          repository: freecodetiger/ProGhostty-release
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Rsync dist to server
+        run: |
+          rsync -az --delete --exclude='*.dmg' \
+            -e "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes" \
+            dist/ "root@${{ secrets.DEPLOY_HOST }}:/var/www/proghostty/"
