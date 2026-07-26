@@ -284,6 +284,13 @@ AppKit 符号**不在 struct 本体，全在同文件 `FontManager` enum**（:34
 > 保留为转发）· ✅ D3 两处气味修复（PTYTerminalSurfaceView 门面，App 层 liveGridView
 > 引用清零；fallback cell 几何入 Core `TerminalGridSizer.gridSize(for:font:...)`）。
 > **次手全部完成。** 每项独立 commit，三绿（639 tests）。
+> 第四波（深水区，分支 `refactor/architecture-deep`，waves 1-3 已并入 main）：
+> ✅ 3-6 AppearanceViewModel（14 个派生属性归纯值类型，注入 systemIsLight，首次可测）·
+> ✅ 3-7 NotificationPresenter（toast/in-app `@Published` + 消失任务迁出；**收编
+> `shellIntegrationState` 为 statusLine**，AppModel 以链式 objectWillChange + 同名转发
+> 保持视图零改动）· ✅ 3-9 AgentNotifyGateController（6 个 `@Published` 状态机迁出，
+> 写 settings 与授权以闭包注入）。三绿（644 tests）。
+> 剩余：3-8 链接交互控制器 · 3-10 AppComposition · 5-2 AppSettings 子结构化 · A/G/H 内核。
 > 执行中发现：架构守卫对 Core 内 AppKit 有 per-file 白名单强制（非仅 review 清单），
 > §4.2 的"深迁移 App 层"如推进需同步改守卫白名单。
 
