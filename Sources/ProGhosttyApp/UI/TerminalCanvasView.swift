@@ -1004,25 +1004,19 @@ final class TerminalPaneViewController: NSViewController {
   private func terminalGridSize(for size: CGSize) -> TerminalGridSize {
     let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     if let surface = contentView as? PTYTerminalSurfaceView {
-      let cellSize = surface.liveGridView.terminalCellSize
-      let inset = surface.liveGridView.terminalContentInset
       return TerminalGridSizer.gridSize(
         for: size,
-        cellSize: cellSize,
-        inset: inset,
+        cellSize: surface.terminalCellSize,
+        inset: surface.terminalContentInset,
         scale: scale
       )
     }
     let textView = terminalTextView(in: contentView)
-    let font = textView?.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    let sampleWidth = max(1, ceil(("W" as NSString).size(withAttributes: [.font: font]).width * scale))
-    let lineHeight = max(1, ceil((font.ascender - font.descender + font.leading) * scale))
-    let inset = textView?.textContainerInset ?? .zero
-    let contentWidth = max(1, (size.width - inset.width * 2) * scale)
-    let contentHeight = max(1, (size.height - inset.height * 2) * scale)
-    return TerminalGridSize(
-      rows: max(1, Int(contentHeight / lineHeight)),
-      cols: max(2, Int(contentWidth / sampleWidth))
+    return TerminalGridSizer.gridSize(
+      for: size,
+      font: textView?.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+      textContainerInset: textView?.textContainerInset ?? .zero,
+      scale: scale
     )
   }
 
@@ -1115,7 +1109,7 @@ final class TerminalPaneViewController: NSViewController {
   /// side-input box is open (inert plain-text terminal during typing).
   private func setTerminalInteractionEnabled(_ enabled: Bool) {
     guard let surface = contentView as? PTYTerminalSurfaceView else { return }
-    surface.liveGridView.setInteractionEnabled(enabled)
+    surface.setInteractionEnabled(enabled)
   }
 
   private func layoutSideInputOverlay() {
@@ -1253,7 +1247,7 @@ final class TerminalPaneViewController: NSViewController {
 
   private func copyFromTerminalSurface() {
     if let surface = contentView as? PTYTerminalSurfaceView, surface.isShowingLiveGrid {
-      surface.liveGridView.copy(nil)
+      surface.copySelection()
       return
     }
     terminalTextView(in: contentView)?.copy(nil)
@@ -1261,7 +1255,7 @@ final class TerminalPaneViewController: NSViewController {
 
   private func pasteIntoTerminalSurface() {
     if let surface = contentView as? PTYTerminalSurfaceView, surface.isShowingLiveGrid {
-      surface.liveGridView.paste(nil)
+      surface.pasteFromPasteboard()
       return
     }
     terminalTextView(in: contentView)?.paste(nil)
@@ -1269,7 +1263,7 @@ final class TerminalPaneViewController: NSViewController {
 
   private func hasTerminalSelection() -> Bool {
     if let surface = contentView as? PTYTerminalSurfaceView, surface.isShowingLiveGrid {
-      return surface.liveGridView.selectedText?.isEmpty == false
+      return surface.hasTextSelection
     }
     guard let textView = terminalTextView(in: contentView) else { return false }
     return textView.selectedRange().length > 0

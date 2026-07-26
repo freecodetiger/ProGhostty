@@ -830,6 +830,27 @@ public final class PTYTerminalSurfaceView: NSView {
     !liveGridView.isHidden
   }
 
+  // MARK: App-facing surface operations
+  // The App layer talks to the surface, not to the grid view inside it — cell
+  // geometry and selection/interaction stay renderer-domain implementation
+  // details (debt spec D3 smell fix).
+
+  public var terminalCellSize: CGSize { liveGridView.terminalCellSize }
+  public var terminalContentInset: CGSize { liveGridView.terminalContentInset }
+  public var hasTextSelection: Bool { liveGridView.selectedText?.isEmpty == false }
+
+  public func setInteractionEnabled(_ enabled: Bool) {
+    liveGridView.setInteractionEnabled(enabled)
+  }
+
+  public func copySelection() {
+    liveGridView.copy(nil)
+  }
+
+  public func pasteFromPasteboard() {
+    liveGridView.paste(nil)
+  }
+
   init(scrollView: NSScrollView, liveGridView: PTYGridView) {
     self.scrollView = scrollView
     self.liveGridView = liveGridView
