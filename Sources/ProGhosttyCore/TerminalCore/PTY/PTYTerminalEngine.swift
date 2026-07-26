@@ -3435,9 +3435,9 @@ public class PTYGridView: NSView {
       let viewportFrame = frameSnapshot,
       viewportFrame.cursorX == 0,
       let geometry = renderedGeometry(),
-      shouldInferPromptCursor(for: viewportFrame, in: geometry),
-      let coordinate = (viewportFrame.cursorY != 0 ? inferredPromptCursorCoordinateOnCursorRow(in: geometry) : nil)
-        ?? inferredPromptCursorCoordinate(in: geometry)
+      PromptCursorInferrer.shouldInferPromptCursor(for: viewportFrame, in: geometry),
+      let coordinate = (viewportFrame.cursorY != 0 ? PromptCursorInferrer.inferredPromptCursorCoordinateOnCursorRow(in: geometry) : nil)
+        ?? PromptCursorInferrer.inferredPromptCursorCoordinate(in: geometry)
     else {
       return nil
     }
@@ -3470,9 +3470,9 @@ public class PTYGridView: NSView {
     guard
       let currentCoordinate = geometry.coordinate(at: NSPoint(x: currentCursorRect.midX, y: currentCursorRect.midY)),
       currentCoordinate.row > cursorRow,
-      rowIsBlank(cursorRow, in: geometry),
-      rowIsInPromptInputRegion(currentCoordinate.row, in: geometry)
-        || rect(currentCursorRect, approximatelyEquals: latestPromptInputCursorRect)
+      PromptCursorInferrer.rowIsBlank(cursorRow, in: geometry),
+      PromptCursorInferrer.rowIsInPromptInputRegion(currentCoordinate.row, in: geometry)
+        || PromptCursorInferrer.rect(currentCursorRect, approximatelyEquals: latestPromptInputCursorRect)
     else {
       return nil
     }
@@ -3487,132 +3487,11 @@ public class PTYGridView: NSView {
       let rect,
       let geometry = renderedGeometry(),
       let coordinate = geometry.coordinate(at: NSPoint(x: rect.midX, y: rect.midY)),
-      rowIsInPromptInputRegion(coordinate.row, in: geometry)
+      PromptCursorInferrer.rowIsInPromptInputRegion(coordinate.row, in: geometry)
     else {
       return
     }
     latestPromptInputCursorRect = rect
-  }
-
-  private func shouldInferPromptCursor(
-    for viewportFrame: GhosttyTerminalFrame,
-    in geometry: RenderedGridGeometry
-  ) -> Bool {
-    if viewportFrame.cursorY == 0 {
-      return true
-    }
-    let row = geometry.frame.cursorY
-    let rowStart = row * geometry.frame.cols
-    let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
-    guard row >= 0, row < geometry.frame.rows, rowStart < rowEnd else {
-      return false
-    }
-    let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
-    return promptMarkerColumn(in: cells) != nil
-  }
-
-  private func inferredPromptCursorCoordinateOnCursorRow(in geometry: RenderedGridGeometry) -> GridCoordinate? {
-    let row = geometry.frame.cursorY
-    let rowStart = row * geometry.frame.cols
-    let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
-    guard row >= 0, row < geometry.frame.rows, rowStart < rowEnd else {
-      return nil
-    }
-    let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
-    guard let promptCol = promptMarkerColumn(in: cells) else {
-      return nil
-    }
-    let lowerBound = promptCol + 1
-    if let lastTextCol = cells.indices.last(where: { $0 >= lowerBound && cells[$0].scalar != " " }) {
-      return GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
-    }
-    if let cursorCol = cells.indices.last(where: { $0 >= lowerBound && isVisualInputCursorCell(cells[$0]) }) {
-      return GridCoordinate(row: row, col: cursorCol)
-    }
-    return nil
-  }
-
-  private func rowContainsPromptMarker(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
-    guard let cells = cells(inRow: row, frame: geometry.frame) else { return false }
-    return promptMarkerColumn(in: cells) != nil
-  }
-
-  private func rowIsInPromptInputRegion(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
-    guard row >= 0, row < geometry.frame.rows else { return false }
-    for candidateRow in stride(from: row, through: 0, by: -1) {
-      if rowContainsPromptMarker(candidateRow, in: geometry) {
-        return true
-      }
-    }
-    return false
-  }
-
-  private func rowIsBlank(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
-    guard let cells = cells(inRow: row, frame: geometry.frame) else { return false }
-    return cells.allSatisfy { $0.scalar == " " }
-  }
-
-  private func cells(inRow row: Int, frame: GhosttyTerminalFrame) -> [GhosttyTerminalFrame.Cell]? {
-    let rowStart = row * frame.cols
-    let rowEnd = min(rowStart + frame.cols, frame.cells.count)
-    guard row >= 0, row < frame.rows, rowStart < rowEnd else {
-      return nil
-    }
-    return Array(frame.cells[rowStart..<rowEnd])
-  }
-
-  private func rect(_ lhs: NSRect, approximatelyEquals rhs: NSRect?) -> Bool {
-    guard let rhs else { return false }
-    return abs(lhs.minX - rhs.minX) < 0.5
-      && abs(lhs.minY - rhs.minY) < 0.5
-      && abs(lhs.width - rhs.width) < 0.5
-      && abs(lhs.height - rhs.height) < 0.5
-  }
-
-  private func inferredPromptCursorCoordinate(in geometry: RenderedGridGeometry) -> GridCoordinate? {
-    var bestVisualCursor: GridCoordinate?
-    var bestTextFallback: GridCoordinate?
-    var inputRegionIsActive = false
-    for row in 0..<geometry.frame.rows {
-      guard geometry.clipRect.intersects(geometry.rowRect(row)) else { continue }
-      let rowStart = row * geometry.frame.cols
-      let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
-      guard rowStart < rowEnd else { continue }
-      let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
-      let lowerBound: Int
-      if let promptCol = promptMarkerColumn(in: cells) {
-        inputRegionIsActive = true
-        bestVisualCursor = nil
-        bestTextFallback = nil
-        lowerBound = promptCol + 1
-      } else if inputRegionIsActive {
-        lowerBound = 0
-      } else {
-        continue
-      }
-      if let cursorCol = cells.indices.last(where: { $0 >= lowerBound && isVisualInputCursorCell(cells[$0]) }) {
-        bestVisualCursor = GridCoordinate(row: row, col: cursorCol)
-      }
-      if let lastTextCol = cells.indices.last(where: { $0 >= lowerBound && cells[$0].scalar != " " }) {
-        bestTextFallback = GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
-      }
-    }
-    return bestVisualCursor ?? bestTextFallback
-  }
-
-  private func promptMarkerColumn(in cells: [GhosttyTerminalFrame.Cell]) -> Int? {
-    cells.indices.first { index in
-      switch cells[index].scalar {
-      case "›", "❯", ">", "$", "#":
-        true
-      default:
-        false
-      }
-    }
-  }
-
-  private func isVisualInputCursorCell(_ cell: GhosttyTerminalFrame.Cell) -> Bool {
-    cell.scalar == " " && (cell.inverse || !cell.usesDefaultBackground)
   }
 
   private func clippedCursorRect(_ rect: NSRect, to clipRect: NSRect) -> NSRect? {
