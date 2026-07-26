@@ -79,7 +79,7 @@ final class AppModel: ObservableObject {
   private let workspaceStore: WorkspaceStore?
   private let settingsStore: SettingsStore
   private let terminalActionDispatcher = TerminalActionDispatcher()
-  private var settingsWindowController: NSWindowController?
+  private let utilityWindows = UtilityWindowController()
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
   private var rememberedWorkspaceContentSizes: [UUID: NSSize] = [:]
   private var titlebarToastTask: Task<Void, Never>?
@@ -1072,7 +1072,7 @@ final class AppModel: ObservableObject {
   private func terminalWindow() -> NSWindow? {
     func isTerminalCandidate(_ window: NSWindow) -> Bool {
       guard window.isVisible else { return false }
-      if window === settingsWindowController?.window { return false }
+      if window === utilityWindows.settingsWindow { return false }
       return true
     }
 
@@ -1171,16 +1171,7 @@ final class AppModel: ObservableObject {
   }
 
   func closeSettingsWindow(_ window: NSWindow? = nil) {
-    if let window {
-      window.close()
-      if window === settingsWindowController?.window {
-        settingsWindowController = nil
-      }
-      return
-    }
-
-    settingsWindowController?.window?.close()
-    settingsWindowController = nil
+    utilityWindows.closeSettings(window)
   }
 
   func appVersionString() -> String {
@@ -1192,46 +1183,24 @@ final class AppModel: ObservableObject {
   }
 
   func openSettingsWindow() {
-    if let window = settingsWindowController?.window {
-      applyConfigurationWindowAppearance(to: window)
-      window.makeKeyAndOrderFront(nil)
-      NSApp.activate(ignoringOtherApps: true)
-      // show/makeKey can reinstate system title after we hide it; re-apply next turn.
-      reassertSettingsWindowChrome()
-      return
-    }
-
-    let controller = NSHostingController(
-      rootView: SettingsView()
-        .environmentObject(self)
-        .preferredColorScheme(configurationColorScheme)
+    utilityWindows.openSettings(
+      makeContent: {
+        NSHostingController(
+          rootView: SettingsView()
+            .environmentObject(self)
+            .preferredColorScheme(configurationColorScheme)
+        )
+      },
+      applyChrome: { [weak self] window in
+        self?.applyConfigurationWindowAppearance(to: window)
+      }
     )
-    let window = NSWindow(contentViewController: controller)
-    window.title = "Settings"
-    window.styleMask = [.titled, .closable, .miniaturizable]
-    window.setContentSize(NSSize(width: 640, height: 520))
-    window.minSize = NSSize(width: 560, height: 460)
-    window.isReleasedWhenClosed = false
-    window.center()
-    window.toolbarStyle = .preference
-    applyConfigurationWindowAppearance(to: window)
-
-    let windowController = NSWindowController(window: window)
-    settingsWindowController = windowController
-    windowController.showWindow(nil)
-    NSApp.activate(ignoringOtherApps: true)
-    // Preference-style titlebar materializes on show and can reset titleVisibility.
-    reassertSettingsWindowChrome()
   }
 
   /// Sidebar / split layout can briefly restore the system "Settings" title; cheap re-hide.
   func reassertSettingsWindowChrome() {
-    guard let window = settingsWindowController?.window else { return }
-    applyConfigurationWindowAppearance(to: window)
-    // Cover AppKit applying defaults after the current layout pass.
-    DispatchQueue.main.async { [weak self] in
-      guard let self, let window = self.settingsWindowController?.window else { return }
-      self.applyConfigurationWindowAppearance(to: window)
+    utilityWindows.reassertSettingsChrome { [weak self] window in
+      self?.applyConfigurationWindowAppearance(to: window)
     }
   }
 
@@ -1246,7 +1215,7 @@ final class AppModel: ObservableObject {
     surfaceRegistry.applySemanticLinkText(appText.semanticLinkText)
     applyFocusedTerminalSurface()
     for window in NSApp.windows
-      where window !== settingsWindowController?.window
+      where window !== utilityWindows.settingsWindow
     {
       ProGhosttyWindowAppearance.applyTerminalChrome(
         to: window,
@@ -1254,7 +1223,7 @@ final class AppModel: ObservableObject {
         usesDarkAppearance: usesDarkAppearance
       )
     }
-    if let window = settingsWindowController?.window {
+    if let window = utilityWindows.settingsWindow {
       applyConfigurationWindowAppearance(to: window)
     }
   }
