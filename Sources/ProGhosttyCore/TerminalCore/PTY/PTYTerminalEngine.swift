@@ -968,7 +968,7 @@ public class PTYGridView: NSView {
   private var frameSnapshot: GhosttyTerminalFrame?
   private var scrollFrameSnapshot: GhosttyTerminalScrollFrame?
   private var palette = TerminalSurfacePalette.dark
-  private var fontFamily = FontManager.defaultMonospacedFontName()
+  private var fontFamily = FontCatalog.defaultMonospacedFontName()
   private var cjkFallbackFamily: String?
   private var fontSize: CGFloat = 14
   private var font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
@@ -2797,7 +2797,7 @@ public class PTYGridView: NSView {
   }
 
   private func font(forCJKText text: String, bold: Bool) -> NSFont {
-    guard FontManager.containsCJK(text) else {
+    guard FontCatalog.containsCJK(text) else {
       return bold ? boldFont : font
     }
     return (bold ? cjkBoldFont : cjkFont) ?? (bold ? boldFont : font)

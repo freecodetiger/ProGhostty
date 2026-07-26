@@ -17,7 +17,7 @@ public final class TerminalAttributedRenderer {
   private let isFocused: Bool
 
   public init(
-    fontFamily: String = FontManager.defaultMonospacedFontName(),
+    fontFamily: String = FontCatalog.defaultMonospacedFontName(),
     cjkFallbackFamily: String? = nil,
     fontSize: CGFloat = 13,
     palette: TerminalSurfacePalette = .dark,
@@ -93,7 +93,7 @@ public final class TerminalAttributedRenderer {
   }
 
   private func font(for cell: GhosttyTerminalFrame.Cell) -> NSFont {
-    guard FontManager.containsCJK(String(cell.scalar)) else {
+    guard FontCatalog.containsCJK(String(cell.scalar)) else {
       return cell.bold ? boldFont : font
     }
     return (cell.bold ? cjkBoldFont : cjkFont) ?? (cell.bold ? boldFont : font)

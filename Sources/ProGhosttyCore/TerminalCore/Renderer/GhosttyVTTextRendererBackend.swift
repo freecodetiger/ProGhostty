@@ -14,7 +14,7 @@ public final class GhosttyVTTextRendererBackend: TerminalRendererBackend {
 
   public init(
     palette: TerminalSurfacePalette = .dark,
-    fontFamily: String = FontManager.defaultMonospacedFontName(),
+    fontFamily: String = FontCatalog.defaultMonospacedFontName(),
     cjkFallbackFamily: String? = nil,
     fontSize: CGFloat = 14
   ) {

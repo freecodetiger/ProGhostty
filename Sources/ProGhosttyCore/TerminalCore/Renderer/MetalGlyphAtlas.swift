@@ -490,7 +490,7 @@ public final class MetalGlyphAtlas {
     fontSize: CGFloat
   ) -> String {
     guard
-      FontManager.containsCJK(scalar),
+      FontCatalog.containsCJK(scalar),
       let cjkFallbackFamily,
       NSFont(name: cjkFallbackFamily, size: fontSize) != nil
     else {

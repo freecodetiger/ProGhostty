@@ -53,7 +53,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     )
   }
   private var palette = TerminalSurfacePalette.dark
-  private var fontFamily = FontManager.defaultMonospacedFontName()
+  private var fontFamily = FontCatalog.defaultMonospacedFontName()
   private var cjkFallbackFamily: String?
   private var fontSize: CGFloat = 14
   private var focusedSessionID: TerminalSessionID?
