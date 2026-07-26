@@ -66,16 +66,30 @@ final class AppModel: ObservableObject {
     get { notifications.statusLine }
     set { notifications.statusLine = newValue }
   }
-  @Published var agentNotifyHooksStatus = AgentNotifyHookStatus(
-    scriptsReady: false,
-    codexConfigured: false,
-    claudeConfigured: false,
-    detail: nil
+  /// Install/uninstall gate for the notifications toggle lives in
+  /// AgentNotifyGateController (debt spec 3-9); objectWillChange is chained in
+  /// init and these forwarders keep the SettingsView reads/bindings working.
+  private(set) lazy var agentNotifyGate = AgentNotifyGateController(
+    hookManager: agentNotificationHookManager,
+    setNotificationsEnabledSetting: { [weak self] enabled in
+      self?.settings.notificationsEnabled = enabled
+    },
+    didEnableNotifications: { [weak self] in
+      self?.requestNotificationAuthorizationOnEnable()
+    }
   )
-  @Published var agentNotifyHookError: String?
-  @Published var isInstallingAgentNotifyHooks = false
-  @Published var showAgentNotifyInstallSheet = false
-  @Published var showAgentNotifyUninstallSheet = false
+
+  var agentNotifyHooksStatus: AgentNotifyHookStatus { agentNotifyGate.hooksStatus }
+  var agentNotifyHookError: String? { agentNotifyGate.hookError }
+  var isInstallingAgentNotifyHooks: Bool { agentNotifyGate.isInstalling }
+  var showAgentNotifyInstallSheet: Bool {
+    get { agentNotifyGate.showInstallSheet }
+    set { agentNotifyGate.showInstallSheet = newValue }
+  }
+  var showAgentNotifyUninstallSheet: Bool {
+    get { agentNotifyGate.showUninstallSheet }
+    set { agentNotifyGate.showUninstallSheet = newValue }
+  }
 
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
@@ -174,8 +188,11 @@ final class AppModel: ObservableObject {
       self?.terminalFileInfo(target, from: sourceSession)
     }
     AppModel.shared = self
-    // Forwarded presenter state must keep publishing through AppModel.
+    // Forwarded presenter/controller state must keep publishing through AppModel.
     notifications.objectWillChange
+      .sink { [weak self] _ in self?.objectWillChange.send() }
+      .store(in: &cancellables)
+    agentNotifyGate.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
     applyTerminalAppearance()
@@ -202,80 +219,34 @@ final class AppModel: ObservableObject {
     NSWorkspace.shared.open(url)
   }
 
-  // MARK: Agent notify hooks (Settings gate)
+  // MARK: Agent notify hooks (Settings gate) — thin forwarders → AgentNotifyGateController
 
   func refreshAgentNotifyHookStatus() {
-    agentNotifyHooksStatus = agentNotificationHookManager.status()
+    agentNotifyGate.refreshStatus()
   }
 
-  /// Settings toggle entry: enabling requires ready hooks or an install sheet.
   func setNotificationsEnabled(_ enabled: Bool) {
-    if enabled {
-      refreshAgentNotifyHookStatus()
-      if agentNotifyHooksStatus.isReady {
-        settings.notificationsEnabled = true
-        requestNotificationAuthorizationOnEnable()
-      } else {
-        showAgentNotifyInstallSheet = true
-      }
-    } else {
-      refreshAgentNotifyHookStatus()
-      let hadHooks = agentNotifyHooksStatus.isReady
-        || agentNotifyHooksStatus.isPartial
-        || agentNotifyHooksStatus.scriptsReady
-      settings.notificationsEnabled = false
-      if hadHooks {
-        showAgentNotifyUninstallSheet = true
-      }
-    }
+    agentNotifyGate.setNotificationsEnabled(enabled)
   }
 
   func confirmInstallAgentNotifyHooks() {
-    guard !isInstallingAgentNotifyHooks else { return }
-    isInstallingAgentNotifyHooks = true
-    agentNotifyHookError = nil
-    defer { isInstallingAgentNotifyHooks = false }
-    do {
-      try agentNotificationHookManager.install()
-      refreshAgentNotifyHookStatus()
-      showAgentNotifyInstallSheet = false
-      if agentNotifyHooksStatus.isReady {
-        settings.notificationsEnabled = true
-        requestNotificationAuthorizationOnEnable()
-      } else {
-        agentNotifyHookError = agentNotifyHooksStatus.detail
-          ?? "Hooks installed but not detected as ready"
-      }
-    } catch {
-      agentNotifyHookError = error.localizedDescription
-    }
+    agentNotifyGate.confirmInstall()
   }
 
   func cancelInstallAgentNotifyHooks() {
-    showAgentNotifyInstallSheet = false
+    agentNotifyGate.cancelInstall()
   }
 
   func confirmUninstallAgentNotifyHooks(removeHooks: Bool) {
-    showAgentNotifyUninstallSheet = false
-    guard removeHooks else {
-      refreshAgentNotifyHookStatus()
-      return
-    }
-    do {
-      try agentNotificationHookManager.uninstall(removeScripts: true)
-      agentNotifyHookError = nil
-    } catch {
-      agentNotifyHookError = error.localizedDescription
-    }
-    refreshAgentNotifyHookStatus()
+    agentNotifyGate.confirmUninstall(removeHooks: removeHooks)
   }
 
   func cancelUninstallAgentNotifyHooks() {
-    showAgentNotifyUninstallSheet = false
+    agentNotifyGate.cancelUninstall()
   }
 
   func repairAgentNotifyHooks() {
-    showAgentNotifyInstallSheet = true
+    agentNotifyGate.repair()
   }
 
   private func requestNotificationAuthorizationOnEnable() {
