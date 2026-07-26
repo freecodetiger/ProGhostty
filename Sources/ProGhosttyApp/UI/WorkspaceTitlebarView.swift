@@ -11,6 +11,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
   let usesDarkAppearance: Bool
   let toast: AppModel.TitlebarToast?
   let paneLabel: String?
+  let paneAutoTitle: String?
   let onWorkspaceSwitcher: () -> Void
   let onToastClick: () -> Void
   let onSubtitleClick: (NSView, NSRect) -> Void
@@ -33,6 +34,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     context.coordinator.usesDarkAppearance = usesDarkAppearance
     context.coordinator.toast = toast
     context.coordinator.paneLabel = paneLabel
+    context.coordinator.paneAutoTitle = paneAutoTitle
     context.coordinator.onWorkspaceSwitcher = onWorkspaceSwitcher
     context.coordinator.onToastClick = onToastClick
     context.coordinator.onSubtitleClick = onSubtitleClick
@@ -63,6 +65,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     var usesDarkAppearance = true
     var toast: AppModel.TitlebarToast?
     var paneLabel: String?
+    var paneAutoTitle: String?
     var onWorkspaceSwitcher: () -> Void
     var onToastClick: () -> Void
     var onSubtitleClick: (NSView, NSRect) -> Void
@@ -174,14 +177,27 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
     }
 
     private func updatePaneLabel() {
-      guard let paneLabel, !paneLabel.isEmpty else {
+      // Manual label wins; the program-reported title only fills the gap.
+      let manual = (paneLabel?.isEmpty == false) ? paneLabel : nil
+      let auto = (paneAutoTitle?.isEmpty == false) ? paneAutoTitle : nil
+      guard let display = manual ?? auto else {
         paneLabelLabel.isHidden = true
+        paneLabelLabel.toolTip = nil
         return
       }
       paneLabelLabel.isHidden = false
-      paneLabelLabel.stringValue = paneLabel
-      paneLabelLabel.textColor = button.contentTintColor
+      paneLabelLabel.stringValue = display
+      paneLabelLabel.textColor = manual != nil ? button.contentTintColor : autoTitleColor
+      paneLabelLabel.toolTip = manual == nil ? display : nil
       refreshAccessoryLayout()
+    }
+
+    /// One step weaker than the manual-label tint so reported titles read as
+    /// ambient state, not something the user named.
+    private var autoTitleColor: NSColor {
+      usesDarkAppearance
+        ? NSColor(calibratedWhite: 0.6, alpha: 1)
+        : .tertiaryLabelColor
     }
 
     func updateWindowAppearance(_ window: NSWindow) {
@@ -226,6 +242,7 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       guard generation == appearanceGeneration else { return }
       applyWindowAppearanceNow(window)
       updateSubtitle()
+      updatePaneLabel()
       updateToast()
     }
 
