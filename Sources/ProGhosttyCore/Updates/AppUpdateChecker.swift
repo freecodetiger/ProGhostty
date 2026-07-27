@@ -50,6 +50,15 @@ public enum AppUpdateAvailability: Equatable, Sendable {
   case available(AppUpdate)
 }
 
+/// The result of a manual update check, designed for inline display in Settings.
+/// Unlike `AppUpdateAvailability`, this includes the error case so the UI can
+/// show a status row without a separate titlebar toast.
+public enum UpdateCheckResult: Equatable, Sendable {
+  case upToDate
+  case available(AppUpdate)
+  case failed
+}
+
 public enum AppUpdateError: Error, Equatable, Sendable {
   case invalidCurrentVersion(String)
   case invalidLatestVersion(String)

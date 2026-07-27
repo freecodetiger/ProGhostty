@@ -56,6 +56,7 @@ final class AppModel: ObservableObject {
     }
   }
   @Published var isCheckingForUpdates = false
+  @Published var updateCheckResult: UpdateCheckResult?
   @Published var systemNotificationsAuthorized = true
 
   /// Notification presentation state lives in NotificationPresenter (debt
@@ -1005,6 +1006,7 @@ final class AppModel: ObservableObject {
   func checkForUpdates(manual: Bool) async {
     if manual {
       isCheckingForUpdates = true
+      updateCheckResult = nil
     }
     defer {
       if manual {
@@ -1017,18 +1019,22 @@ final class AppModel: ObservableObject {
       switch availability {
       case .upToDate:
         if manual {
-          showTitlebarToast(appText.upToDateToast, style: .success, lifetime: .transient(2.4))
+          updateCheckResult = .upToDate
         }
       case .available(let update):
-        showTitlebarToast(
-          "\(appText.updateAvailableToast) \(update.version)",
-          style: .update(update.releaseURL),
-          lifetime: .persistent
-        )
+        if manual {
+          updateCheckResult = .available(update)
+        } else {
+          showTitlebarToast(
+            "\(appText.updateAvailableToast) \(update.version)",
+            style: .update(update.releaseURL),
+            lifetime: .persistent
+          )
+        }
       }
     } catch {
       if manual {
-        showTitlebarToast(appText.updateCheckFailedToast, style: .error, lifetime: .transient(2.8))
+        updateCheckResult = .failed
       }
     }
   }

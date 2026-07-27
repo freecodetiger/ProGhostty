@@ -498,6 +498,126 @@ struct SettingsView: View {
         }
       }
       .id("about.version")
+
+      if model.isCheckingForUpdates {
+        HStack(spacing: 6) {
+          ProgressView()
+            .scaleEffect(0.7)
+            .frame(width: 14, height: 14)
+          Text(text.checkingForUpdates)
+            .font(.system(size: 12))
+            .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+        }
+        .padding(.top, 2)
+      }
+
+      if let result = model.updateCheckResult {
+        VStack(alignment: .leading, spacing: 6) {
+          Divider()
+          switch result {
+          case .upToDate:
+            HStack(spacing: 6) {
+              Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.system(size: 13))
+              Text(text.upToDateToast)
+                .font(.system(size: 12))
+                .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+            }
+          case .available(let update):
+            HStack(spacing: 6) {
+              Image(systemName: "arrow.down.circle.fill")
+                .foregroundStyle(.blue)
+                .font(.system(size: 13))
+              Text("\(text.updateAvailableToast) (\(update.version.description))")
+                .font(.system(size: 12))
+                .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+            }
+            Button(text.downloadUpdate) {
+              if let url = update.downloadURL {
+                NSWorkspace.shared.open(url)
+              } else {
+                NSWorkspace.shared.open(update.releaseURL)
+              }
+            }
+          case .failed:
+            HStack(spacing: 6) {
+              Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.orange)
+                .font(.system(size: 13))
+              Text(text.updateCheckFailedToast)
+                .font(.system(size: 12))
+                .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+            }
+            Text(text.updateCheckFailedHint)
+              .font(.system(size: 11))
+              .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
+          }
+        }
+        .padding(.top, 2)
+      }
+
+      Divider()
+        .padding(.vertical, 4)
+
+      // Project identity & open-source links
+      HStack(alignment: .top, spacing: 12) {
+        if let appIcon = NSImage(named: NSImage.applicationIconName) {
+          Image(nsImage: appIcon)
+            .resizable()
+            .frame(width: 48, height: 48)
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          Text("ProGhostty")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(Color(nsColor: model.configurationPrimaryTextColor))
+          Text("by freeCodeTiger")
+            .font(.system(size: 11))
+            .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
+          Text(text.projectDescription)
+            .font(.system(size: 11))
+            .foregroundStyle(Color(nsColor: model.configurationSecondaryTextColor))
+            .fixedSize(horizontal: false, vertical: true)
+          Text(text.projectSubtitle)
+            .font(.system(size: 10))
+            .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
+            .fixedSize(horizontal: false, vertical: true)
+          HStack(spacing: 12) {
+            Button {
+              NSWorkspace.shared.open(URL(string: "https://github.com/freecodetiger/ProGhostty")!)
+            } label: {
+              HStack(spacing: 4) {
+                Image(systemName: "link")
+                  .font(.system(size: 10))
+                Text(text.openSourceRepository)
+                  .font(.system(size: 11))
+              }
+            }
+            .buttonStyle(.link)
+            Text("MIT License")
+              .font(.system(size: 11))
+              .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
+          }
+          .padding(.top, 2)
+
+          Text(text.contributionInvitation)
+            .font(.system(size: 10))
+            .foregroundStyle(Color(nsColor: model.configurationTertiaryTextColor))
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 4)
+          Button {
+            NSWorkspace.shared.open(URL(string: "https://github.com/freecodetiger/ProGhostty")!)
+          } label: {
+            HStack(spacing: 4) {
+              Image(systemName: "star")
+                .font(.system(size: 10))
+              Text(text.starInvitation)
+                .font(.system(size: 10))
+            }
+          }
+          .buttonStyle(.link)
+        }
+      }
     }
   }
 
