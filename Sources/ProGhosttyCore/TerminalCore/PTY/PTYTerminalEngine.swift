@@ -947,6 +947,10 @@ public class PTYGridView: NSView {
   /// new output). Fired instead of `browsePresentHandler` when the tick resolves
   /// to the bottom edge.
   public var browseFollowResumeHandler: (() -> Void)?
+  /// Fetch arbitrary rows from the VT scrollback by absolute row number. Used
+  /// by `selectedText` to copy selection rows that fall outside the visible
+  /// frame. Wired to `bridge.rows(at:count:)` by the surface registry.
+  public var rowFetchHandler: ((_ startRow: UInt64, _ count: Int) -> GhosttyTerminalRowWindow?)?
   public var activationHandler: (() -> Void)?
   public var openURLHandler: ((URL) -> Void)? = { url in
     _ = NSWorkspace.shared.open(url)
@@ -1155,25 +1159,91 @@ public class PTYGridView: NSView {
   }
 
   public var selectedText: String? {
-    guard
-      let geometry = renderedGeometry(),
-      let selectionRange = normalizedSelectionRange(in: geometry)
-    else {
-      return nil
-    }
+    guard let absoluteRange = selection.unclampedAbsoluteRange() else { return nil }
+    guard let geometry = renderedGeometry() else { return nil }
     let frame = geometry.frame
-    var lines: [String] = []
-    for row in selectionRange.lower.row...selectionRange.upper.row {
-      let startCol = row == selectionRange.lower.row ? selectionRange.lower.col : 0
-      let endCol = row == selectionRange.upper.row ? selectionRange.upper.col : max(0, frame.cols - 1)
-      guard startCol <= endCol else { continue }
-      let line = (startCol...endCol).compactMap { col -> String? in
-        let index = row * frame.cols + col
-        guard index < frame.cells.count else { return nil }
-        return String(frame.cells[index].scalar)
-      }.joined()
-      lines.append(line.trimmingCharacters(in: .whitespaces))
+    let firstAbsoluteRow = geometry.absoluteBaseRow
+    let lastAbsoluteRow = firstAbsoluteRow + frame.rows - 1
+
+    // Group absolute rows into visible (read from frame) and out-of-viewport
+    // fetches (one bridge call per contiguous block).
+    struct FetchBlock {
+      let absoluteStart: Int
+      let rows: Int
+      let cells: [GhosttyTerminalFrame.Cell]  // row-major
+      let cols: Int
     }
+
+    var blocks: [FetchBlock] = []
+    let lower = absoluteRange.lower.absoluteRow
+    let upper = absoluteRange.upper.absoluteRow
+
+    var cursor = lower
+    while cursor <= upper {
+      let inFrame = cursor >= firstAbsoluteRow && cursor <= lastAbsoluteRow
+      // Find contiguous same-kind run.
+      var runEnd = cursor
+      while runEnd + 1 <= upper {
+        let nextInFrame = (runEnd + 1) >= firstAbsoluteRow && (runEnd + 1) <= lastAbsoluteRow
+        guard nextInFrame == inFrame else { break }
+        runEnd += 1
+      }
+
+      if inFrame {
+        // Visible rows — pull from the geometry frame cells.
+        let viewportStart = cursor - firstAbsoluteRow
+        let viewportEnd = runEnd - firstAbsoluteRow
+        var blockCells: [GhosttyTerminalFrame.Cell] = []
+        blockCells.reserveCapacity((viewportEnd - viewportStart + 1) * frame.cols)
+        for vr in viewportStart...viewportEnd {
+          let rowStart = vr * frame.cols
+          let rowEnd = min(rowStart + frame.cols, frame.cells.count)
+          if rowStart < frame.cells.count {
+            blockCells.append(contentsOf: frame.cells[rowStart..<rowEnd])
+          }
+        }
+        blocks.append(FetchBlock(absoluteStart: cursor,
+                                  rows: runEnd - cursor + 1,
+                                  cells: blockCells, cols: frame.cols))
+        cursor = runEnd + 1
+      } else if let rowFetchHandler,
+                let window = rowFetchHandler(UInt64(max(0, cursor)),
+                                              runEnd - cursor + 1),
+                !window.rows.isEmpty
+      {
+        // Out-of-viewport — batch-fetch from the VT bridge.
+        var blockCells: [GhosttyTerminalFrame.Cell] = []
+        blockCells.reserveCapacity(window.rows.count * window.cols)
+        for row in window.rows { blockCells.append(contentsOf: row.cells) }
+        blocks.append(FetchBlock(absoluteStart: Int(window.startRow),
+                                  rows: window.rows.count,
+                                  cells: blockCells, cols: window.cols))
+        cursor = Int(window.startRow) + window.rows.count
+      } else {
+        // Can't fetch this range — skip it.
+        cursor = runEnd + 1
+      }
+    }
+
+    // Walk the blocks in order to build lines.
+    var lines: [String] = []
+    for block in blocks {
+      let blockLower = block.absoluteStart
+      for offset in 0..<block.rows {
+        let absoluteRow = blockLower + offset
+        let startCol = absoluteRow == lower ? absoluteRange.lower.col : 0
+        let endCol = absoluteRow == upper ? absoluteRange.upper.col : max(0, block.cols - 1)
+        guard startCol <= endCol else { continue }
+        let rowStart = offset * block.cols
+        let line = (startCol...endCol).compactMap { col -> String? in
+          let index = rowStart + col
+          guard index < block.cells.count else { return nil }
+          return String(block.cells[index].scalar)
+        }.joined()
+        lines.append(line.trimmingCharacters(in: .whitespaces))
+      }
+    }
+
     let value = lines.joined(separator: "\n")
     return value.isEmpty ? nil : value
   }

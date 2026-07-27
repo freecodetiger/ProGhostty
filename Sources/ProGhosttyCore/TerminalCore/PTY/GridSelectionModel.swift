@@ -50,6 +50,13 @@ struct GridSelectionModel {
     return (head, anchor)
   }
 
+  /// The full absolute-row range without any viewport clamping. Returns nil
+  /// while the selection is empty or zero-width. Use this for text extraction
+  /// (copy); use `normalizedRange(in:)` for rendering.
+  func unclampedAbsoluteRange() -> (lower: GridSelectionPoint, upper: GridSelectionPoint)? {
+    normalizedPointRange()
+  }
+
   /// Projects the absolute-row selection into the rendered frame's viewport
   /// rows, clamping endpoints that scrolled out of view to full rows.
   func normalizedRange(in geometry: RenderedGridGeometry) -> (lower: GridCoordinate, upper: GridCoordinate)? {

@@ -183,6 +183,10 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       guard let self, let bridge = self.surfaces[id]?.bridge else { return }
       self.render(bridge, session: id)
     }
+    gridView.rowFetchHandler = { [weak self] startRow, count in
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return nil }
+      return try? bridge.rows(at: startRow, count: count)
+    }
     gridView.activationHandler = { [weak self] in
       self?.activationHandler?(id)
     }
