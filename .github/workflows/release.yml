@@ -122,6 +122,12 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - name: Fetch latest release info (embed at build time)
+        run: |
+          curl -sS -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/freecodetiger/ProGhostty/releases/latest" \
+            | jq '{tag_name, assets: [.assets[] | {name, browser_download_url}]}' \
+            > public/release.json
       - run: npm run build
 
       - name: Set up SSH
