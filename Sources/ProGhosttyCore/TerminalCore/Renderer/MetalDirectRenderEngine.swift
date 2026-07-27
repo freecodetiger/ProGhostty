@@ -253,6 +253,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     let drawableSize = Self.drawableTargetSize(forViewBounds: view.bounds.size, backingScale: scale)
     guard let metalLayer = view.layer as? CAMetalLayer else { return false }
 
+    metalLayer.contentsScale = scale
     metalLayer.drawableSize = drawableSize
     // Always synchronous: height-change clears are rare, and a Metal completion
     // handler must not hop onto @MainActor isolation (EXC_BREAKPOINT /
@@ -497,6 +498,11 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
     var presentedDrawable = false
     if let metalLayer = view.layer as? CAMetalLayer {
       retainedResources.append(metalLayer)
+      // Keep contentsScale in sync with the backing scale used to compute
+      // drawableSize. After sleep/wake the layer's cached scale may be stale
+      // while the drawable is sized for the live backing-scale factor, causing
+      // the content to appear stretched or blurry.
+      metalLayer.contentsScale = pixelScale
       metalLayer.drawableSize = drawableSize
       // Gate on the in-flight pool BEFORE acquiring a drawable so this tick can't
       // outrun the compositor. Released once per acquire below / in completion.
