@@ -29,6 +29,10 @@ public final class MetalDirectRendererView: PTYGridView {
   /// Fired when view bounds size changes (split, divider drag, window resize).
   /// Args: previous size, new size.
   public var boundsSizeDidChangeHandler: ((CGSize, CGSize) -> Void)?
+  /// Fired when the backing properties change (display scale, sleep/wake, screen
+  /// change). The handler should trigger a full redraw so the Metal layer's
+  /// contentsScale and drawable size are recalculated at the new scale.
+  public var backingPropertiesDidChangeHandler: (() -> Void)?
 
   private var lastLaidOutBoundsSize: CGSize = .zero
 
@@ -67,6 +71,14 @@ public final class MetalDirectRendererView: PTYGridView {
     if let metalLayer = layer as? CAMetalLayer {
       metalLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     }
+  }
+
+  public override func viewDidChangeBackingProperties() {
+    super.viewDidChangeBackingProperties()
+    if let metalLayer = layer as? CAMetalLayer {
+      metalLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+    }
+    backingPropertiesDidChangeHandler?()
   }
 
   public override func draw(_ dirtyRect: NSRect) {}
@@ -337,6 +349,9 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     }
     directView.boundsSizeDidChangeHandler = { [weak self] previous, newSize in
       self?.presentForBoundsSizeChange(previous: previous, newSize: newSize)
+    }
+    directView.backingPropertiesDidChangeHandler = { [weak self] in
+      self?.requestFullRedraw()
     }
     directView.scrollActivityHandler = { [weak self] isScrolling in
       self?.engine?.prefersAsyncPresent = isScrolling
