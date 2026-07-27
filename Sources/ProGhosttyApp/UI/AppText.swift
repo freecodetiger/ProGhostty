@@ -149,6 +149,33 @@ struct AppText {
   var updateAvailableToast: String { text("Update available", "发现新版本") }
   var upToDateToast: String { text("ProGhostty is up to date", "ProGhostty 已是最新版本") }
   var updateCheckFailedToast: String { text("Update check failed", "检查更新失败") }
+  var downloadUpdate: String { text("Download", "下载") }
+  var updateCheckFailedHint: String { text("Check your network connection and try again.", "请检查网络连接后重试。") }
+  var projectDescription: String {
+    text(
+      "The macOS terminal for people who live in shells — and AI CLIs.",
+      "为终日与 Shell 为伴的人 —— 也为 AI CLI。"
+    )
+  }
+  var projectSubtitle: String {
+    text(
+      "Real PTY. Ghostty VT semantics. Smooth history that stays out of your way.",
+      "原生 PTY · Ghostty VT 引擎 · 丝滑滚动。"
+    )
+  }
+  var openSourceRepository: String { text("Open Source Repository", "开源仓库") }
+  var contributionInvitation: String {
+    text(
+      "Found a bug or have an idea. Issues and PRs are welcome, open to everyone.",
+      "发现 bug 或有想法，欢迎来提 issue 或 PR，随时向所有人开放。"
+    )
+  }
+  var starInvitation: String {
+    text(
+      "If you like ProGhostty, a star ⭐ helps a lot.",
+      "如果喜欢这个项目，可以点个 ⭐。"
+    )
+  }
   var settingsSavedToast: String { text("Settings saved", "设置已保存") }
   var openLinkHintToast: String { text("⌘ Click to open link", "按住 ⌘ 点击打开链接") }
   var pathNotFoundToast: String { text("Path not found", "路径不存在") }
