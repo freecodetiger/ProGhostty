@@ -492,9 +492,106 @@ final class AppModel: ObservableObject {
     return paneWorkspaceController.paneLabel(workspaceID: activeWorkspaceID, paneID: selectedPaneID)
   }
 
+  private var gitBranchCache: (cwd: String, branch: String?, requested: Bool) = ("", nil, false)
+
+  /// Returns the current git branch for `selectedCwd`, fetching asynchronously if
+  /// needed. The first call returns nil (path-only label); a subsequent SwiftUI
+  /// update fills the branch once `git rev-parse --abbrev-ref HEAD` completes.
+  private var effectiveGitBranch: String? {
+    guard let cwd = selectedCwd else {
+      gitBranchCache = ("", nil, false)
+      return nil
+    }
+    if gitBranchCache.cwd != cwd {
+      gitBranchCache = (cwd, nil, false)
+    }
+    if !gitBranchCache.requested {
+      gitBranchCache.requested = true
+      let capturedCwd = cwd
+      DispatchQueue.global().async { [weak self] in
+        let branch = Self.runGitBranch(cwd: capturedCwd)
+        Task { @MainActor [weak self] in
+          guard let self, self.gitBranchCache.cwd == capturedCwd else { return }
+          self.gitBranchCache.branch = branch
+          self.objectWillChange.send()
+        }
+      }
+    }
+    return gitBranchCache.branch
+  }
+
   var activePaneTitlebarLabel: String? {
     guard let cwd = selectedCwd, let component = TitleFormatting.compactPathComponent(cwd) else { return nil }
-    return "📁 \(component)"
+    var label = "📁 \(component)"
+    if let branch = effectiveGitBranch {
+      label += "  ·  \(branch)"
+    }
+    return label
+  }
+
+  /// Invalidate the git branch cache so the next label render re-fetches. Called
+  /// when the CWD has observably changed (.cwdChanged event).
+  private func invalidateGitBranchCache() {
+    gitBranchCache = ("", nil, false)
+  }
+
+  /// Run `git rev-parse --abbrev-ref HEAD` in `cwd`. Returns the branch name,
+  /// or the short hash for detached HEAD, or nil on failure / timeout / non-git.
+  /// Mirrors the lightweight subprocess pattern from ProjectInfoService.
+  private nonisolated static func runGitBranch(cwd: String) -> String? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    process.arguments = ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    var env = ProcessInfo.processInfo.environment
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    process.environment = env
+    do {
+      try process.run()
+    } catch {
+      return nil
+    }
+    let deadline = DispatchWorkItem { process.terminate() }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 1.5, execute: deadline)
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    deadline.cancel()
+    guard process.terminationStatus == 0 else { return nil }
+    let raw = String(data: data, encoding: .utf8)?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !raw.isEmpty else { return nil }
+    // Detached HEAD reports "HEAD"; resolve to short hash.
+    if raw == "HEAD" {
+      return runGitShortHash(cwd: cwd) ?? raw
+    }
+    return raw
+  }
+
+  private nonisolated static func runGitShortHash(cwd: String) -> String? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    process.arguments = ["-C", cwd, "rev-parse", "--short", "HEAD"]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    var env = ProcessInfo.processInfo.environment
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    process.environment = env
+    do {
+      try process.run()
+    } catch {
+      return nil
+    }
+    let deadline = DispatchWorkItem { process.terminate() }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 1.5, execute: deadline)
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    deadline.cancel()
+    guard process.terminationStatus == 0 else { return nil }
+    return String(data: data, encoding: .utf8)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   /// Program-reported (OSC 0/1/2) title for the focused pane. Shown in the
@@ -1498,6 +1595,7 @@ final class AppModel: ObservableObject {
       // A fresh prompt fired OSC 7 — the foreground program is gone, so its
       // reported title must not linger (e.g. "vim" after :q).
       updateReportedTitle(nil, for: session)
+      invalidateGitBranchCache()
       objectWillChange.send()
     case .titleChanged(let session, let title):
       // Titles belong to foreground programs (vim, ssh, Claude Code). A report
