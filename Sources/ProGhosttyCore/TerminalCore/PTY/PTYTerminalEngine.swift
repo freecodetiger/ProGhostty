@@ -48,7 +48,7 @@ func terminalControlInputData(for event: NSEvent) -> Data? {
     case UInt32(NSEnterCharacter), UInt32(NSCarriageReturnCharacter):
       return event.modifierFlags.contains(.shift) ? Data([0x0A]) : Data([0x0D])
     case UInt32(NSTabCharacter):
-      return Data([0x09])
+      return event.modifierFlags.contains(.shift) ? Data("\u{1B}[Z".utf8) : Data([0x09])
     case UInt32(NSBackspaceCharacter):
       return Data([0x7F])
     case 0x1B:

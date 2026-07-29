@@ -29,6 +29,17 @@ struct PTYLaunchTests {
     #expect(terminalControlInputData(for: event) == Data([0x0D]))
   }
 
+  @Test func shiftTabProducesBackTabSequence() throws {
+    let event = try #require(makeKeyEvent(
+      keyCode: 48,
+      characters: "\t",
+      charactersIgnoringModifiers: "\t",
+      modifierFlags: [.shift]
+    ))
+
+    #expect(terminalControlInputData(for: event) == Data("\u{1B}[Z".utf8))
+  }
+
   @Test func shellArgumentsUseShellBasename() {
     #expect(PTYLaunch.shellArguments(shellPath: "/bin/zsh") == ["zsh"])
   }
