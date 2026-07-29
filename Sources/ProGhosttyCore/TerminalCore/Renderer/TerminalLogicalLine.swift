@@ -52,25 +52,36 @@ enum TerminalLogicalLine {
     }
   }
 
-  /// Raw text of a single physical row (unpadded to the frame's cell count).
+  /// Raw text of a single physical row with trailing space padding removed.
+  ///
+  /// Terminal rows are padded to `frame.cols` with space characters. Trimming
+  /// the padding is essential: without it `maySoftWrapToNext` would see a
+  /// trailing space and refuse to join rows, and URL/path regexes would stop
+  /// matching at the first embedded run of spaces.
   static func text(inRow row: Int, frame: GhosttyTerminalFrame) -> String? {
     guard row >= 0, row < frame.rows, frame.cols > 0 else { return nil }
     let rowStart = row * frame.cols
     let rowEnd = min(rowStart + frame.cols, frame.cells.count)
     guard rowStart < rowEnd else { return nil }
-    return frame.cells[rowStart..<rowEnd].map { String($0.scalar) }.joined()
+    var end = rowEnd
+    while end > rowStart, frame.cells[end - 1].scalar == " " { end -= 1 }
+    guard end > rowStart else { return "" }
+    return frame.cells[rowStart..<end].map { String($0.scalar) }.joined()
   }
 
   /// Heuristic soft-wrap: a row whose last cell is non-whitespace likely
   /// continues onto the next row. `libghostty-vt` does not currently surface an
   /// explicit wrap flag, so both detectors share this approximation.
+  ///
+  /// This checks the raw cell at `frame.cols - 1` rather than the trimmed text
+  /// returned by `text(inRow:frame:)`, because trailing-space trimming would
+  /// otherwise mask the padding that distinguishes a hard line break from a
+  /// soft-wrap.
   static func maySoftWrapToNext(_ row: Int, frame: GhosttyTerminalFrame) -> Bool {
-    guard let text = text(inRow: row, frame: frame),
-      let lastScalar = text.unicodeScalars.last
-    else {
-      return false
-    }
-    return !CharacterSet.whitespacesAndNewlines.contains(lastScalar)
+    guard row >= 0, row < frame.rows, frame.cols > 0 else { return false }
+    let rowEnd = min((row + 1) * frame.cols, frame.cells.count)
+    guard rowEnd > row * frame.cols else { return false }
+    return frame.cells[rowEnd - 1].scalar != " "
   }
 
   /// Split a range expressed in joined-text coordinates into per-physical-row

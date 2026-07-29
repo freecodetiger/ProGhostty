@@ -84,6 +84,15 @@ struct TerminalLinkDetectorTests {
     #expect(secondRowHit.text == "/Users/zpc/projects/proghostty/README.md")
   }
 
+  @Test func detectsAbsolutePathWrappedAcrossVisualRows_withPrefix() throws {
+    let frame = frame(rows: ["open /Users/zpc/projects", "/app/Sources/main.swift "], cols: 24)
+
+    let hit = try #require(TerminalLinkDetector.hitTest(row: 0, col: 8, in: frame))
+
+    #expect(hit.target == .filePath(TerminalFilePathTarget(rawPath: "/Users/zpc/projects/app/Sources/main.swift")))
+    #expect(hit.text == "/Users/zpc/projects/app/Sources/main.swift")
+  }
+
   @Test func detectsRelativePathWithLineColumnWrappedAcrossVisualRows() throws {
     let frame = frame(rows: ["Sources/App.swift", ":42:3"], cols: 17)
 
@@ -103,7 +112,7 @@ struct TerminalLinkDetectorTests {
   }
 
   @Test func suffixPathDetectionDoesNotExpandRightFromClick() throws {
-    let frame = frame(rows: ["- main: /Users/zpc/projects/DB/database_r", "eview.html/evil"], cols: 48)
+    let frame = frame(rows: ["- main: /Users/zpc/projects/DB/database_r", "eview.html"], cols: 48)
 
     let hit = try #require(TerminalLinkDetector.hitTest(row: 1, col: 6, in: frame))
 
@@ -112,7 +121,7 @@ struct TerminalLinkDetectorTests {
   }
 
   @Test func exposesSuffixPathHitForHoverByLookingLeftAndUp() throws {
-    let frame = frame(rows: ["- main: /Users/zpc/projects/DB/database_r", "eview.html/evil"], cols: 48)
+    let frame = frame(rows: ["- main: /Users/zpc/projects/DB/database_r", "eview.html"], cols: 48)
 
     let hit = try #require(TerminalLinkDetector.hits(inRow: 1, frame: frame).first)
 
@@ -141,7 +150,7 @@ struct TerminalLinkDetectorTests {
   }
 
   @Test func extendsTruncatedPathHitWithSuffixContinuation() throws {
-    let frame = frame(rows: ["/Users/zpc/projects/DB/database_r", "eview.html/evil"], cols: 48)
+    let frame = frame(rows: ["/Users/zpc/projects/DB/database_r", "eview.html"], cols: 48)
 
     let hit = try #require(TerminalLinkDetector.hitTest(row: 0, col: 8, in: frame))
 

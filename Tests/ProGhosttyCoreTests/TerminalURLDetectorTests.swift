@@ -92,9 +92,47 @@ struct TerminalURLDetectorTests {
     #expect(secondRowHit.row == 1)
   }
 
+  @Test func joinsSoftWrappedURLAcrossRows_secondRowHit() throws {
+    // Row 0 exactly fills the row (no padding) → soft-wrap. Clicking the
+    // continuation on the second row resolves the whole joined URL, verifying
+    // that text() trimming does not break cross-row regex matching.
+    let frame = frame(
+      rows: [
+        "open https://example.com/",
+        "a/b/c/d end",
+      ],
+      cols: 25
+    )
+
+    let expected = "https://example.com/a/b/c/d"
+
+    let firstRowHit = try #require(TerminalURLDetector.hitTest(row: 0, col: 10, in: frame))
+    #expect(firstRowHit.url.absoluteString == expected)
+
+    let secondRowHit = try #require(TerminalURLDetector.hitTest(row: 1, col: 2, in: frame))
+    #expect(secondRowHit.url.absoluteString == expected)
+  }
+
+  @Test func joinsURLAcrossThreeRows() throws {
+    // Three rows with exact-fill intermediate rows → continuous soft-wrap chain.
+    let frame = frame(
+      rows: [
+        "see https://e",
+        "xample.com/a/",
+        "b/c/d end",
+      ],
+      cols: 13
+    )
+
+    let expected = "https://example.com/a/b/c/d"
+
+    let hit = try #require(TerminalURLDetector.hitTest(row: 0, col: 6, in: frame))
+    #expect(hit.url.absoluteString == expected)
+  }
+
   @Test func doesNotJoinURLAcrossHardLineBreak() throws {
-    // Row 0 ends with a trailing space → not wrapped. The second row's text must
-    // not be appended to the first row's URL.
+    // Row 0 exactly fills the row and ends with a content space → hard break.
+    // The second row's URL is independent.
     let frame = frame(
       rows: [
         "open https://example.com/first ",
