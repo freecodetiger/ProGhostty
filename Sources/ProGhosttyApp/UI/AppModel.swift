@@ -42,6 +42,12 @@ final class AppModel: ObservableObject {
 
   }
 
+  enum SessionClosedAction: Equatable {
+    case closePane(workspaceID: UUID, paneID: UUID)
+    case closeWorkspace(workspaceID: UUID)
+    case none
+  }
+
   @Published var workspaceRuntimes: [WorkspaceRuntime] = []
   @Published var activeWorkspaceID: UUID?
   @Published var isWorkspaceSwitcherPresented = false
@@ -1580,6 +1586,8 @@ final class AppModel: ObservableObject {
 
   private func handle(_ event: TerminalEvent) {
     switch event {
+    case .sessionClosed(let session):
+      reconcileClosedSession(session)
     case .output:
       break
     case .cwdChanged(let session, let cwd):
@@ -1622,6 +1630,61 @@ final class AppModel: ObservableObject {
     default:
       break
     }
+  }
+
+  static func sessionClosedAction(
+    for session: TerminalSessionID,
+    in runtimes: [WorkspaceRuntime]
+  ) -> SessionClosedAction {
+    guard let runtime = runtimes.first(where: { runtime in
+      PaneTreeReducer.listLeaves(in: runtime.layout.root).contains { $0.sessionId == session }
+    }) else {
+      return .none
+    }
+
+    let leaves = PaneTreeReducer.listLeaves(in: runtime.layout.root)
+    guard let pane = leaves.first(where: { $0.sessionId == session }) else {
+      return .none
+    }
+    return leaves.count > 1
+      ? .closePane(workspaceID: runtime.id, paneID: pane.paneId)
+      : .closeWorkspace(workspaceID: runtime.id)
+  }
+
+  private func reconcileClosedSession(_ session: TerminalSessionID) {
+    switch Self.sessionClosedAction(for: session, in: workspaceRuntimes) {
+    case .closePane(let workspaceID, let paneID):
+      guard let index = workspaceRuntimes.firstIndex(where: { $0.id == workspaceID }) else { return }
+      do {
+        guard let closed = try paneWorkspaceController.closePane(workspaceID: workspaceID, paneID: paneID),
+          let updatedLayout = paneWorkspaceController.workspaceLayout(id: workspaceID)
+        else {
+          return
+        }
+        var runtime = workspaceRuntimes[index]
+        runtime.layout = updatedLayout
+        runtime.cwdBySession[closed.sessionId] = nil
+        runtime.reportedTitleBySession[closed.sessionId] = nil
+        paneSplitAvailabilityController.remove(paneID: closed.paneId)
+        workspaceRuntimes[index] = runtime
+        persistWorkspaceRuntime(at: index)
+        applyTerminalWindowMinimumContentSize(for: runtime)
+        applyFocusedTerminalSurface()
+      } catch {
+        DebugLog.write("reconcileClosedSession closePane failed session=\(session) error=\(error)")
+      }
+    case .closeWorkspace(let workspaceID):
+      _ = closeWorkspaceRuntime(id: workspaceID)
+      closeTerminalWindowIfNoWorkspace()
+    case .none:
+      break
+    }
+  }
+
+  private func closeTerminalWindowIfNoWorkspace() {
+    guard workspaceRuntimes.isEmpty else { return }
+    guard let window = NSApp.windows.first(where: { !($0 is NSPanel) && $0 !== settingsWindow }) else { return }
+    window.performClose(nil)
   }
 
   private func performNotificationActions(_ actions: [TerminalNotificationAction], session: TerminalSessionID) {
