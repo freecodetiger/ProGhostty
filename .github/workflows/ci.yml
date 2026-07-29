@@ -1,0 +1,75 @@
+# ---------------------------------------------------------------------------
+# ProGhostty — Pull-Request CI
+# ---------------------------------------------------------------------------
+# Validates every PR targeting main:
+#   1. Checkout with submodules
+#   2. Install Zig 0.15.2 (same method as release.yml)
+#   3. Build libghostty-vt (ReleaseFast)
+#   4. Architecture guard (Core must not import SwiftUI)
+#   5. swift test
+# No DMG, no deploy — just fast feedback.
+# ---------------------------------------------------------------------------
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & Test
+    # Zig 0.15.2's build runner fails to link libc on macOS 26 / Xcode 26
+    # (undefined _abort/_free/...). Pin until Zig catches up.
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show toolchain
+        run: |
+          set -euxo pipefail
+          uname -a
+          swift --version
+          xcode-select -p
+          xcrun --show-sdk-path
+          test -f Vendor/ghostty/build.zig
+
+      - name: Install Zig
+        run: |
+          set -euxo pipefail
+          mkdir -p .tools
+          case "$(uname -m)" in
+            arm64) ZIG_ARCH=aarch64 ;;
+            x86_64) ZIG_ARCH=x86_64 ;;
+            *) echo "unsupported arch: $(uname -m)"; exit 1 ;;
+          esac
+          curl -fL "https://ziglang.org/download/0.15.2/zig-${ZIG_ARCH}-macos-0.15.2.tar.xz" -o .tools/zig.tar.xz
+          tar -xf .tools/zig.tar.xz -C .tools
+          echo "${GITHUB_WORKSPACE}/.tools/zig-${ZIG_ARCH}-macos-0.15.2" >> "$GITHUB_PATH"
+          ".tools/zig-${ZIG_ARCH}-macos-0.15.2/zig" version
+
+      - name: Build Ghostty VT
+        working-directory: Vendor/ghostty
+        run: |
+          set -euxo pipefail
+          export SDKROOT="$(xcrun --show-sdk-path)"
+          zig build \
+            --global-cache-dir "${GITHUB_WORKSPACE}/.zig-cache-global" \
+            -Demit-lib-vt=true \
+            -Demit-xcframework=false \
+            -Doptimize=ReleaseFast
+          test -f zig-out/lib/libghostty-vt.a
+
+      - name: Architecture guard
+        run: scripts/check-architecture.sh
+
+      - name: Test
+        run: swift test --no-parallel
