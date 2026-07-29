@@ -69,10 +69,19 @@ jobs:
         run: |
           VERSION="${VERSION#v}" BUILD="$BUILD" scripts/build-dmg.sh release
 
+      - name: Build ZIP
+        env:
+          VERSION: ${{ github.ref_name }}
+          BUILD: ${{ github.run_number }}
+        run: |
+          VERSION="${VERSION#v}" BUILD="$BUILD" scripts/build-zip.sh release
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.dmg
+          files: |
+            dist/*.dmg
+            dist/*.zip
           draft: false
           prerelease: false
           generate_release_notes: true
