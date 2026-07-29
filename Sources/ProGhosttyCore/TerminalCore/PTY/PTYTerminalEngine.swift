@@ -687,8 +687,8 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     let vtQueue = state.vtQueue
     let generation = state.resizeGeneration
     vtQueue.async { [weak self] in
-      let wasPinnedToBottom = GhosttyVTQueueWork.viewportIsPinnedToBottom(bridge)
       bridge.write(data)
+      let wasPinnedToBottom = GhosttyVTQueueWork.viewportIsPinnedToBottom(bridge)
       if wasPinnedToBottom {
         GhosttyVTQueueWork.scrollToBottom(bridge)
       }

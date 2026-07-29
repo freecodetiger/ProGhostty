@@ -147,6 +147,48 @@ struct TerminalSurfaceTests {
     #expect((firstLine as NSString).length == 8)
   }
 
+  @MainActor @Test func ptySurfacePinnedStateReflectsPostAltScreenExitWhenScrolledUp() throws {
+    let registry = PTYTerminalSurfaceRegistry()
+    let session = TerminalSessionID()
+    registry.createSurface(session: session)
+    let bridge = try GhosttyVTBridge(cols: 20, rows: 3, maxScrollback: 100)
+
+    // Fill main screen scrollback with enough content to allow scrolling up.
+    let history = (1...30).map { "line\($0)" }.joined(separator: "\r\n") + "\r\nprompt % "
+    bridge.write(Data(history.utf8))
+    registry.render(bridge, session: session)
+    registry.flushPendingRenderers()
+
+    // Simulate user scrolling up to read history (not pinned to bottom).
+    bridge.scrollViewport(deltaRows: -10)
+    guard let scrollbarBefore = try? bridge.scrollbar() else {
+      Issue.record("scrollbar unavailable before alt screen")
+      return
+    }
+    #expect(scrollbarBefore.offset + scrollbarBefore.length < scrollbarBefore.total,
+            "viewport should NOT be at bottom after user scrolls up")
+
+    // Enter alternate screen (alt screen has no scrollback, always "at bottom").
+    bridge.write(Data("\u{1B}[?1049h".utf8))
+
+    // Exit alt screen and append new content in a single write — the exact
+    // pattern that triggered the scroll-freeze bug when wasPinnedToBottom
+    // was captured before bridge.write(data).
+    let exitAndOutput = "\u{1B}[?1049l\r\nnew-output-after-alt-exit"
+    bridge.write(Data(exitAndOutput.utf8))
+
+    // After the write, viewportIsPinnedToBottom must reflect the main screen
+    // state (user was scrolled up → not pinned), NOT the alt screen's false
+    // "always at bottom" state.
+    guard let scrollbarAfter = try? bridge.scrollbar() else {
+      Issue.record("scrollbar unavailable after alt screen exit")
+      return
+    }
+    let isPinnedAfterExit = scrollbarAfter.offset + scrollbarAfter.length >= scrollbarAfter.total
+    #expect(!isPinnedAfterExit,
+            "wasPinnedToBottom should be false after exiting alt screen when user was scrolled up")
+  }
+
   @MainActor @Test func liveCellGridUsesFixedGridViewInsteadOfTextKitDocument() throws {
     let registry = PTYTerminalSurfaceRegistry()
     let session = TerminalSessionID()
