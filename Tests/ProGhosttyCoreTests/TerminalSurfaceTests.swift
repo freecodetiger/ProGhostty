@@ -2463,7 +2463,7 @@ struct TerminalSurfaceTests {
 
   @MainActor @Test func ptyGridExposesCursorRectsForSuffixPathHits() {
     let frame = frameWithText(
-      rows: ["- main: /Users/zpc/projects/DB/database_r", "eview.html/evil"],
+      rows: ["- main: /Users/zpc/projects/DB/database_r", "eview.html"],
       cols: 48,
       cursorX: 0,
       cursorY: 0
