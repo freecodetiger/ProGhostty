@@ -1,0 +1,54 @@
+# Code Owners
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# This file defines who is automatically requested for review on PRs
+# that touch the listed paths. Currently a single-maintainer project;
+# this structure is in place for when additional maintainers join.
+
+# Default owner — everything not matched below
+* @freecodetiger
+
+# ─── Terminal core ───────────────────────────────────────────────
+# PTY I/O, VT bridge, renderer, smooth scroll
+/Sources/ProGhosttyCore/TerminalCore/ @freecodetiger
+
+# C shim for libghostty-vt
+/Sources/ProGhosttyGhosttyVT/ @freecodetiger
+
+# C shim for forkpty / resize
+/Sources/ProGhosttyPTY/ @freecodetiger
+
+# ─── Workspace & panes ──────────────────────────────────────────
+# PaneWorkspaceController, PaneTreeReducer, SplitRatioLayout, WorkspaceStore
+/Sources/ProGhosttyCore/Workspace/ @freecodetiger
+
+# ─── Settings ────────────────────────────────────────────────────
+# AppSettings, SettingsIndex, persistence (SQLite + UserDefaults)
+/Sources/ProGhosttyCore/Settings/ @freecodetiger
+/Sources/ProGhosttyCore/Persistence/ @freecodetiger
+
+# ─── App UI ──────────────────────────────────────────────────────
+# SwiftUI views, AppModel, window policy, theme chrome
+/Sources/ProGhosttyApp/ @freecodetiger
+
+# ─── Helper CLI ──────────────────────────────────────────────────
+# `pg` command-line tool
+/Sources/ProGhosttyPG/ @freecodetiger
+
+# ─── Tests ───────────────────────────────────────────────────────
+/Tests/ProGhosttyCoreTests/ @freecodetiger
+/Tests/ProGhosttyAppTests/ @freecodetiger
+
+# ─── CI & release ────────────────────────────────────────────────
+# GitHub Actions workflows
+/.github/workflows/ @freecodetiger
+
+# Build scripts, DMG packaging, architecture guard
+/scripts/ @freecodetiger
+
+# ─── Docs ────────────────────────────────────────────────────────
+/docs/ @freecodetiger
+
+# ─── Vendored ────────────────────────────────────────────────────
+# Ghostty submodule — review carefully, upstream changes may conflict
+/Vendor/ghostty/ @freecodetiger
