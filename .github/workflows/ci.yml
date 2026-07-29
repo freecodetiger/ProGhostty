@@ -73,3 +73,6 @@ jobs:
 
       - name: Test
         run: swift test --no-parallel
+
+      - name: Build app bundle
+        run: ./scripts/build-app-bundle.sh release
