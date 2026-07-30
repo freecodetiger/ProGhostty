@@ -40,6 +40,20 @@ struct PTYLaunchTests {
     #expect(terminalControlInputData(for: event) == Data("\u{1B}[Z".utf8))
   }
 
+  @Test func shiftTabWithRealMacOSCharactersProducesBackTabSequence() throws {
+    // macOS maps Shift+Tab to \u{19}, not \t, in both characters and
+    // charactersIgnoringModifiers. keyCode 48 is the only reliable way
+    // to identify the Tab key across modifier states.
+    let event = try #require(makeKeyEvent(
+      keyCode: 48,
+      characters: "\u{19}",
+      charactersIgnoringModifiers: "\u{19}",
+      modifierFlags: [.shift]
+    ))
+
+    #expect(terminalControlInputData(for: event) == Data("\u{1B}[Z".utf8))
+  }
+
   @Test func shellArgumentsUseShellBasename() {
     #expect(PTYLaunch.shellArguments(shellPath: "/bin/zsh") == ["zsh"])
   }

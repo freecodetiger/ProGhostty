@@ -20,6 +20,14 @@ func terminalControlInputData(for event: NSEvent) -> Data? {
     return nil
   }
 
+  // Tab key — keyCode 48 is always the physical Tab key.
+  // macOS maps Shift+Tab to \u{19}, not \t, so keyCode is the only reliable way
+  // to identify Tab regardless of modifiers.
+  if event.keyCode == 48 {
+    return event.modifierFlags.contains(.shift)
+      ? Data("\u{1B}[Z".utf8) : Data([0x09])
+  }
+
   if event.modifierFlags.contains(.control),
     let characters = event.characters,
     characters.count == 1,
@@ -47,8 +55,6 @@ func terminalControlInputData(for event: NSEvent) -> Data? {
       return Data([0x7F])
     case UInt32(NSEnterCharacter), UInt32(NSCarriageReturnCharacter):
       return event.modifierFlags.contains(.shift) ? Data([0x0A]) : Data([0x0D])
-    case UInt32(NSTabCharacter):
-      return event.modifierFlags.contains(.shift) ? Data("\u{1B}[Z".utf8) : Data([0x09])
     case UInt32(NSBackspaceCharacter):
       return Data([0x7F])
     case 0x1B:
@@ -1898,11 +1904,19 @@ public class PTYGridView: NSView {
     }
     switch selector {
     case #selector(insertNewline(_:)):
-      inputHandler?(Data([0x0D]))
+      if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+        inputHandler?(Data([0x0A]))
+      } else {
+        inputHandler?(Data([0x0D]))
+      }
     case #selector(deleteBackward(_:)):
       inputHandler?(Data([0x7F]))
     case #selector(insertTab(_:)):
-      inputHandler?(Data([0x09]))
+      if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+        inputHandler?(Data("\u{1B}[Z".utf8))
+      } else {
+        inputHandler?(Data([0x09]))
+      }
     default:
       super.doCommand(by: selector)
     }
