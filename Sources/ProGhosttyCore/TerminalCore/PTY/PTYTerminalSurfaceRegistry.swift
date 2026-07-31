@@ -203,6 +203,10 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     gridView.fileInfoProvider = fileInfoProvider.map { provider in
       { target in provider(id, target) }
     }
+    gridView.mouseReportingActiveHandler = { [weak self] in
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return false }
+      return bridge.isMouseReportingActive()
+    }
     gridView.semanticLinkText = semanticLinkText
     gridView.pasteboard = .general
     gridView.applyPalette(palette)

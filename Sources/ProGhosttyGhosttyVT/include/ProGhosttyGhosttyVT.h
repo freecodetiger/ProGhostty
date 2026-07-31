@@ -23,6 +23,7 @@ typedef struct {
   bool underline;
   bool inverse;
   uint8_t wide;
+  uint8_t semantic_content; // 0=output, 1=input, 2=prompt
   uint8_t *hyperlink_uri;
   size_t hyperlink_uri_len;
 } ProGhosttyVTCell;
@@ -93,6 +94,7 @@ void proghostty_vt_rows_free(ProGhosttyVTRows *rows);
 int proghostty_vt_format_plain(ProGhosttyVT *vt, uint8_t **out, size_t *out_len);
 int proghostty_vt_format_html(ProGhosttyVT *vt, uint8_t **out, size_t *out_len);
 int proghostty_vt_encode_paste(ProGhosttyVT *vt, const uint8_t *data, size_t len, uint8_t **out, size_t *out_len);
+bool proghostty_vt_mouse_reporting_active(ProGhosttyVT *vt);
 void proghostty_vt_free_bytes(uint8_t *ptr, size_t len);
 
 #endif

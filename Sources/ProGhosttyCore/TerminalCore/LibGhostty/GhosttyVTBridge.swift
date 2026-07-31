@@ -23,6 +23,16 @@ public enum TerminalCellWidth: UInt8, Sendable {
   }
 }
 
+public enum CellSemanticContent: UInt8, Sendable {
+  case output = 0
+  case input = 1
+  case prompt = 2
+
+  init(ghosttyRawValue: UInt8) {
+    self = CellSemanticContent(rawValue: ghosttyRawValue) ?? .output
+  }
+}
+
 public struct GhosttyTerminalFrame: Sendable, Equatable {
   public struct Cell: Sendable, Equatable {
     public var scalar: UnicodeScalar
@@ -37,6 +47,7 @@ public struct GhosttyTerminalFrame: Sendable, Equatable {
     public var usesDefaultForeground: Bool
     public var usesDefaultBackground: Bool
     public var hyperlink: String?
+    public var semanticContent: CellSemanticContent
 
     public init(
       scalar: UnicodeScalar,
@@ -50,7 +61,8 @@ public struct GhosttyTerminalFrame: Sendable, Equatable {
       inverse: Bool,
       usesDefaultForeground: Bool = false,
       usesDefaultBackground: Bool = false,
-      hyperlink: String? = nil
+      hyperlink: String? = nil,
+      semanticContent: CellSemanticContent = .output
     ) {
       self.scalar = scalar
       self.width = width
@@ -64,6 +76,7 @@ public struct GhosttyTerminalFrame: Sendable, Equatable {
       self.usesDefaultForeground = usesDefaultForeground
       self.usesDefaultBackground = usesDefaultBackground
       self.hyperlink = hyperlink
+      self.semanticContent = semanticContent
     }
   }
 
@@ -243,6 +256,13 @@ public final class GhosttyVTBridge {
     }
   }
 
+  public func isMouseReportingActive() -> Bool {
+    locked {
+      guard let handle else { return false }
+      return proghostty_vt_mouse_reporting_active(handle)
+    }
+  }
+
   public func scrollbar() throws -> GhosttyTerminalScrollbar {
     try locked {
       guard let handle else {
@@ -415,7 +435,8 @@ public final class GhosttyVTBridge {
       inverse: rawCell.inverse,
       usesDefaultForeground: rawCell.fg_default,
       usesDefaultBackground: rawCell.bg_default,
-      hyperlink: hyperlink
+      hyperlink: hyperlink,
+      semanticContent: CellSemanticContent(ghosttyRawValue: rawCell.semantic_content)
     )
   }
 

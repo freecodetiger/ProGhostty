@@ -168,6 +168,17 @@ int proghostty_vt_encode_paste(ProGhosttyVT *vt, const uint8_t *data, size_t len
   return GHOSTTY_SUCCESS;
 }
 
+bool proghostty_vt_mouse_reporting_active(ProGhosttyVT *vt) {
+  if (vt == NULL || vt->terminal == NULL) {
+    return false;
+  }
+  bool normal = false, button = false, any = false;
+  ghostty_terminal_mode_get(vt->terminal, GHOSTTY_MODE_NORMAL_MOUSE, &normal);
+  ghostty_terminal_mode_get(vt->terminal, GHOSTTY_MODE_BUTTON_MOUSE, &button);
+  ghostty_terminal_mode_get(vt->terminal, GHOSTTY_MODE_ANY_MOUSE, &any);
+  return normal || button || any;
+}
+
 static ProGhosttyVTCell blank_cell(GhosttyRenderStateColors *colors) {
   ProGhosttyVTCell cell;
   cell.codepoint = ' ';
@@ -185,6 +196,7 @@ static ProGhosttyVTCell blank_cell(GhosttyRenderStateColors *colors) {
   cell.underline = false;
   cell.inverse = false;
   cell.wide = GHOSTTY_CELL_WIDE_NARROW;
+  cell.semantic_content = GHOSTTY_CELL_SEMANTIC_OUTPUT;
   cell.hyperlink_uri = NULL;
   cell.hyperlink_uri_len = 0;
   return cell;
@@ -313,6 +325,10 @@ static ProGhosttyVTCell cell_from_grid_ref(GhosttyGridRef *ref, GhosttyRenderSta
     return out;
   }
   apply_wide(&out, raw);
+
+  GhosttyCellSemanticContent semantic = GHOSTTY_CELL_SEMANTIC_OUTPUT;
+  ghostty_cell_get(raw, GHOSTTY_CELL_DATA_SEMANTIC_CONTENT, &semantic);
+  out.semantic_content = (uint8_t)semantic;
 
   uint32_t codepoints[8] = {0};
   size_t grapheme_len = 0;
@@ -491,6 +507,9 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
       bool has_raw = ghostty_render_state_row_cells_get(row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW, &raw) == GHOSTTY_SUCCESS;
       if (has_raw) {
         apply_wide(cell, raw);
+        GhosttyCellSemanticContent semantic = GHOSTTY_CELL_SEMANTIC_OUTPUT;
+        ghostty_cell_get(raw, GHOSTTY_CELL_DATA_SEMANTIC_CONTENT, &semantic);
+        cell->semantic_content = (uint8_t)semantic;
       }
       uint32_t grapheme_len = 0;
       ghostty_render_state_row_cells_get(

@@ -977,6 +977,10 @@ public class PTYGridView: NSView {
   /// popover. Nil → popover shows only actions and Copy Path falls back to the
   /// raw token.
   public var fileInfoProvider: ((TerminalFilePathTarget) -> TerminalFileFacts?)?
+  /// Returns true when the running application has enabled mouse reporting
+  /// (modes 1000/1002/1003). When active, clicks should be forwarded to the
+  /// PTY as mouse reports rather than interpreted as click-to-position.
+  public var mouseReportingActiveHandler: (() -> Bool)?
   /// Localized popover labels, pushed from the App layer (which owns the language
   /// setting). Defaults to English so Core works standalone.
   public var semanticLinkText = SemanticLinkText()
@@ -1053,6 +1057,8 @@ public class PTYGridView: NSView {
   /// the hit here, cancel it if the pointer actually drags, and open on mouseUp
   /// only if it survived as a genuine single click.
   private var pendingLinkClick: (hit: TerminalLinkHit, origin: NSPoint)?
+  /// Tracks the press point for single-click detection (click-to-position).
+  private var clickToPositionDownPoint: NSPoint?
   private var commandLinkMode = false
   private var isHoveringLink = false
   private var hoveredLinkHit: TerminalLinkHit?
@@ -2052,6 +2058,7 @@ public class PTYGridView: NSView {
     window?.makeFirstResponder(self)
     stopSelectionAutoScroll()
     pendingLinkClick = nil
+    clickToPositionDownPoint = nil
     let eventPoint = convert(event.locationInWindow, from: nil)
     if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) {
       // ⌘-click opens immediately — the power-user path (spec §6, decided).
@@ -2069,6 +2076,10 @@ public class PTYGridView: NSView {
       // three-finger-drag) also starts here — opening now would hijack selection
       // and fire mid-drag. Hold the hit; mouseDragged cancels it, mouseUp opens it.
       pendingLinkClick = (hit, eventPoint)
+    }
+    // Record press point for click-to-position (consumed in mouseUp).
+    if event.clickCount == 1 {
+      clickToPositionDownPoint = eventPoint
     }
     // Always establish the selection anchor at the press point — even on a link.
     // Otherwise a drag beginning on a link keeps a stale anchor from a prior
@@ -2143,6 +2154,10 @@ public class PTYGridView: NSView {
     if let pending = pendingLinkClick, point.distance(to: pending.origin) > 3 {
       pendingLinkClick = nil
     }
+    // Cancel click-to-position on drag.
+    if let downPoint = clickToPositionDownPoint, point.distance(to: downPoint) > 3 {
+      clickToPositionDownPoint = nil
+    }
     selectionDragPoint = point
     updateSelectionHead(at: point)
     updateSelectionAutoScroll(at: point)
@@ -2156,12 +2171,187 @@ public class PTYGridView: NSView {
     // A plain single click that stayed on the link (never dragged) → open now.
     if let pending = pendingLinkClick {
       pendingLinkClick = nil
+      clickToPositionDownPoint = nil
       // Clear the empty anchor-only selection created in mouseDown so it doesn't
       // linger as a zero-width selection under the popover.
       selection.clear()
       presentLinkPopover(for: pending.hit.target, at: pending.origin)
+      return
+    }
+    // Click-to-position: if this was a genuine single click (not a drag, not a
+    // double/triple click), attempt to move the shell cursor to the clicked column.
+    if let downPoint = clickToPositionDownPoint, event.clickCount == 1 {
+      clickToPositionDownPoint = nil
+      let upPoint = convert(event.locationInWindow, from: nil)
+      if upPoint.distance(to: downPoint) < 3 {
+        if handleClickToPosition(at: upPoint) {
+          selection.clear()
+          super.mouseUp(with: event)
+          return
+        }
+      }
+    } else {
+      clickToPositionDownPoint = nil
     }
     super.mouseUp(with: event)
+  }
+
+  /// Attempts click-to-position cursor movement. Returns true if the click was
+  /// consumed (arrow sequences sent to PTY), false if it should fall through.
+  private func handleClickToPosition(at point: NSPoint) -> Bool {
+    // Guard: mouse reporting active (vim/tmux owns the mouse).
+    if mouseReportingActiveHandler?() == true { return false }
+    // Guard: alternate screen (full-screen apps).
+    guard let frame = frameSnapshot, !frame.isAlternateScreen else { return false }
+    // Guard: cursor must be visible (indicates an active input line).
+    guard frame.cursorVisible else { return false }
+    // Guard: viewport must be at rest on the live bottom. While browsing history
+    // or mid pixel-scroll-fling, clicks land on drawn (browsed/overscan) content
+    // but frameSnapshot holds live-viewport cells — a coordinate-space mismatch
+    // that would move the cursor by a wrong amount.
+    guard browseTopRow == nil, !isSmoothScrollBrowsing, viewport.visualOffsetY == 0 else {
+      return false
+    }
+    // Guard: must be able to resolve click to a grid coordinate.
+    guard let geometry = renderedGeometry(),
+          let clickCoord = geometry.coordinate(at: point) else { return false }
+
+    // Only proceed if shell integration (OSC 133) is active — some cell in the
+    // frame must be marked .input by libghostty-vt's semantic_content. We check
+    // the whole frame, not the cursor cell: the cursor usually sits just past
+    // the last typed character, on a blank cell whose semantic is .output.
+    guard frame.cells.contains(where: { $0.semanticContent == .input }) else {
+      return false
+    }
+
+    return handleSemanticClickToPosition(clickCoord: clickCoord, frame: frame)
+  }
+
+  // MARK: - Semantic path (OSC 133 shell integration)
+
+  /// Click-to-position using per-cell semantic_content markers from libghostty-vt.
+  /// Only counts .input cells (skips .prompt and .output cells, and spacerTails).
+  private func handleSemanticClickToPosition(
+    clickCoord: GridCoordinate,
+    frame: GhosttyTerminalFrame
+  ) -> Bool {
+    let cursorRow = frame.cursorY
+    let cursorCol = frame.cursorX
+    let cols = frame.cols
+
+    // Snap click to character head if on a spacerTail.
+    var targetRow = clickCoord.row
+    var targetCol = clickCoord.col
+    let targetIdx = targetRow * cols + targetCol
+    if targetIdx < frame.cells.count, frame.cells[targetIdx].width == .spacerTail, targetCol > 0 {
+      targetCol -= 1
+    }
+
+    // The click must land on an .input cell, OR anywhere after the input region
+    // (in which case we snap to end-of-input).
+    let clickIdx = targetRow * cols + targetCol
+    guard clickIdx < frame.cells.count else { return false }
+    if frame.cells[clickIdx].semanticContent != .input {
+      // Snap to end-of-input: find the last .input cell in the entire frame
+      // before the click, then set target to one past it.
+      let searchEnd = min(clickIdx, frame.cells.count - 1)
+      var lastInputPos = -1
+      for i in stride(from: searchEnd, through: 0, by: -1) {
+        if frame.cells[i].semanticContent == .input {
+          lastInputPos = i
+          break
+        }
+      }
+      // If no .input found before click, or the last .input is before the cursor
+      // (click is in a region we can't reach by going right), reject.
+      guard lastInputPos >= 0 else { return false }
+      // Snap target to one past the last input cell (the end-of-input position).
+      let snappedPos = lastInputPos + (frame.cells[lastInputPos].width == .wide ? 2 : 1)
+      targetRow = snappedPos / cols
+      targetCol = snappedPos % cols
+    }
+
+    // Count .input characters between cursor and click target.
+    let charMoves = countSemanticMoves(
+      fromRow: cursorRow, fromCol: cursorCol,
+      toRow: targetRow, toCol: targetCol,
+      cols: cols, cells: frame.cells
+    )
+
+    guard charMoves != 0 else { return false }
+    emitArrowSequences(count: charMoves)
+    return true
+  }
+
+  /// Count character moves between two positions, only counting .input cells.
+  /// Skips .spacerTail and non-.input cells. Returns positive for right, negative for left.
+  private func countSemanticMoves(
+    fromRow: Int, fromCol: Int,
+    toRow: Int, toCol: Int,
+    cols: Int, cells: [GhosttyTerminalFrame.Cell]
+  ) -> Int {
+    let fromLinear = fromRow * cols + fromCol
+    let toLinear = toRow * cols + toCol
+    guard fromLinear != toLinear else { return 0 }
+
+    let movingRight = toLinear > fromLinear
+    var charCount = 0
+
+    if movingRight {
+      // Walk forward from cursor to target.
+      var pos = fromLinear
+      while pos < toLinear {
+        guard pos < cells.count else { break }
+        let cell = cells[pos]
+        // Skip non-input cells and spacerTails.
+        if cell.semanticContent != .input || cell.width == .spacerTail {
+          pos += 1
+          continue
+        }
+        charCount += 1
+        pos += (cell.width == .wide) ? 2 : 1
+      }
+      return charCount
+    } else {
+      // Walk backward from cursor to target.
+      var pos = fromLinear - 1
+      while pos >= toLinear {
+        guard pos >= 0, pos < cells.count else { break }
+        let cell = cells[pos]
+        // Skip non-input cells.
+        if cell.semanticContent != .input {
+          pos -= 1
+          continue
+        }
+        // If on spacerTail, step to head (still one char move).
+        if cell.width == .spacerTail {
+          pos -= 1
+        }
+        charCount += 1
+        pos -= 1
+      }
+      return -charCount
+    }
+  }
+
+
+  // MARK: - Shared helpers
+
+  private func emitArrowSequences(count: Int) {
+    let arrow: Data
+    let n: Int
+    if count > 0 {
+      arrow = Data("\u{1B}[C".utf8)
+      n = count
+    } else {
+      arrow = Data("\u{1B}[D".utf8)
+      n = -count
+    }
+    var sequences = Data(capacity: arrow.count * n)
+    for _ in 0..<n {
+      sequences.append(arrow)
+    }
+    inputHandler?(sequences)
   }
 
   public override func viewDidMoveToWindow() {
@@ -2170,6 +2360,7 @@ public class PTYGridView: NSView {
       isDraggingSelectionStorage = false
       selectionDragPoint = nil
       pendingLinkClick = nil
+      clickToPositionDownPoint = nil
       stopSelectionAutoScroll()
       // Tear down the display link when detached; a live link retaining the view
       // off-window leaks and fires against a dead render path.
