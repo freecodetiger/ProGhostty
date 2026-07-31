@@ -604,6 +604,18 @@ private final class TerminalSplitView: NSSplitView {
     }
   }
 
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    // Claim hits in the expanded interaction zone so that mouseDown routes to us
+    // rather than falling through to the child pane (which would start text
+    // selection). This keeps the clickable zone consistent with the cursor rect.
+    for index in 0..<(max(0, arrangedSubviews.count - 1)) {
+      if dividerInteractionRect(afterSubviewAt: index).contains(point) {
+        return self
+      }
+    }
+    return super.hitTest(point)
+  }
+
   override func layout() {
     super.layout()
     enforceMinimumDividerPosition()

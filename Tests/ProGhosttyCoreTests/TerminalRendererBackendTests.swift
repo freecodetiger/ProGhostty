@@ -246,10 +246,10 @@ struct TerminalRendererBackendTests {
     view.layout()
     #expect(engine.clearCount == 0)
 
-    // Height change: clear background, do not re-present old cells.
+    // Height change: no clear — topLeft letterbox until post-resize frame.
     view.frame = NSRect(x: 0, y: 0, width: 160, height: 280)
     view.layout()
-    #expect(engine.clearCount == 1)
+    #expect(engine.clearCount == 0)
     #expect(engine.renderCount == 0)
   }
 

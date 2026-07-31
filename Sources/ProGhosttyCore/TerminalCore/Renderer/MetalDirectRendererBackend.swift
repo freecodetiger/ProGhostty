@@ -566,17 +566,15 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
   }
 
   /// Bounds changed (split / divider / window).
-  /// - Width-only: leave the previous drawable (topLeft letterbox) until reflow.
-  /// - Height change: clear to terminal background. Re-presenting old content
-  ///   under topLeft looks like a vertical jump (compress-up / expand-down), and
-  ///   re-drawing old cells at the new size is the wrong reflow. Solid clear
-  ///   until the post-resize frame is the stable intermediate.
+  /// Both width and height changes rely on contentsGravity = .topLeft to
+  /// letterbox the stale drawable until the post-resize frame arrives.
+  /// Previously height changes cleared to background, but during continuous
+  /// live-resize dragging the repeated clear + 64ms settle created a sustained
+  /// blank window — far worse than the brief letterbox artifact.
   private func presentForBoundsSizeChange(previous: CGSize, newSize: CGSize) {
-    // First layout after attach has previous == .zero — not a divider jump.
-    guard previous.width > 0, previous.height > 0 else { return }
-    let heightChanged = abs(previous.height - newSize.height) > 0.5
-    guard heightChanged else { return }
-    _ = engine?.clearToBackground(view: directView, palette: palette)
+    // No-op: let topLeft gravity handle the intermediate visual until reflow.
+    _ = previous
+    _ = newSize
   }
 
   private func updateDiagnostics(from renderFrame: TerminalRenderFrame) {
