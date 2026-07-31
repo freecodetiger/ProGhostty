@@ -144,7 +144,7 @@ hook 装好但系统拒绝 → toast+音仍可用；桌面 banner 灰字引导�
 ### 5.2 新类型（建议）
 
 ```
-Sources/ProGhosttyApp/AgentNotificationHookInstaller.swift  // 或 AgentNotify/
+Sources/ProGhosttyApp/AgentNotificationHookManager.swift  // 或 AgentNotify/
   enum AgentNotifyHookStatus: Equatable {
     case ready(codex: Bool, claude: Bool)  // 至少一侧 true 且 scripts ok → ready
     case missing
@@ -303,5 +303,5 @@ toggle notificationsEnabled:
 
 - 现安装脚本：`scripts/install-agent-notification-hooks.sh`  
 - 策略与展示：`TerminalNotificationCenter.swift`、`AppModel` `.desktopNotification`  
-- 旧收敛计划：`.claude/NOTIFICATION_PLAN.md`  
+- 旧收敛计划：（已删除）  
 - 控制协议：`ProGhosttyControl` / `pg notify` → OSC 777  
