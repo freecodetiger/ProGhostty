@@ -29,6 +29,30 @@ tar -xf .tools/zig-aarch64-macos-0.15.2.tar.xz -C .tools
 
 `.tools/` is intentionally ignored by git.
 
+## ProGhostty Patch
+
+`Vendor/ghostty.patch` carries ProGhostty's small additions to the vendored
+Ghostty source. The submodule is pinned to an upstream commit, so a clean
+checkout never contains these changes — the patch must be applied after every
+`git submodule update` and before building the VT library. CI applies it in both
+`ci.yml` and `release.yml`.
+
+```bash
+git submodule update --init --recursive
+cd Vendor/ghostty
+git apply ../ghostty.patch
+cd ../..
+```
+
+The patch adds `GHOSTTY_TERMINAL_DATA_CURSOR_SEMANTIC_CONTENT` (and its
+`getTyped` case) — the cursor semantic state ProGhostty's click-to-position
+uses to distinguish a live input prompt from a stale/running command line.
+
+> **Keep `.a` and header in sync.** The rebuilt `libghostty-vt.a` references the
+> new enum value. The C shim and the `.a` must come from the same build; a
+> rebuilt `.a` without the applied patch (or vice-versa) is undefined behavior,
+> since the enum value is read with no runtime bounds check under ReleaseFast.
+
 ## Build VT Library
 
 Run from `Vendor/ghostty`:

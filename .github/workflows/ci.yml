@@ -56,6 +56,13 @@ jobs:
           echo "${GITHUB_WORKSPACE}/.tools/zig-${ZIG_ARCH}-macos-0.15.2" >> "$GITHUB_PATH"
           ".tools/zig-${ZIG_ARCH}-macos-0.15.2/zig" version
 
+      - name: Apply ProGhostty VT patch
+        working-directory: Vendor/ghostty
+        run: |
+          set -euxo pipefail
+          git apply ../ghostty.patch
+          test -f include/ghostty/vt/terminal.h
+
       - name: Build Ghostty VT
         working-directory: Vendor/ghostty
         run: |

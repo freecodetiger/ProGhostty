@@ -1,0 +1,50 @@
+diff --git a/include/ghostty/vt/terminal.h b/include/ghostty/vt/terminal.h
+index 0e6d048e1..e9d468254 100644
+--- a/include/ghostty/vt/terminal.h
++++ b/include/ghostty/vt/terminal.h
+@@ -868,6 +868,17 @@ typedef enum GHOSTTY_ENUM_TYPED {
+    * Output type: GhosttyKittyGraphics *
+    */
+   GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS = 30,
++
++  /**
++   * The semantic content of the active screen's cursor. After OSC 133;C the
++   * cursor semantic flips to .output even though previously-written input
++   * cells stay .input, so this distinguishes "cursor at a live input prompt"
++   * from "cursor on a stale / running command line" that per-cell markers
++   * cannot. Ghostty's prompt-click movement keys off this same state.
++   *
++   * Output type: GhosttyCellSemanticContent *
++   */
++  GHOSTTY_TERMINAL_DATA_CURSOR_SEMANTIC_CONTENT = 31,
+   GHOSTTY_TERMINAL_DATA_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyTerminalData;
+ 
+diff --git a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
+index d3293f3bc..231547e50 100644
+--- a/src/terminal/c/terminal.zig
++++ b/src/terminal/c/terminal.zig
+@@ -575,6 +575,7 @@ pub const TerminalData = enum(c_int) {
+     kitty_image_medium_temp_file = 28,
+     kitty_image_medium_shared_mem = 29,
+     kitty_graphics = 30,
++    cursor_semantic_content = 31,
+ 
+     /// Output type expected for querying the data of the given kind.
+     pub fn OutType(comptime self: TerminalData) type {
+@@ -603,6 +604,7 @@ pub const TerminalData = enum(c_int) {
+             .kitty_image_medium_shared_mem,
+             => bool,
+             .kitty_graphics => KittyGraphics,
++            .cursor_semantic_content => cell_c.SemanticContent,
+         };
+     }
+ };
+@@ -712,6 +714,7 @@ fn getTyped(
+             if (comptime !build_options.kitty_graphics) return .no_value;
+             out.* = &t.screens.active.kitty_images;
+         },
++        .cursor_semantic_content => out.* = @enumFromInt(@intFromEnum(t.screens.active.cursor.semantic_content)),
+     }
+ 
+     return .success;
