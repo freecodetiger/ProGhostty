@@ -2216,11 +2216,16 @@ public class PTYGridView: NSView {
     guard let geometry = renderedGeometry(),
           let clickCoord = geometry.coordinate(at: point) else { return false }
 
-    // Only proceed if shell integration (OSC 133) is active — some cell in the
-    // frame must be marked .input by libghostty-vt's semantic_content. We check
-    // the whole frame, not the cursor cell: the cursor usually sits just past
-    // the last typed character, on a blank cell whose semantic is .output.
-    guard frame.cells.contains(where: { $0.semanticContent == .input }) else {
+    // Ghostty's promptClickMove gate: only move while the cursor is on a live
+    // input prompt — either the cursor's own semantic state is .input, or the
+    // cell under it is .input. After OSC 133;C the cursor semantic flips to
+    // .output even though written input cells stay .input, so a click while a
+    // command is running (cursor parked on its stale line) is rejected instead
+    // of emitting arrows the running program doesn't read.
+    let cursorIdx = frame.cursorY * frame.cols + frame.cursorX
+    let cursorCellIsInput = cursorIdx < frame.cells.count
+      && frame.cells[cursorIdx].semanticContent == .input
+    guard frame.cursorSemanticContent == .input || cursorCellIsInput else {
       return false
     }
 

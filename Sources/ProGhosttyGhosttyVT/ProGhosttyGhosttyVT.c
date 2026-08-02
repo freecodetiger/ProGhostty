@@ -544,6 +544,7 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
   bool cursor_blinking = false;
   GhosttyTerminalScreen active_screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY;
   GhosttyRenderStateCursorVisualStyle cursor_visual_style = GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK;
+  GhosttyCellSemanticContent cursor_semantic_content = GHOSTTY_CELL_SEMANTIC_OUTPUT;
   uint16_t cursor_x = 0;
   uint16_t cursor_y = 0;
   ghostty_terminal_get(vt->terminal, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &active_screen);
@@ -551,6 +552,7 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
   ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_BLINKING, &cursor_blinking);
   ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, &cursor_visual_style);
   ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE, &cursor_has_value);
+  ghostty_terminal_get(vt->terminal, GHOSTTY_TERMINAL_DATA_CURSOR_SEMANTIC_CONTENT, &cursor_semantic_content);
   if (cursor_visible && cursor_has_value) {
     ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X, &cursor_x);
     ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y, &cursor_y);
@@ -567,6 +569,7 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
   out->cursor_visual_style = (uint8_t)cursor_visual_style;
   out->cursor_blinking = cursor_blinking;
   out->alternate_screen = active_screen == GHOSTTY_TERMINAL_SCREEN_ALTERNATE;
+  out->cursor_semantic_content = (uint8_t)cursor_semantic_content;
   out->cells = cells_out;
   out->cell_count = cell_count;
   return GHOSTTY_SUCCESS;

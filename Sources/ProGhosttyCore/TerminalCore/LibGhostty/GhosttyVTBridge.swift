@@ -94,6 +94,11 @@ public struct GhosttyTerminalFrame: Sendable, Equatable {
   public var cursorShape: TerminalCursorShape = .block
   public var cursorBlinking: Bool = false
   public var isAlternateScreen: Bool = false
+  /// Semantic content of the active screen's cursor. After OSC 133;C the cursor
+  /// flips to .output even though written input cells stay .input — this is what
+  /// distinguishes a live prompt from a stale/running command line (Ghostty's
+  /// prompt-click movement keys off this same state).
+  public var cursorSemanticContent: CellSemanticContent = .output
   public var cells: [Cell]
 }
 
@@ -393,6 +398,7 @@ public final class GhosttyVTBridge {
       cursorShape: TerminalCursorShape(ghosttyRawValue: snapshot.cursor_visual_style),
       cursorBlinking: snapshot.cursor_blinking,
       isAlternateScreen: snapshot.alternate_screen,
+      cursorSemanticContent: CellSemanticContent(ghosttyRawValue: snapshot.cursor_semantic_content),
       cells: cells
     )
   }

@@ -49,6 +49,71 @@ struct SemanticClickToPositionTests {
     )
   }
 
+  // MARK: - cursor gate tests
+
+  /// Mirror of the handleClickToPosition cursor gate: proceed only when the
+  /// cursor's semantic state is .input OR the cell under it is .input.
+  private func allowsClick(
+    cursorRow: Int, cursorCol: Int,
+    cols: Int, cells: [GhosttyTerminalFrame.Cell],
+    cursorSemanticContent: CellSemanticContent
+  ) -> Bool {
+    let idx = cursorRow * cols + cursorCol
+    let cellIsInput = idx < cells.count && cells[idx].semanticContent == .input
+    return cursorSemanticContent == .input || cellIsInput
+  }
+
+  @Test func livePromptAllowsClickWhenCursorOnBlankCell() {
+    // Normal editing: cursor parked on the blank cell past the last input char
+    // (cell .output) but the cursor semantic state is still .input → allowed.
+    let frame = makeSemanticFrame(
+      content: "% hello   ",
+      semantics: "ppiiiiiooo",
+      cols: 10, cursorX: 7, cursorY: 0
+    )
+    #expect(allowsClick(
+      cursorRow: 0, cursorCol: 7, cols: 10, cells: frame.cells,
+      cursorSemanticContent: .input))
+  }
+
+  @Test func runningCommandRejectsClick() {
+    // "sleep 100" running: OSC 133;C flipped cursor semantic to .output, cursor
+    // parked on the stale command line's trailing blank cell → rejected.
+    let frame = makeSemanticFrame(
+      content: "sleep 100",
+      semantics: "iiiiiiiii",
+      cols: 10, cursorX: 9, cursorY: 0
+    )
+    #expect(!allowsClick(
+      cursorRow: 0, cursorCol: 9, cols: 10, cells: frame.cells,
+      cursorSemanticContent: .output))
+  }
+
+  @Test func runningCommandCursorOnInputCellAllowsClick() {
+    // Cursor lands directly on a written input char (e.g. arrow-navigated into
+    // the stale command): cursor cell is .input → allowed, matching Ghostty.
+    let frame = makeSemanticFrame(
+      content: "sleep 100",
+      semantics: "iiiiiiiii",
+      cols: 10, cursorX: 4, cursorY: 0
+    )
+    #expect(allowsClick(
+      cursorRow: 0, cursorCol: 4, cols: 10, cells: frame.cells,
+      cursorSemanticContent: .output))
+  }
+
+  @Test func cursorOnPromptCellRejectsClick() {
+    // Cursor on the prompt marker, semantic state .prompt → rejected.
+    let frame = makeSemanticFrame(
+      content: "% hello   ",
+      semantics: "ppiiiiiooo",
+      cols: 10, cursorX: 0, cursorY: 0
+    )
+    #expect(!allowsClick(
+      cursorRow: 0, cursorCol: 0, cols: 10, cells: frame.cells,
+      cursorSemanticContent: .prompt))
+  }
+
   // MARK: - countSemanticMoves tests
 
   // Since countSemanticMoves is private on PTYGridView, we test via

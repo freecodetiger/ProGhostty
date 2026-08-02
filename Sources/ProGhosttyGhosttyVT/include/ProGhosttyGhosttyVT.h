@@ -37,6 +37,7 @@ typedef struct {
   uint8_t cursor_visual_style;
   bool cursor_blinking;
   bool alternate_screen;
+  uint8_t cursor_semantic_content; // 0=output, 1=input, 2=prompt (active screen cursor)
   ProGhosttyVTCell *cells;
   size_t cell_count;
 } ProGhosttyVTSnapshot;
