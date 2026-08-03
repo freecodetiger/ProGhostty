@@ -311,7 +311,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   public func flushPendingRenderers() {
     outputCoordinator.flushAll()
     for sessionID in Array(surfaces.keys) {
-      surfaces[sessionID]?.gridView.flushPendingScrollCommit()
       surfaces[sessionID]?.liveRenderer.flushPendingFrame()
       guard var surface = surfaces[sessionID] else { continue }
       handleLiveRendererFailureIfNeeded(session: sessionID, surface: &surface)
