@@ -281,17 +281,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       surface.gridView.applyPalette(palette)
       surface.liveRenderer.applyPalette(palette)
       surface.textBackend.applyPalette(palette)
-      if let html = surface.lastHTMLSnapshot,
-        let attributed = try? attributedTerminalSnapshot(
-          fromHTML: html,
-          cursorFrame: surface.lastCursorFrame,
-          isFocused: isFocused(sessionID)
-        )
-      {
-        surface.textBackend.render(attributed: attributed, scrollToEnd: false)
-      } else if let frame = surface.lastFrame {
-        render(frame, in: surface.liveRenderer, isFocused: isFocused(sessionID))
-      }
+      refreshPresentation(for: sessionID)
     }
   }
 
@@ -304,17 +294,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       surface.gridView.applyFont(family: family, size: size, cjkFallbackFamily: self.cjkFallbackFamily)
       surface.liveRenderer.applyFont(family: family, size: size, cjkFallbackFamily: self.cjkFallbackFamily)
       surface.textBackend.applyFont(family: family, size: size, cjkFallbackFamily: self.cjkFallbackFamily)
-      if let html = surface.lastHTMLSnapshot,
-        let attributed = try? attributedTerminalSnapshot(
-          fromHTML: html,
-          cursorFrame: surface.lastCursorFrame,
-          isFocused: isFocused(sessionID)
-        )
-      {
-        surface.textBackend.render(attributed: attributed, scrollToEnd: false)
-      } else if let frame = surface.lastFrame {
-        render(frame, in: surface.liveRenderer, isFocused: isFocused(sessionID))
-      }
+      refreshPresentation(for: sessionID)
       surface.textView.window?.invalidateCursorRects(for: surface.textView)
       surface.gridView.window?.invalidateCursorRects(for: surface.gridView)
     }
@@ -342,18 +322,8 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   public func setFocusedSession(_ id: TerminalSessionID?) {
     guard focusedSessionID != id else { return }
     focusedSessionID = id
-    for (sessionID, surface) in surfaces {
-      if let html = surface.lastHTMLSnapshot,
-        let attributed = try? attributedTerminalSnapshot(
-          fromHTML: html,
-          cursorFrame: surface.lastCursorFrame,
-          isFocused: isFocused(sessionID)
-        )
-      {
-        surface.textBackend.render(attributed: attributed, scrollToEnd: false)
-      } else if let frame = surface.lastFrame {
-        render(frame, in: surface.liveRenderer, isFocused: isFocused(sessionID))
-      }
+    for sessionID in surfaces.keys {
+      refreshPresentation(for: sessionID)
     }
   }
 
@@ -764,6 +734,42 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       )
     }
     PTYRenderDebugLog.write("diagnostics session=\(id) \(composedRendererDiagnostics(for: surface).debugSummary)")
+  }
+
+  /// Re-render a surface's current visible content with up-to-date presentation
+  /// attributes (focused cursor style, palette, font) WITHOUT changing the scroll
+  /// position. In browse mode this re-presents the history window; in live mode it
+  /// renders the latest bottom frame.
+  private func refreshPresentation(for sessionID: TerminalSessionID) {
+    guard let surface = surfaces[sessionID] else { return }
+
+    // Path 1: text backend (HTML snapshot fallback)
+    if let html = surface.lastHTMLSnapshot,
+      let attributed = try? attributedTerminalSnapshot(
+        fromHTML: html,
+        cursorFrame: surface.lastCursorFrame,
+        isFocused: isFocused(sessionID)
+      )
+    {
+      surface.textBackend.render(attributed: attributed, scrollToEnd: false)
+      return
+    }
+
+    // Path 2: pattern-2 browse mode — re-present the history window
+    if surface.containerView.isShowingLiveGrid,
+      let browseTop = surface.gridView.browseTopAbsoluteRow
+    {
+      let visibleRows = surface.lastFrame?.rows ?? 0
+      if visibleRows > 0 {
+        presentBrowseWindow(session: sessionID, topAbsoluteRow: browseTop, visibleRows: visibleRows)
+        return
+      }
+    }
+
+    // Path 3: live bottom — normal render
+    if let frame = surface.lastFrame {
+      render(frame, in: surface.liveRenderer, isFocused: isFocused(sessionID))
+    }
   }
 
   /// Pattern-2 browse present: fetch the window `[topAbsoluteRow, +visibleRows)`
