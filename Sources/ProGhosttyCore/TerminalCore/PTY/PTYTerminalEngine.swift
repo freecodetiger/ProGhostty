@@ -214,9 +214,6 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
     let surfaceRegistry = PTYTerminalSurfaceRegistry()
     self.surfaceRegistry = surfaceRegistry
     sessionManager = PTYTerminalSessionManager(surfaceRegistry: surfaceRegistry)
-    surfaceRegistry.setViewportScrollHandler { [weak sessionManager] session, rowDelta in
-      sessionManager?.scrollViewport(session, rowDelta: rowDelta) ?? false
-    }
   }
 
   public func createSession(config: TerminalSessionConfig) throws -> TerminalSessionID {
@@ -488,34 +485,6 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     case .failure(let error):
       continuation.yield(.error(session: id, message: "Paste encode failed: \(error)"))
     }
-  }
-
-  public func scrollViewport(_ id: TerminalSessionID, rowDelta: Int) -> Bool {
-    guard rowDelta != 0, let state = sessions[id] else { return false }
-    outputBatchCoordinator.flush(session: id)
-    let bridge = state.vtBridge
-    let vtQueue = state.vtQueue
-    let generation = state.resizeGeneration
-    // The grid controller uses positive deltas for visual downward movement
-    // through history; libghostty's viewport API defines upward history
-    // movement as negative.
-    let terminalDelta = -rowDelta
-    vtQueue.async { [weak self] in
-      guard !GhosttyVTQueueWork.isAtViewportEdge(deltaRows: terminalDelta, bridge: bridge) else {
-        Task { @MainActor [weak self] in
-          guard let self, self.sessions[id]?.resizeGeneration == generation else { return }
-          self.surfaceRegistry.cancelQueuedViewportScroll(session: id)
-        }
-        return
-      }
-      bridge.scrollViewport(deltaRows: terminalDelta)
-      let snapshot = ResizeRenderSnapshot.capture(from: bridge)
-      Task { @MainActor [weak self] in
-        guard let self, self.sessions[id]?.resizeGeneration == generation else { return }
-        self.surfaceRegistry.finishQueuedViewportScroll(snapshot, bridge: bridge, session: id)
-      }
-    }
-    return true
   }
 
   public func workingDirectory(for id: TerminalSessionID) -> String? {
