@@ -2059,34 +2059,6 @@ struct TerminalSurfaceTests {
     #expect(rects.isEmpty)
   }
 
-  @MainActor @Test func ptyGridSelectionDragAboveTopRequestsViewportScroll() throws {
-    let gridView = PTYGridView()
-    var frame = frameWithText(rows: ["first visible", "second visible"], cols: 24, cursorX: 0, cursorY: 0)
-    frame.isAlternateScreen = false
-    let cellSize = gridView.terminalCellSize
-    let inset = gridView.terminalContentInset
-    gridView.frame = NSRect(
-      x: 0,
-      y: 0,
-      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
-      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
-    )
-    gridView.render(frame, isFocused: true)
-    var rowDeltas: [Int] = []
-    gridView.viewportCanScrollHandler = { _ in true }
-    gridView.viewportScrollHandler = {
-      rowDeltas.append($0)
-      return true
-    }
-    let start = PTYGridView.textGlyphRect(row: 1, col: 2, cellSize: cellSize, inset: inset)
-
-    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: gridView))
-    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: start.midX, y: inset.height - 8), in: gridView))
-
-    #expect(rowDeltas == [1])
-    #expect(gridView.currentSelectionRowSet == [0, 1])
-  }
-
   @MainActor @Test func ptyGridSelectionDragAboveTopUsesBrowsePresentWhenPattern2Ready() throws {
     let gridView = PTYGridView()
     var frame = frameWithText(rows: ["first visible", "second visible"], cols: 24, cursorX: 0, cursorY: 0)
@@ -2102,17 +2074,8 @@ struct TerminalSurfaceTests {
     gridView.applyRendererOptions(TerminalRendererOptions(smoothPixelScrollingEnabled: true))
     gridView.render(frame, isFocused: true)
 
-    var rowDeltas: [Int] = []
     var presented: [(top: UInt64, visible: Int)] = []
     var followed = false
-    gridView.viewportCanScrollHandler = { _ in
-      Issue.record("VT can-scroll must not run when Pattern-2 browse plumbing is ready")
-      return true
-    }
-    gridView.viewportScrollHandler = {
-      rowDeltas.append($0)
-      return true
-    }
     // total 100, visible 2 → liveBottom max(98, 76) = 98
     gridView.browseScrollMetricsHandler = { (total: 100, topAbsoluteRow: 76) }
     gridView.browsePresentHandler = { top, visible in
@@ -2124,68 +2087,11 @@ struct TerminalSurfaceTests {
     gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: gridView))
     gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: start.midX, y: inset.height - 8), in: gridView))
 
-    #expect(rowDeltas.isEmpty)
     #expect(followed == false)
     #expect(presented.count == 1)
     #expect(presented[0].top == 97)
     #expect(presented[0].visible == 2)
     #expect(gridView.browseTopAbsoluteRow == 97)
-  }
-
-  @MainActor @Test func ptyGridSelectionAnchorStaysOnOriginalTextAfterAutoScrollRender() throws {
-    let gridView = PTYGridView()
-    let cols = 24
-    var initialViewport = frameWithText(rows: ["row10 mid", "row11 anchor"], cols: cols, cursorX: 0, cursorY: 0)
-    initialViewport.isAlternateScreen = false
-    var scrolledViewport = frameWithText(rows: ["row09 prev", "row10 mid"], cols: cols, cursorX: 0, cursorY: 0)
-    scrolledViewport.isAlternateScreen = false
-    let cellSize = gridView.terminalCellSize
-    let inset = gridView.terminalContentInset
-    gridView.frame = NSRect(
-      x: 0,
-      y: 0,
-      width: inset.width * 2 + CGFloat(cols) * cellSize.width,
-      height: inset.height * 2 + CGFloat(initialViewport.rows) * cellSize.height
-    )
-    gridView.render(
-      GhosttyTerminalScrollFrame(
-        viewport: initialViewport,
-        overscanTop: [cellRow(text: "row09 prev", cols: cols)],
-        overscanBottom: [cellRow(text: "row12 next", cols: cols)],
-        requestedOverscanTop: 1,
-        requestedOverscanBottom: 1,
-        viewportStartRow: 10
-      ),
-      isFocused: true,
-      dirty: CellGridDirtyResult(mode: .full, rows: [0, 1])
-    )
-    var rowDeltas: [Int] = []
-    gridView.viewportCanScrollHandler = { _ in true }
-    gridView.viewportScrollHandler = { rowDelta in
-      rowDeltas.append(rowDelta)
-      gridView.render(
-        GhosttyTerminalScrollFrame(
-          viewport: scrolledViewport,
-          overscanTop: [cellRow(text: "row08 old", cols: cols)],
-          overscanBottom: [cellRow(text: "row11 anchor", cols: cols)],
-          requestedOverscanTop: 1,
-          requestedOverscanBottom: 1,
-          viewportStartRow: 9
-        ),
-        isFocused: true,
-        dirty: CellGridDirtyResult(mode: .full, rows: [0, 1])
-      )
-      return true
-    }
-    let start = PTYGridView.textGlyphRect(row: 1, col: 11, cellSize: cellSize, inset: inset)
-
-    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: gridView))
-    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: start.midX, y: inset.height - 8), in: gridView))
-
-    #expect(rowDeltas == [1])
-    #expect(gridView.currentSelectionRowSet == [1, 2, 3])
-    #expect(gridView.selectedText?.contains("row11 anchor") == true)
-    #expect(gridView.selectedText?.contains("row08 old") == false)
   }
 
   @MainActor @Test func ptyGridURLCursorRectsCanFollowPixelScrollOffset() {

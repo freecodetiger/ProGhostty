@@ -157,10 +157,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       guard let self else { return }
       pasteHandler?(id, text)
     }
-    gridView.viewportCanScrollHandler = { [weak self] rowDelta in
-      guard let self, rowDelta != 0 else { return false }
-      return self.canScrollViewport(session: id, rowDelta: rowDelta)
-    }
     gridView.browseScrollMetricsHandler = { [weak self] in
       guard let self, let bridge = self.surfaces[id]?.bridge,
         let scrollbar = try? bridge.scrollbar()
@@ -520,31 +516,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       || !isPinnedToBottom
     guard shouldRenderInputSnapshot else { return false }
     surface.liveRenderer.resetPixelScroll(suppressMomentum: true)
-    return true
-  }
-
-  private func canScrollViewport(session id: TerminalSessionID, rowDelta: Int) -> Bool {
-    guard let scrollbar = surfaces[id]?.scrollbar else { return false }
-    return !isAtViewportEdge(deltaRows: -rowDelta, scrollbar: scrollbar)
-  }
-
-  private func isAtViewportEdge(deltaRows: Int, bridge: GhosttyVTBridge) -> Bool {
-    guard let scrollbar = try? bridge.scrollbar(), scrollbar.total > scrollbar.length else {
-      return true
-    }
-    return isAtViewportEdge(deltaRows: deltaRows, scrollbar: scrollbar)
-  }
-
-  private func isAtViewportEdge(deltaRows: Int, scrollbar: GhosttyTerminalScrollbar) -> Bool {
-    guard scrollbar.total > scrollbar.length else {
-      return true
-    }
-    if deltaRows < 0 {
-      return scrollbar.offset == 0
-    }
-    if deltaRows > 0 {
-      return scrollbar.offset + scrollbar.length >= scrollbar.total
-    }
     return true
   }
 

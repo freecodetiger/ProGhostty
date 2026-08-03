@@ -900,8 +900,6 @@ public class PTYGridView: NSView {
 
   public var inputHandler: ((Data) -> Void)?
   public var pasteHandler: ((String) -> Void)?
-  public var viewportScrollHandler: ((Int) -> Bool)?
-  public var viewportCanScrollHandler: ((Int) -> Bool)?
   public var viewportDidChangeHandler: (() -> Void)?
   public var transientOverlayDidChangeHandler: (() -> Void)?
   /// Fired when smooth-scroll activity starts (true) / stops (false). The
@@ -3335,13 +3333,7 @@ public class PTYGridView: NSView {
       stopSelectionAutoScroll()
       return
     }
-    let didScroll: Bool
-    if canUsePattern2BrowseForSelection {
-      didScroll = stepBrowseForSelectionAutoScroll(direction: selectionAutoScrollDirection)
-    } else {
-      didScroll = viewportCanScrollHandler?(selectionAutoScrollDirection) != false
-        && viewportScrollHandler?(selectionAutoScrollDirection) == true
-    }
+    let didScroll = stepBrowseForSelectionAutoScroll(direction: selectionAutoScrollDirection)
     guard didScroll else {
       stopSelectionAutoScroll()
       return
@@ -3353,20 +3345,8 @@ public class PTYGridView: NSView {
     transientOverlayDidChangeHandler?()
   }
 
-  /// Same plumbing gate as wheel Pattern-2 browse, without the NSEvent.
-  private var canUsePattern2BrowseForSelection: Bool {
-    guard rendererOptions.smoothPixelScrollingEnabled else { return false }
-    guard browseScrollMetricsHandler != nil, browsePresentHandler != nil, cellSize.height > 0 else {
-      return false
-    }
-    return true
-  }
-
   private func selectionAutoScrollCanScroll(direction: Int) -> Bool {
-    if canUsePattern2BrowseForSelection {
-      return canStepBrowseForSelectionAutoScroll(direction: direction)
-    }
-    return viewportCanScrollHandler?(direction) != false
+    return canStepBrowseForSelectionAutoScroll(direction: direction)
   }
 
   private func canStepBrowseForSelectionAutoScroll(direction: Int) -> Bool {
