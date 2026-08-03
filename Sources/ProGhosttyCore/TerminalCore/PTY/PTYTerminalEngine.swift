@@ -214,9 +214,6 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
     let surfaceRegistry = PTYTerminalSurfaceRegistry()
     self.surfaceRegistry = surfaceRegistry
     sessionManager = PTYTerminalSessionManager(surfaceRegistry: surfaceRegistry)
-    surfaceRegistry.setViewportScrollHandler { [weak sessionManager] session, rowDelta in
-      sessionManager?.scrollViewport(session, rowDelta: rowDelta) ?? false
-    }
   }
 
   public func createSession(config: TerminalSessionConfig) throws -> TerminalSessionID {
@@ -488,34 +485,6 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     case .failure(let error):
       continuation.yield(.error(session: id, message: "Paste encode failed: \(error)"))
     }
-  }
-
-  public func scrollViewport(_ id: TerminalSessionID, rowDelta: Int) -> Bool {
-    guard rowDelta != 0, let state = sessions[id] else { return false }
-    outputBatchCoordinator.flush(session: id)
-    let bridge = state.vtBridge
-    let vtQueue = state.vtQueue
-    let generation = state.resizeGeneration
-    // The grid controller uses positive deltas for visual downward movement
-    // through history; libghostty's viewport API defines upward history
-    // movement as negative.
-    let terminalDelta = -rowDelta
-    vtQueue.async { [weak self] in
-      guard !GhosttyVTQueueWork.isAtViewportEdge(deltaRows: terminalDelta, bridge: bridge) else {
-        Task { @MainActor [weak self] in
-          guard let self, self.sessions[id]?.resizeGeneration == generation else { return }
-          self.surfaceRegistry.cancelQueuedViewportScroll(session: id)
-        }
-        return
-      }
-      bridge.scrollViewport(deltaRows: terminalDelta)
-      let snapshot = ResizeRenderSnapshot.capture(from: bridge)
-      Task { @MainActor [weak self] in
-        guard let self, self.sessions[id]?.resizeGeneration == generation else { return }
-        self.surfaceRegistry.finishQueuedViewportScroll(snapshot, bridge: bridge, session: id)
-      }
-    }
-    return true
   }
 
   public func workingDirectory(for id: TerminalSessionID) -> String? {
@@ -931,8 +900,6 @@ public class PTYGridView: NSView {
 
   public var inputHandler: ((Data) -> Void)?
   public var pasteHandler: ((String) -> Void)?
-  public var viewportScrollHandler: ((Int) -> Bool)?
-  public var viewportCanScrollHandler: ((Int) -> Bool)?
   public var viewportDidChangeHandler: (() -> Void)?
   public var transientOverlayDidChangeHandler: (() -> Void)?
   /// Fired when smooth-scroll activity starts (true) / stops (false). The
@@ -999,7 +966,6 @@ public class PTYGridView: NSView {
   private var cellSize = CGSize(width: 8, height: 16)
   private var isFocusedTerminalStorage = true
   private var rendererOptions = TerminalRendererOptions()
-  private var scrollController = PaneScrollController()
   private var suppressMomentumScroll = false
   /// Pattern-2 smooth-scroll physics (display-link driven). Sole owner of how
   /// the browse position evolves over time; the display-link tick is the ONLY
@@ -1020,8 +986,7 @@ public class PTYGridView: NSView {
   /// the metrics handler so live output growth is tracked).
   private var browseTotalRows: UInt64 = 0
   private var scrollDisplayLink: CADisplayLink?
-  /// True while pattern-2 display-link browsing is active. When true the
-  /// event-driven `PaneScrollController` path is bypassed.
+  /// True while pattern-2 display-link browsing is active.
   private var isSmoothScrollBrowsing = false
   /// While true, a viewport change updates state but does NOT trigger an
   /// immediate re-present. Used during a row commit so the offset can be set
@@ -1113,7 +1078,7 @@ public class PTYGridView: NSView {
   public var isFocusedTerminal: Bool { isFocusedTerminalStorage }
 
   public var isViewingHistory: Bool {
-    viewport != TerminalViewport() || scrollController.hasPendingCommit || browseTopRow != nil
+    viewport != TerminalViewport() || browseTopRow != nil
   }
 
   /// The absolute scrollback row the user has settled on while browsing history
@@ -1283,20 +1248,15 @@ public class PTYGridView: NSView {
 
   public func applyRendererOptions(_ options: TerminalRendererOptions) {
     rendererOptions = options
-    if !options.smoothPixelScrollingEnabled {
-      scrollController.resetPhysics(reason: TerminalRendererDiagnostics.smoothScrollDisabledReason)
-      viewport = TerminalViewport()
-    }
   }
 
   public func resetViewportStartRowKeepingVisualOffset() {
-    // Pattern-2 owns visualOffsetY while parked/browsing; PaneScroll remainder is unused there.
-    if browseTopRow != nil || isSmoothScrollBrowsing { return }
-    viewport = TerminalViewport(visualOffsetY: scrollController.pixelRemainderY)
+    // With pattern-1 removed, pattern-2 owns visualOffsetY exclusively via
+    // display-link ticks. Nothing to reset here; callers are no-ops or will be
+    // removed in subsequent phases.
   }
 
   public func resetPixelScroll(suppressMomentum: Bool = false) {
-    scrollController.resetAll()
     viewport = TerminalViewport()
     // Return to live-follow: drop the persisted pattern-2 browse anchor and stop
     // any in-flight display-link browsing.
@@ -1310,27 +1270,24 @@ public class PTYGridView: NSView {
   }
 
   public func applyScrollDiagnostics(to diagnostics: inout TerminalRendererDiagnostics) {
-    diagnostics.pixelRemainderY = scrollController.pixelRemainderY
-    diagnostics.committedRowDelta = scrollController.lastCommittedRowDelta
-    diagnostics.coalescedWheelEvents = scrollController.coalescedWheelEvents
+    diagnostics.pixelRemainderY = 0
+    diagnostics.committedRowDelta = 0
+    diagnostics.coalescedWheelEvents = 0
     diagnostics.scrollCommitMode = .coalesced
-    diagnostics.pendingScrollRowDelta = scrollController.pendingRowDelta
-    diagnostics.pendingScrollWheelEvents = scrollController.pendingWheelEvents
+    diagnostics.pendingScrollRowDelta = 0
+    diagnostics.pendingScrollWheelEvents = 0
     diagnostics.lastScrollCommitDuration = lastScrollCommitDuration
     diagnostics.lastScrollRenderDuration = lastDrawDuration
     diagnostics.smoothScrollOffset = viewport.visualOffsetY
     if diagnostics.alternateScreenActive {
       diagnostics.pixelSmoothScroll = .unavailable
       diagnostics.pixelSmoothScrollReason = TerminalRendererDiagnostics.alternateScreenScrollReason
-    } else if scrollController.isPixelScrollActive && (diagnostics.overscanTopRows > 0 || diagnostics.overscanBottomRows > 0) {
+    } else if browseTopRow != nil || isSmoothScrollBrowsing {
       diagnostics.pixelSmoothScroll = .experimental
       diagnostics.pixelSmoothScrollReason = TerminalRendererDiagnostics.smoothScrollEnabledReason
-    } else if !scrollController.isPixelScrollActive {
-      diagnostics.pixelSmoothScroll = .unavailable
-      diagnostics.pixelSmoothScrollReason = scrollController.lastDisabledReason
     } else {
-      diagnostics.pixelSmoothScroll = .unavailable
-      diagnostics.pixelSmoothScrollReason = TerminalRendererDiagnostics.missingOverscanRowsReason
+      diagnostics.pixelSmoothScroll = .experimental
+      diagnostics.pixelSmoothScrollReason = TerminalRendererDiagnostics.smoothScrollEnabledReason
     }
   }
 
@@ -1547,27 +1504,19 @@ public class PTYGridView: NSView {
     PTYRenderDebugLog.write(
       "wheel precise=\(event.hasPreciseScrollingDeltas) deltaY=\(String(format: "%.3f", event.scrollingDeltaY)) phase=\(event.phase.rawValue) momentum=\(event.momentumPhase.rawValue)"
     )
-    if shouldUseSmoothScrollBrowsing(for: event) {
-      feedSmoothScroll(event)
+    // Alt screen: forward wheel events to the PTY for TUI programs (vim, less, etc.)
+    if let frame = frameSnapshot, frame.isAlternateScreen {
+      super.scrollWheel(with: event)
       return
     }
-    processScroll(deltaY: event.scrollingDeltaY) {
-      super.scrollWheel(with: event)
+    // Normal screen: pattern-2 smooth scroll (display-link driven browse)
+    guard browseScrollMetricsHandler != nil, browsePresentHandler != nil, cellSize.height > 0 else {
+      return
     }
+    feedSmoothScroll(event)
   }
 
   // MARK: Pattern-2 display-link smooth scroll
-
-  private func shouldUseSmoothScrollBrowsing(for event: NSEvent) -> Bool {
-    guard rendererOptions.smoothPixelScrollingEnabled else { return false }
-    guard let frame = frameSnapshot, !frame.isAlternateScreen else { return false }
-    // Need the plumbing wired (session provides VT reads / present) and a valid
-    // cell height to map pixels ↔ rows.
-    guard browseScrollMetricsHandler != nil, browsePresentHandler != nil, cellSize.height > 0 else {
-      return false
-    }
-    return true
-  }
 
   private func feedSmoothScroll(_ event: NSEvent) {
     // We synthesize our own inertia, so drop OS momentum events (matches
@@ -1762,131 +1711,9 @@ public class PTYGridView: NSView {
     invalidateIMECharacterCoordinates()
   }
 
-  private func processScroll(deltaY: CGFloat, forwardToPTY: () -> Void = {}) {
-    guard let frame = frameSnapshot else {
-      PTYRenderDebugLog.write("wheel-forward reason=no-frame deltaY=\(String(format: "%.3f", deltaY))")
-      forwardToPTY()
-      return
-    }
-    if frame.isAlternateScreen {
-      _ = scrollController.scroll(
-        deltaY: deltaY,
-        cellHeight: cellSize.height,
-        alternateScreen: true,
-        smoothPixelScrollingEnabled: rendererOptions.smoothPixelScrollingEnabled,
-        hasOverscanRowsForProjectedRemainder: false
-      )
-      viewport = TerminalViewport()
-      PTYRenderDebugLog.write(
-        "wheel-forward reason=alternate-screen deltaY=\(String(format: "%.3f", deltaY))"
-      )
-      forwardToPTY()
-      return
-    }
-    if deltaY != 0 {
-      let rowDirection = deltaY.sign == .minus ? -1 : 1
-      if viewportCanScrollHandler?(rowDirection) == false {
-        scrollController.resetPhysics(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
-        viewport = TerminalViewport()
-        needsDisplay = true
-        PTYRenderDebugLog.write(
-          "wheel-ignore reason=edge deltaY=\(String(format: "%.3f", deltaY)) rowDirection=\(rowDirection)"
-        )
-        return
-      }
-    }
-    let hasOverscanRowsForProjectedRemainder = hasOverscanRows(forVisualOffsetY: viewport.visualOffsetY + deltaY)
-    let decision = scrollController.scroll(
-      deltaY: deltaY,
-      cellHeight: cellSize.height,
-      alternateScreen: false,
-      smoothPixelScrollingEnabled: rendererOptions.smoothPixelScrollingEnabled,
-      hasOverscanRowsForProjectedRemainder: hasOverscanRowsForProjectedRemainder
-    )
-    PTYRenderDebugLog.write(
-      "wheel-decision deltaY=\(String(format: "%.3f", deltaY)) cellHeight=\(String(format: "%.3f", cellSize.height)) smooth=\(rendererOptions.smoothPixelScrollingEnabled) hasOverscan=\(hasOverscanRowsForProjectedRemainder) decision=\(decision) viewportOffset=\(String(format: "%.3f", viewport.visualOffsetY))"
-    )
-    switch decision {
-    case .consumed(let rowDelta, let pixelRemainderY):
-      if rowDelta != 0 {
-        // Suppress the intermediate present: set the rebased offset for the
-        // overscan/commit checks below, but don't flash a frame pairing it with
-        // the still-old content. The commit re-renders the correct atomic frame
-        // (new content + rebased offset) with suppression lifted.
-        suppressViewportChangePresent = true
-        viewport = TerminalViewport(visualOffsetY: pixelRemainderY)
-        if pixelRemainderY != 0, !canRenderPixelScroll(for: pixelRemainderY) {
-          suppressViewportChangePresent = false
-          scrollController.resetPhysics(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
-          viewport = TerminalViewport()
-          scrollController.resetAll()
-          return
-        }
-        if scrollController.shouldCommitAccumulatedRowImmediately(rowDelta: rowDelta) {
-          let committed = commitViewportScroll(rowDelta: rowDelta)
-          suppressViewportChangePresent = false
-          if !committed {
-            scrollController.resetPhysics(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
-            viewport = TerminalViewport()
-            scrollController.resetAll()
-            return
-          }
-        } else {
-          suppressViewportChangePresent = false
-          if scrollController.enqueueCommit(rowDelta: rowDelta) {
-            schedulePendingScrollCommit()
-          }
-        }
-        needsDisplay = true
-      } else {
-        viewport = TerminalViewport(visualOffsetY: pixelRemainderY)
-        if canRenderPixelScroll(for: pixelRemainderY) {
-          needsDisplay = true
-        } else {
-          scrollController.resetPhysics(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
-          viewport = TerminalViewport()
-        }
-      }
-    case .forwardToPTY:
-      forwardToPTY()
-    case .ignored:
-      break
-    }
-  }
-
   private func hasOverscanRows(forVisualOffsetY visualOffsetY: CGFloat) -> Bool {
     guard visualOffsetY != 0, let scrollFrameSnapshot else { return false }
     return visualOffsetY > 0 ? !scrollFrameSnapshot.overscanTop.isEmpty : !scrollFrameSnapshot.overscanBottom.isEmpty
-  }
-
-  private func schedulePendingScrollCommit() {
-    DispatchQueue.main.asyncAfter(deadline: .now() + PaneScrollController.commitInterval) { [weak self] in
-      Task { @MainActor in
-        self?.flushPendingScrollCommit()
-      }
-    }
-  }
-
-  public func flushPendingScrollCommit() {
-    guard let batch = scrollController.drainCommit() else { return }
-    if commitViewportScroll(rowDelta: batch.rowDelta) {
-      if viewport.visualOffsetY != 0, !canRenderPixelScroll(for: viewport.visualOffsetY) {
-        scrollController.resetPhysics(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
-        viewport = TerminalViewport()
-      }
-      needsDisplay = true
-    } else {
-      scrollController.resetPhysics(reason: TerminalRendererDiagnostics.missingOverscanRowsReason)
-      viewport = TerminalViewport()
-      needsDisplay = true
-    }
-  }
-
-  private func commitViewportScroll(rowDelta: Int) -> Bool {
-    let start = ProcessInfo.processInfo.systemUptime
-    let didScroll = viewportScrollHandler?(rowDelta) ?? false
-    lastScrollCommitDuration = ProcessInfo.processInfo.systemUptime - start
-    return didScroll
   }
 
   public override func keyDown(with event: NSEvent) {
@@ -1968,23 +1795,6 @@ public class PTYGridView: NSView {
     } else {
       inputHandler?(Data(text.utf8))
     }
-  }
-
-  func testScrollViewportRows(_ rowDelta: Int) {
-    _ = viewportScrollHandler?(rowDelta)
-  }
-
-  func testScrollWheelDeltaY(_ deltaY: CGFloat) {
-    processScroll(deltaY: deltaY)
-  }
-
-  func testScrollWheelDeltaY(_ deltaY: CGFloat, forwardToPTY: () -> Void) {
-    processScroll(deltaY: deltaY, forwardToPTY: forwardToPTY)
-  }
-
-  func testMomentumScrollWheelDeltaY(_ deltaY: CGFloat) {
-    if suppressMomentumScroll { return }
-    processScroll(deltaY: deltaY)
   }
 
   /// Test hook: begin a pattern-2 browse gesture (captures anchor/total from the
@@ -3523,13 +3333,7 @@ public class PTYGridView: NSView {
       stopSelectionAutoScroll()
       return
     }
-    let didScroll: Bool
-    if canUsePattern2BrowseForSelection {
-      didScroll = stepBrowseForSelectionAutoScroll(direction: selectionAutoScrollDirection)
-    } else {
-      didScroll = viewportCanScrollHandler?(selectionAutoScrollDirection) != false
-        && viewportScrollHandler?(selectionAutoScrollDirection) == true
-    }
+    let didScroll = stepBrowseForSelectionAutoScroll(direction: selectionAutoScrollDirection)
     guard didScroll else {
       stopSelectionAutoScroll()
       return
@@ -3541,20 +3345,8 @@ public class PTYGridView: NSView {
     transientOverlayDidChangeHandler?()
   }
 
-  /// Same plumbing gate as wheel Pattern-2 browse, without the NSEvent.
-  private var canUsePattern2BrowseForSelection: Bool {
-    guard rendererOptions.smoothPixelScrollingEnabled else { return false }
-    guard browseScrollMetricsHandler != nil, browsePresentHandler != nil, cellSize.height > 0 else {
-      return false
-    }
-    return true
-  }
-
   private func selectionAutoScrollCanScroll(direction: Int) -> Bool {
-    if canUsePattern2BrowseForSelection {
-      return canStepBrowseForSelectionAutoScroll(direction: direction)
-    }
-    return viewportCanScrollHandler?(direction) != false
+    return canStepBrowseForSelectionAutoScroll(direction: direction)
   }
 
   private func canStepBrowseForSelectionAutoScroll(direction: Int) -> Bool {

@@ -69,7 +69,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   /// Per-session resolver: a clicked file target → its absolute path + popover
   /// detail lines. Owns cwd resolution + filesystem access (App layer).
   private var fileInfoProvider: (@MainActor (TerminalSessionID, TerminalFilePathTarget) -> TerminalFileFacts?)?
-  private var viewportScrollHandler: (@MainActor (TerminalSessionID, Int) -> Bool)?
   private var semanticLinkText = SemanticLinkText()
   private var rendererOptions = TerminalRendererOptions()
   private let isMetalDirectAvailable: Bool
@@ -157,14 +156,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     gridView.pasteHandler = { [weak self] text in
       guard let self else { return }
       pasteHandler?(id, text)
-    }
-    gridView.viewportScrollHandler = { [weak self] rowDelta in
-      guard let self, rowDelta != 0 else { return false }
-      return self.scrollViewport(session: id, rowDelta: rowDelta, backend: self.surfaces[id]?.liveRenderer)
-    }
-    gridView.viewportCanScrollHandler = { [weak self] rowDelta in
-      guard let self, rowDelta != 0 else { return false }
-      return self.canScrollViewport(session: id, rowDelta: rowDelta)
     }
     gridView.browseScrollMetricsHandler = { [weak self] in
       guard let self, let bridge = self.surfaces[id]?.bridge,
@@ -311,7 +302,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   public func flushPendingRenderers() {
     outputCoordinator.flushAll()
     for sessionID in Array(surfaces.keys) {
-      surfaces[sessionID]?.gridView.flushPendingScrollCommit()
       surfaces[sessionID]?.liveRenderer.flushPendingFrame()
       guard var surface = surfaces[sessionID] else { continue }
       handleLiveRendererFailureIfNeeded(session: sessionID, surface: &surface)
@@ -404,9 +394,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     }
   }
 
-  public func setViewportScrollHandler(_ handler: (@MainActor (TerminalSessionID, Int) -> Bool)?) {
-    viewportScrollHandler = handler
-  }
 
   public func render(_ bridge: GhosttyVTBridge, session id: TerminalSessionID) {
     guard var surface = surfaces[id] else { return }
@@ -481,12 +468,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
         }
         return
       }
-      // Event-driven row-based history view (non-pattern-2 fallback): keep the
-      // legacy freeze so output doesn't fight the row-commit path.
-      if surface.gridView.isViewingHistory {
-        surfaces[id] = surface
-        return
-      }
     }
     if !wasPinnedToBottom, surface.containerView.isShowingLiveGrid {
       surfaces[id] = surface
@@ -499,25 +480,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     surfaces[id] = surface
   }
 
-  public func finishQueuedViewportScroll(
-    _ snapshot: ResizeRenderSnapshot,
-    bridge: GhosttyVTBridge,
-    session id: TerminalSessionID
-  ) {
-    guard var surface = surfaces[id] else { return }
-    surface.bridge = bridge
-    surface.scrollbar = snapshot.scrollbar
-    render(snapshot, surface: &surface, session: id)
-    surface.liveRenderer.flushPendingFrame()
-    surface.liveRenderer.resetViewportStartRowKeepingVisualOffset()
-    surfaces[id] = surface
-  }
-
-  public func cancelQueuedViewportScroll(session id: TerminalSessionID) {
-    guard let surface = surfaces[id] else { return }
-    surface.liveRenderer.resetPixelScroll(suppressMomentum: false)
-  }
-
   public func markResizePending(session id: TerminalSessionID) {
     guard let surface = surfaces[id] else { return }
     surface.liveRenderer.markResizePending()
@@ -528,35 +490,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     guard let surface = surfaces[id] else { return }
     surface.liveRenderer.applyResizeDiagnostics(diagnostics)
     surface.textBackend.applyResizeDiagnostics(diagnostics)
-  }
-
-  private func scrollViewport(
-    session id: TerminalSessionID,
-    rowDelta: Int,
-    backend: (any TerminalLiveRendererBackend)?
-  ) -> Bool {
-    guard var surface = surfaces[id], backend != nil, let bridge = surface.bridge else { return false }
-    // The grid controller uses positive deltas for visual downward movement
-    // through history; libghostty's viewport API defines upward history
-    // movement as negative.
-    let terminalDelta = -rowDelta
-    guard let scrollbar = surface.scrollbar else { return false }
-    if isAtViewportEdge(deltaRows: terminalDelta, scrollbar: scrollbar) {
-      return false
-    }
-    if let viewportScrollHandler {
-      return viewportScrollHandler(id, rowDelta)
-    }
-    let scrollViewportStart = Self.now()
-    bridge.scrollViewport(deltaRows: terminalDelta)
-    surface.bridgeDiagnostics.scrollViewportDuration = Self.now() - scrollViewportStart
-    let scrollbarStart = Self.now()
-    surface.scrollbar = try? bridge.scrollbar()
-    surface.bridgeDiagnostics.scrollbarSnapshotDuration = Self.now() - scrollbarStart
-    renderScrollCommit(bridge, surface: &surface, session: id)
-    surface.liveRenderer.resetViewportStartRowKeepingVisualOffset()
-    surfaces[id] = surface
-    return true
   }
 
   func viewportIsPinnedToBottom(_ id: TerminalSessionID) -> Bool? {
@@ -583,31 +516,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       || !isPinnedToBottom
     guard shouldRenderInputSnapshot else { return false }
     surface.liveRenderer.resetPixelScroll(suppressMomentum: true)
-    return true
-  }
-
-  private func canScrollViewport(session id: TerminalSessionID, rowDelta: Int) -> Bool {
-    guard let scrollbar = surfaces[id]?.scrollbar else { return false }
-    return !isAtViewportEdge(deltaRows: -rowDelta, scrollbar: scrollbar)
-  }
-
-  private func isAtViewportEdge(deltaRows: Int, bridge: GhosttyVTBridge) -> Bool {
-    guard let scrollbar = try? bridge.scrollbar(), scrollbar.total > scrollbar.length else {
-      return true
-    }
-    return isAtViewportEdge(deltaRows: deltaRows, scrollbar: scrollbar)
-  }
-
-  private func isAtViewportEdge(deltaRows: Int, scrollbar: GhosttyTerminalScrollbar) -> Bool {
-    guard scrollbar.total > scrollbar.length else {
-      return true
-    }
-    if deltaRows < 0 {
-      return scrollbar.offset == 0
-    }
-    if deltaRows > 0 {
-      return scrollbar.offset + scrollbar.length >= scrollbar.total
-    }
     return true
   }
 
@@ -701,39 +609,6 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       surface.textBackend.render(plainText: text)
       PTYRenderDebugLog.write("diagnostics session=\(id) \(composedRendererDiagnostics(for: surface).debugSummary)")
     }
-  }
-
-  private func renderScrollCommit(_ bridge: GhosttyVTBridge, surface: inout SurfaceState, session id: TerminalSessionID) {
-    surface.bridge = bridge
-    surface.bridgeDiagnostics.frameSnapshotDuration = 0
-    let scrollFrameStart = Self.now()
-    let scrollFrame = try? bridge.scrollFrame(overscanTop: GhosttyTerminalScrollFrame.pixelScrollOverscanRows, overscanBottom: GhosttyTerminalScrollFrame.pixelScrollOverscanRows)
-    surface.bridgeDiagnostics.scrollFrameSnapshotDuration = Self.now() - scrollFrameStart
-    guard let scrollFrame else {
-      surface.bridgeDiagnostics.snapshotCellCount = 0
-      return
-    }
-    surface.bridgeDiagnostics.snapshotCellCount = Self.snapshotCellCount(
-      frame: scrollFrame.viewport,
-      scrollFrame: scrollFrame
-    )
-    let renderFrame = TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: isFocused(id))
-    surface.lastHTMLSnapshot = nil
-    surface.lastFrame = scrollFrame.viewport
-    surface.lastCursorFrame = nil
-    surface.lastRenderFrame = renderFrame
-    let shouldTransferFocus = surface.textView.window?.firstResponder === surface.textView
-    surface.containerView.showLiveGrid()
-    if shouldTransferFocus {
-      surface.gridView.window?.makeFirstResponder(surface.gridView)
-    }
-    render(renderFrame, in: surface.liveRenderer)
-    if let scrollbar = surface.scrollbar {
-      PTYRenderDebugLog.write(
-        "scroll-render session=\(id) scrollbar=(offset:\(scrollbar.offset), length:\(scrollbar.length), total:\(scrollbar.total)) viewportStart=\(String(describing: scrollFrame.viewportStartRow)) tail=\"\(Self.tailText(from: scrollFrame.viewport))\""
-      )
-    }
-    PTYRenderDebugLog.write("diagnostics session=\(id) \(composedRendererDiagnostics(for: surface).debugSummary)")
   }
 
   /// Re-render a surface's current visible content with up-to-date presentation
