@@ -6,6 +6,53 @@ import Testing
 
 @Suite("Terminal surface", .serialized)
 struct TerminalSurfaceTests {
+  @MainActor @Test func liveGridRoutesDiscreteMouseReportingWheelToPTYInput() throws {
+    let gridView = PTYGridView()
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    gridView.terminalMouseEncodeHandler = { _, _ in Data("m".utf8) }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.scrollWheel(with: try scrollEvent(deltaY: 1))
+
+    #expect(emitted == Data("mmm".utf8))
+  }
+
+  @MainActor @Test func liveGridRoutesAlternateWheelToCursorKeyEncoder() throws {
+    let gridView = PTYGridView()
+    gridView.terminalScrollOwnershipHandler = { .alternateCursorKeys(applicationMode: false) }
+    var request: (wheelUp: Bool, count: Int)?
+    gridView.terminalAlternateScrollEncodeHandler = { wheelUp, count in
+      request = (wheelUp, count)
+      return Data("cursor".utf8)
+    }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.scrollWheel(with: try scrollEvent(deltaY: -1))
+
+    #expect(request?.wheelUp == false)
+    #expect(request?.count == 3)
+    #expect(emitted == Data("cursor".utf8))
+  }
+
+  @MainActor @Test func liveGridConsumesDisabledAlternateScrollWithoutPTYInput() throws {
+    let gridView = PTYGridView()
+    gridView.terminalScrollOwnershipHandler = { .consumed }
+    var encoded = false
+    gridView.terminalMouseEncodeHandler = { _, _ in
+      encoded = true
+      return Data("unexpected".utf8)
+    }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.scrollWheel(with: try scrollEvent(deltaY: 1))
+
+    #expect(!encoded)
+    #expect(emitted.isEmpty)
+  }
+
   @Test func builtInPalettesUseDistinctReadableGrays() {
     let light = TerminalSurfacePalette.light
     let dark = TerminalSurfacePalette.dark
@@ -18,6 +65,18 @@ struct TerminalSurfaceTests {
     #expect(light.inactiveForegroundBlend < 0.40)
     #expect(dark.inactiveForegroundBlend > 0.20)
     #expect(dark.inactiveForegroundBlend < 0.40)
+  }
+
+  private func scrollEvent(deltaY: Int32) throws -> NSEvent {
+    let cgEvent = try #require(CGEvent(
+      scrollWheelEvent2Source: nil,
+      units: .line,
+      wheelCount: 1,
+      wheel1: deltaY,
+      wheel2: 0,
+      wheel3: 0
+    ))
+    return try #require(NSEvent(cgEvent: cgEvent))
   }
 
   @MainActor @Test func mockSurfaceDoesNotExposeNativeScrollers() throws {

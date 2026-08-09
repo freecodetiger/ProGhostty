@@ -948,6 +948,9 @@ public class PTYGridView: NSView {
   /// (modes 1000/1002/1003). When active, clicks should be forwarded to the
   /// PTY as mouse reports rather than interpreted as click-to-position.
   public var mouseReportingActiveHandler: (() -> Bool)?
+  public var terminalScrollOwnershipHandler: (() -> TerminalScrollOwnership)?
+  public var terminalMouseEncodeHandler: ((TerminalMouseScrollEvent, TerminalMouseGeometry) -> Data?)?
+  public var terminalAlternateScrollEncodeHandler: ((_ wheelUp: Bool, _ count: Int) -> Data?)?
   /// Localized popover labels, pushed from the App layer (which owns the language
   /// setting). Defaults to English so Core works standalone.
   public var semanticLinkText = SemanticLinkText()
@@ -967,6 +970,8 @@ public class PTYGridView: NSView {
   private var isFocusedTerminalStorage = true
   private var rendererOptions = TerminalRendererOptions()
   private var suppressMomentumScroll = false
+  private var tuiScrollQuantizer = TerminalTUIScrollQuantizer()
+  private var tuiScrollOwnership: TerminalScrollOwnership?
   /// Pattern-2 smooth-scroll physics (display-link driven). Sole owner of how
   /// the browse position evolves over time; the display-link tick is the ONLY
   /// writer of `viewport.visualOffsetY` while browsing, so there is no async
@@ -1258,6 +1263,7 @@ public class PTYGridView: NSView {
 
   public func resetPixelScroll(suppressMomentum: Bool = false) {
     viewport = TerminalViewport()
+    resetTUIScrollInput()
     // Return to live-follow: drop the persisted pattern-2 browse anchor and stop
     // any in-flight display-link browsing.
     browseTopRow = nil
@@ -1504,16 +1510,101 @@ public class PTYGridView: NSView {
     PTYRenderDebugLog.write(
       "wheel precise=\(event.hasPreciseScrollingDeltas) deltaY=\(String(format: "%.3f", event.scrollingDeltaY)) phase=\(event.phase.rawValue) momentum=\(event.momentumPhase.rawValue)"
     )
-    // Alt screen: forward wheel events to the PTY for TUI programs (vim, less, etc.)
-    if let frame = frameSnapshot, frame.isAlternateScreen {
-      super.scrollWheel(with: event)
+    let ownership = terminalScrollOwnershipHandler?() ?? fallbackScrollOwnership
+    PTYRenderDebugLog.write("wheel-route ownership=\(String(describing: ownership))")
+    guard ownership == .localScrollback else {
+      handleTUIScroll(event, ownership: ownership)
       return
     }
+    resetTUIScrollInput()
     // Normal screen: pattern-2 smooth scroll (display-link driven browse)
-    guard browseScrollMetricsHandler != nil, browsePresentHandler != nil, cellSize.height > 0 else {
+    guard browseScrollMetricsHandler != nil, browsePresentHandler != nil, cellSize.height > 0 else { return }
+    feedSmoothScroll(event)
+  }
+
+  private var fallbackScrollOwnership: TerminalScrollOwnership {
+    frameSnapshot?.isAlternateScreen == true ? .consumed : .localScrollback
+  }
+
+  private func handleTUIScroll(_ event: NSEvent, ownership: TerminalScrollOwnership) {
+    guard ownership != .consumed else {
+      resetTUIScrollInput()
       return
     }
-    feedSmoothScroll(event)
+    if tuiScrollOwnership != ownership {
+      tuiScrollQuantizer.reset()
+      tuiScrollOwnership = ownership
+    }
+    let units = tuiScrollQuantizer.consume(
+      delta: Double(event.scrollingDeltaY),
+      precise: event.hasPreciseScrollingDeltas,
+      cellHeight: Double(cellSize.height)
+    )
+    guard units != 0 else {
+      let pending = String(format: "%.3f", tuiScrollQuantizer.pendingDelta)
+      PTYRenderDebugLog.write(
+        "wheel-tui ownership=\(String(describing: ownership)) units=0 pending=\(pending)"
+      )
+      return
+    }
+
+    let wheelUp = units > 0
+    let count = abs(units)
+    let encoded: Data?
+    switch ownership {
+    case .mouseReporting:
+      let point = convert(event.locationInWindow, from: nil)
+      let scale = max(1, window?.backingScaleFactor ?? 1)
+      let mouseEvent = TerminalMouseScrollEvent(
+        wheelUp: wheelUp,
+        shift: event.modifierFlags.contains(.shift),
+        control: event.modifierFlags.contains(.control),
+        alt: event.modifierFlags.contains(.option),
+        x: Float(point.x * scale),
+        y: Float(point.y * scale)
+      )
+      let geometry = TerminalMouseGeometry(
+        screenWidth: Self.pixelDimension(bounds.width, scale: scale),
+        screenHeight: Self.pixelDimension(bounds.height, scale: scale),
+        cellWidth: Self.pixelDimension(cellSize.width, scale: scale),
+        cellHeight: Self.pixelDimension(cellSize.height, scale: scale),
+        paddingTop: Self.pixelDimension(contentInset.height, scale: scale),
+        paddingBottom: Self.pixelDimension(contentInset.height, scale: scale),
+        paddingRight: Self.pixelDimension(contentInset.width, scale: scale),
+        paddingLeft: Self.pixelDimension(contentInset.width, scale: scale)
+      )
+      if let unit = terminalMouseEncodeHandler?(mouseEvent, geometry), !unit.isEmpty {
+        var repeated = Data(capacity: unit.count * count)
+        for _ in 0..<count { repeated.append(unit) }
+        encoded = repeated
+      } else {
+        encoded = nil
+      }
+    case .alternateCursorKeys:
+      encoded = terminalAlternateScrollEncodeHandler?(wheelUp, count)
+    case .localScrollback, .consumed:
+      encoded = nil
+    }
+    if let encoded, !encoded.isEmpty {
+      PTYRenderDebugLog.write(
+        "wheel-tui ownership=\(String(describing: ownership)) units=\(units) encodedBytes=\(encoded.count)"
+      )
+      inputHandler?(encoded)
+    } else {
+      PTYRenderDebugLog.write(
+        "wheel-tui ownership=\(String(describing: ownership)) units=\(units) encodedBytes=0"
+      )
+    }
+  }
+
+  private func resetTUIScrollInput() {
+    tuiScrollQuantizer.reset()
+    tuiScrollOwnership = nil
+  }
+
+  private static func pixelDimension(_ value: CGFloat, scale: CGFloat) -> UInt32 {
+    let pixels = max(1, (value * scale).rounded())
+    return UInt32(min(pixels, CGFloat(UInt32.max)))
   }
 
   // MARK: Pattern-2 display-link smooth scroll
@@ -2180,6 +2271,7 @@ public class PTYGridView: NSView {
       // Tear down the display link when detached; a live link retaining the view
       // off-window leaks and fires against a dead render path.
       stopSmoothScrollBrowsing()
+      resetTUIScrollInput()
       stopLinkHoverDisplayLink()
       hoveredLinkObject = nil
       hoveredLinkHit = nil

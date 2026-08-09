@@ -72,6 +72,38 @@ typedef struct {
   uint64_t total;
 } ProGhosttyVTRows;
 
+typedef enum {
+  PROGHOSTTY_VT_SCROLL_LOCAL = 0,
+  PROGHOSTTY_VT_SCROLL_MOUSE_REPORTING = 1,
+  PROGHOSTTY_VT_SCROLL_ALTERNATE_CURSOR_KEYS = 2,
+  PROGHOSTTY_VT_SCROLL_CONSUMED = 3,
+} ProGhosttyVTScrollOwnershipKind;
+
+typedef struct {
+  ProGhosttyVTScrollOwnershipKind kind;
+  bool application_cursor_keys;
+} ProGhosttyVTScrollOwnership;
+
+typedef struct {
+  bool wheel_up;
+  bool shift;
+  bool control;
+  bool alt;
+  float x;
+  float y;
+} ProGhosttyVTMouseEvent;
+
+typedef struct {
+  uint32_t screen_width;
+  uint32_t screen_height;
+  uint32_t cell_width;
+  uint32_t cell_height;
+  uint32_t padding_top;
+  uint32_t padding_bottom;
+  uint32_t padding_right;
+  uint32_t padding_left;
+} ProGhosttyVTMouseGeometry;
+
 int proghostty_vt_new(uint16_t cols, uint16_t rows, size_t max_scrollback, ProGhosttyVT **out);
 void proghostty_vt_free(ProGhosttyVT *vt);
 void proghostty_vt_write(ProGhosttyVT *vt, const uint8_t *data, size_t len);
@@ -96,6 +128,19 @@ int proghostty_vt_format_plain(ProGhosttyVT *vt, uint8_t **out, size_t *out_len)
 int proghostty_vt_format_html(ProGhosttyVT *vt, uint8_t **out, size_t *out_len);
 int proghostty_vt_encode_paste(ProGhosttyVT *vt, const uint8_t *data, size_t len, uint8_t **out, size_t *out_len);
 bool proghostty_vt_mouse_reporting_active(ProGhosttyVT *vt);
+int proghostty_vt_scroll_ownership(ProGhosttyVT *vt, ProGhosttyVTScrollOwnership *out);
+int proghostty_vt_encode_mouse(
+  ProGhosttyVT *vt,
+  const ProGhosttyVTMouseEvent *event,
+  const ProGhosttyVTMouseGeometry *geometry,
+  uint8_t **out,
+  size_t *out_len);
+int proghostty_vt_encode_alternate_scroll(
+  ProGhosttyVT *vt,
+  bool wheel_up,
+  size_t count,
+  uint8_t **out,
+  size_t *out_len);
 void proghostty_vt_free_bytes(uint8_t *ptr, size_t len);
 
 #endif

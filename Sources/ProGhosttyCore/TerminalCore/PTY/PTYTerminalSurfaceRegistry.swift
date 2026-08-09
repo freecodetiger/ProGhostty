@@ -198,6 +198,33 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       guard let self, let bridge = self.surfaces[id]?.bridge else { return false }
       return bridge.isMouseReportingActive()
     }
+    gridView.terminalScrollOwnershipHandler = { [weak self] in
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return .consumed }
+      do {
+        return try bridge.scrollOwnership()
+      } catch {
+        PTYRenderDebugLog.write("scroll-ownership-error session=\(id) error=\(error)")
+        return .consumed
+      }
+    }
+    gridView.terminalMouseEncodeHandler = { [weak self] event, geometry in
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return nil }
+      do {
+        return try bridge.encodedMouseScroll(event, geometry: geometry)
+      } catch {
+        PTYRenderDebugLog.write("mouse-scroll-encode-error session=\(id) error=\(error)")
+        return nil
+      }
+    }
+    gridView.terminalAlternateScrollEncodeHandler = { [weak self] wheelUp, count in
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return nil }
+      do {
+        return try bridge.encodedAlternateScroll(wheelUp: wheelUp, count: count)
+      } catch {
+        PTYRenderDebugLog.write("alternate-scroll-encode-error session=\(id) error=\(error)")
+        return nil
+      }
+    }
     gridView.semanticLinkText = semanticLinkText
     gridView.pasteboard = .general
     gridView.applyPalette(palette)

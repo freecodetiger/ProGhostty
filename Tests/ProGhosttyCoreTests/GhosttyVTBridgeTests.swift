@@ -36,6 +36,81 @@ struct GhosttyVTBridgeTests {
     #expect(encoded == Data("one\rtwo".utf8))
   }
 
+  @Test func primaryScreenWithoutMouseTrackingOwnsLocalScrollback() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+
+    #expect(try bridge.scrollOwnership() == .localScrollback)
+  }
+
+  @Test func x10MouseTrackingIsRecognizedAndFiltersWheelEvents() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    bridge.write(Data("\u{1B}[?9h".utf8))
+
+    #expect(bridge.isMouseReportingActive())
+    #expect(try bridge.scrollOwnership() == .mouseReporting)
+    let encoded = try bridge.encodedMouseScroll(
+      TerminalMouseScrollEvent(wheelUp: true, x: 10, y: 10),
+      geometry: mouseGeometry
+    )
+    #expect(encoded.isEmpty)
+  }
+
+  @Test func sgrMouseTrackingEncodesWheelButtonsAndCoordinates() throws {
+    let bridge = try GhosttyVTBridge(cols: 80, rows: 24)
+    bridge.write(Data("\u{1B}[?1002h\u{1B}[?1006h".utf8))
+
+    let up = try bridge.encodedMouseScroll(
+      TerminalMouseScrollEvent(wheelUp: true, x: 50, y: 40),
+      geometry: mouseGeometry
+    )
+    let down = try bridge.encodedMouseScroll(
+      TerminalMouseScrollEvent(wheelUp: false, shift: true, control: true, alt: true, x: 50, y: 40),
+      geometry: mouseGeometry
+    )
+
+    #expect(String(decoding: up, as: UTF8.self) == "\u{1B}[<64;6;3M")
+    #expect(String(decoding: down, as: UTF8.self) == "\u{1B}[<93;6;3M")
+  }
+
+  @Test func alternateScreenWithoutTrackingEncodesCursorKeys() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    bridge.write(Data("\u{1B}[?1049h".utf8))
+
+    #expect(try bridge.scrollOwnership() == .alternateCursorKeys(applicationMode: false))
+    #expect(
+      String(decoding: try bridge.encodedAlternateScroll(wheelUp: true, count: 2), as: UTF8.self)
+        == "\u{1B}[A\u{1B}[A"
+    )
+
+    bridge.write(Data("\u{1B}[?1h".utf8))
+    #expect(try bridge.scrollOwnership() == .alternateCursorKeys(applicationMode: true))
+    #expect(
+      String(decoding: try bridge.encodedAlternateScroll(wheelUp: false, count: 2), as: UTF8.self)
+        == "\u{1B}OB\u{1B}OB"
+    )
+  }
+
+  @Test func alternateScreenWithAlternateScrollDisabledConsumesWheel() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    bridge.write(Data("\u{1B}[?1049h\u{1B}[?1007l".utf8))
+
+    #expect(try bridge.scrollOwnership() == .consumed)
+    #expect(try bridge.encodedAlternateScroll(wheelUp: true, count: 1).isEmpty)
+  }
+
+  private var mouseGeometry: TerminalMouseGeometry {
+    TerminalMouseGeometry(
+      screenWidth: 800,
+      screenHeight: 600,
+      cellWidth: 10,
+      cellHeight: 20,
+      paddingTop: 0,
+      paddingBottom: 0,
+      paddingRight: 0,
+      paddingLeft: 0
+    )
+  }
+
   @Test func formatsStyledTerminalStateAsHtml() throws {
     let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
     bridge.write(Data("typed \u{1B}[2;90msuggestion\u{1B}[0m\r\n".utf8))
