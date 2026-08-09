@@ -172,11 +172,260 @@ bool proghostty_vt_mouse_reporting_active(ProGhosttyVT *vt) {
   if (vt == NULL || vt->terminal == NULL) {
     return false;
   }
-  bool normal = false, button = false, any = false;
-  ghostty_terminal_mode_get(vt->terminal, GHOSTTY_MODE_NORMAL_MOUSE, &normal);
-  ghostty_terminal_mode_get(vt->terminal, GHOSTTY_MODE_BUTTON_MOUSE, &button);
-  ghostty_terminal_mode_get(vt->terminal, GHOSTTY_MODE_ANY_MOUSE, &any);
-  return normal || button || any;
+  bool tracking = false;
+  return ghostty_terminal_get(
+    vt->terminal,
+    GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING,
+    &tracking) == GHOSTTY_SUCCESS && tracking;
+}
+
+int proghostty_vt_scroll_ownership(ProGhosttyVT *vt, ProGhosttyVTScrollOwnership *out) {
+  if (vt == NULL || vt->terminal == NULL || out == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+
+  memset(out, 0, sizeof(*out));
+  bool tracking = false;
+  GhosttyResult result = ghostty_terminal_get(
+    vt->terminal,
+    GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING,
+    &tracking);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+  if (tracking) {
+    out->kind = PROGHOSTTY_VT_SCROLL_MOUSE_REPORTING;
+    return GHOSTTY_SUCCESS;
+  }
+
+  GhosttyTerminalScreen screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY;
+  result = ghostty_terminal_get(vt->terminal, GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &screen);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+  if (screen != GHOSTTY_TERMINAL_SCREEN_ALTERNATE) {
+    out->kind = PROGHOSTTY_VT_SCROLL_LOCAL;
+    return GHOSTTY_SUCCESS;
+  }
+
+  bool alternate_scroll = false;
+  result = ghostty_terminal_mode_get(vt->terminal, GHOSTTY_MODE_ALT_SCROLL, &alternate_scroll);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+  if (!alternate_scroll) {
+    out->kind = PROGHOSTTY_VT_SCROLL_CONSUMED;
+    return GHOSTTY_SUCCESS;
+  }
+
+  bool application_cursor_keys = false;
+  result = ghostty_terminal_mode_get(vt->terminal, GHOSTTY_MODE_DECCKM, &application_cursor_keys);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+  out->kind = PROGHOSTTY_VT_SCROLL_ALTERNATE_CURSOR_KEYS;
+  out->application_cursor_keys = application_cursor_keys;
+  return GHOSTTY_SUCCESS;
+}
+
+int proghostty_vt_encode_mouse_input(
+  ProGhosttyVT *vt,
+  const ProGhosttyVTMouseEvent *event,
+  const ProGhosttyVTMouseGeometry *geometry,
+  uint8_t **out,
+  size_t *out_len
+) {
+  if (out == NULL || out_len == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+  *out = NULL;
+  *out_len = 0;
+  if (vt == NULL || vt->terminal == NULL || event == NULL || geometry == NULL ||
+      geometry->cell_width == 0 || geometry->cell_height == 0) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+
+  GhosttyMouseEncoder encoder = NULL;
+  GhosttyResult result = ghostty_mouse_encoder_new(NULL, &encoder);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+
+  GhosttyMouseEvent mouse_event = NULL;
+  result = ghostty_mouse_event_new(NULL, &mouse_event);
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_mouse_encoder_free(encoder);
+    return result;
+  }
+
+  ghostty_mouse_encoder_setopt_from_terminal(encoder, vt->terminal);
+  GhosttyMouseEncoderSize size = {
+    .size = sizeof(GhosttyMouseEncoderSize),
+    .screen_width = geometry->screen_width,
+    .screen_height = geometry->screen_height,
+    .cell_width = geometry->cell_width,
+    .cell_height = geometry->cell_height,
+    .padding_top = geometry->padding_top,
+    .padding_bottom = geometry->padding_bottom,
+    .padding_right = geometry->padding_right,
+    .padding_left = geometry->padding_left,
+  };
+  ghostty_mouse_encoder_setopt(encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size);
+
+  GhosttyMouseAction action;
+  switch (event->action) {
+    case PROGHOSTTY_VT_MOUSE_ACTION_PRESS:
+      action = GHOSTTY_MOUSE_ACTION_PRESS;
+      break;
+    case PROGHOSTTY_VT_MOUSE_ACTION_RELEASE:
+      action = GHOSTTY_MOUSE_ACTION_RELEASE;
+      break;
+    case PROGHOSTTY_VT_MOUSE_ACTION_MOTION:
+      action = GHOSTTY_MOUSE_ACTION_MOTION;
+      break;
+    default:
+      ghostty_mouse_event_free(mouse_event);
+      ghostty_mouse_encoder_free(encoder);
+      return GHOSTTY_INVALID_VALUE;
+  }
+  ghostty_mouse_event_set_action(mouse_event, action);
+
+  GhosttyMouseButton button;
+  switch (event->button) {
+    case PROGHOSTTY_VT_MOUSE_BUTTON_NONE:
+      ghostty_mouse_event_clear_button(mouse_event);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_LEFT:
+      button = GHOSTTY_MOUSE_BUTTON_LEFT;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_RIGHT:
+      button = GHOSTTY_MOUSE_BUTTON_RIGHT;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_MIDDLE:
+      button = GHOSTTY_MOUSE_BUTTON_MIDDLE;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_FOUR:
+      button = GHOSTTY_MOUSE_BUTTON_FOUR;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_FIVE:
+      button = GHOSTTY_MOUSE_BUTTON_FIVE;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_SIX:
+      button = GHOSTTY_MOUSE_BUTTON_SIX;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_SEVEN:
+      button = GHOSTTY_MOUSE_BUTTON_SEVEN;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    default:
+      ghostty_mouse_event_free(mouse_event);
+      ghostty_mouse_encoder_free(encoder);
+      return GHOSTTY_INVALID_VALUE;
+  }
+  GhosttyMods mods = 0;
+  if (event->shift) mods |= GHOSTTY_MODS_SHIFT;
+  if (event->control) mods |= GHOSTTY_MODS_CTRL;
+  if (event->alt) mods |= GHOSTTY_MODS_ALT;
+  ghostty_mouse_event_set_mods(mouse_event, mods);
+  ghostty_mouse_event_set_position(mouse_event, (GhosttyMousePosition){
+    .x = event->x,
+    .y = event->y,
+  });
+  ghostty_mouse_encoder_setopt(
+    encoder,
+    GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
+    &event->any_button_pressed);
+
+  size_t required = 0;
+  result = ghostty_mouse_encoder_encode(encoder, mouse_event, NULL, 0, &required);
+  if (result != GHOSTTY_OUT_OF_SPACE && result != GHOSTTY_SUCCESS) {
+    ghostty_mouse_event_free(mouse_event);
+    ghostty_mouse_encoder_free(encoder);
+    return result;
+  }
+  if (required == 0) {
+    ghostty_mouse_event_free(mouse_event);
+    ghostty_mouse_encoder_free(encoder);
+    return GHOSTTY_SUCCESS;
+  }
+
+  uint8_t *buffer = ghostty_alloc(NULL, required);
+  if (buffer == NULL) {
+    ghostty_mouse_event_free(mouse_event);
+    ghostty_mouse_encoder_free(encoder);
+    return GHOSTTY_OUT_OF_MEMORY;
+  }
+  size_t written = 0;
+  result = ghostty_mouse_encoder_encode(
+    encoder,
+    mouse_event,
+    (char *)buffer,
+    required,
+    &written);
+  ghostty_mouse_event_free(mouse_event);
+  ghostty_mouse_encoder_free(encoder);
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_free(NULL, buffer, required);
+    return result;
+  }
+
+  *out = buffer;
+  *out_len = written;
+  return GHOSTTY_SUCCESS;
+}
+
+int proghostty_vt_encode_alternate_scroll(
+  ProGhosttyVT *vt,
+  bool wheel_up,
+  size_t count,
+  uint8_t **out,
+  size_t *out_len
+) {
+  if (out == NULL || out_len == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+  *out = NULL;
+  *out_len = 0;
+  if (vt == NULL || vt->terminal == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+
+  ProGhosttyVTScrollOwnership ownership;
+  GhosttyResult result = proghostty_vt_scroll_ownership(vt, &ownership);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+  if (ownership.kind != PROGHOSTTY_VT_SCROLL_ALTERNATE_CURSOR_KEYS || count == 0) {
+    return GHOSTTY_SUCCESS;
+  }
+  if (count > SIZE_MAX / 3) {
+    return GHOSTTY_OUT_OF_MEMORY;
+  }
+
+  const uint8_t normal_up[] = {0x1B, '[', 'A'};
+  const uint8_t normal_down[] = {0x1B, '[', 'B'};
+  const uint8_t application_up[] = {0x1B, 'O', 'A'};
+  const uint8_t application_down[] = {0x1B, 'O', 'B'};
+  const uint8_t *sequence = ownership.application_cursor_keys
+    ? (wheel_up ? application_up : application_down)
+    : (wheel_up ? normal_up : normal_down);
+  size_t length = count * 3;
+  uint8_t *buffer = ghostty_alloc(NULL, length);
+  if (buffer == NULL) {
+    return GHOSTTY_OUT_OF_MEMORY;
+  }
+  for (size_t index = 0; index < count; index++) {
+    memcpy(buffer + index * 3, sequence, 3);
+  }
+  *out = buffer;
+  *out_len = length;
+  return GHOSTTY_SUCCESS;
 }
 
 static ProGhosttyVTCell blank_cell(GhosttyRenderStateColors *colors) {

@@ -174,11 +174,97 @@ public struct GhosttyTerminalScrollFrame: Sendable, Equatable {
   }
 }
 
+public enum TerminalScrollOwnership: Sendable, Equatable {
+  case localScrollback
+  case mouseReporting
+  case alternateCursorKeys(applicationMode: Bool)
+  case consumed
+}
+
+public enum TerminalMouseAction: Sendable, Equatable {
+  case press
+  case release
+  case motion
+}
+
+public enum TerminalMouseButton: Sendable, Hashable {
+  case left
+  case right
+  case middle
+  case wheelUp
+  case wheelDown
+  case wheelLeft
+  case wheelRight
+}
+
+public struct TerminalMouseInputEvent: Sendable, Equatable {
+  public var action: TerminalMouseAction
+  public var button: TerminalMouseButton?
+  public var shift: Bool
+  public var control: Bool
+  public var alt: Bool
+  public var anyButtonPressed: Bool
+  public var x: Float
+  public var y: Float
+
+  public init(
+    action: TerminalMouseAction,
+    button: TerminalMouseButton? = nil,
+    shift: Bool = false,
+    control: Bool = false,
+    alt: Bool = false,
+    anyButtonPressed: Bool = false,
+    x: Float,
+    y: Float
+  ) {
+    self.action = action
+    self.button = button
+    self.shift = shift
+    self.control = control
+    self.alt = alt
+    self.anyButtonPressed = anyButtonPressed
+    self.x = x
+    self.y = y
+  }
+}
+
+public struct TerminalMouseGeometry: Sendable, Equatable {
+  public var screenWidth: UInt32
+  public var screenHeight: UInt32
+  public var cellWidth: UInt32
+  public var cellHeight: UInt32
+  public var paddingTop: UInt32
+  public var paddingBottom: UInt32
+  public var paddingRight: UInt32
+  public var paddingLeft: UInt32
+
+  public init(
+    screenWidth: UInt32,
+    screenHeight: UInt32,
+    cellWidth: UInt32,
+    cellHeight: UInt32,
+    paddingTop: UInt32,
+    paddingBottom: UInt32,
+    paddingRight: UInt32,
+    paddingLeft: UInt32
+  ) {
+    self.screenWidth = screenWidth
+    self.screenHeight = screenHeight
+    self.cellWidth = cellWidth
+    self.cellHeight = cellHeight
+    self.paddingTop = paddingTop
+    self.paddingBottom = paddingBottom
+    self.paddingRight = paddingRight
+    self.paddingLeft = paddingLeft
+  }
+}
+
 public final class GhosttyVTBridge {
   public enum BridgeError: Error, CustomStringConvertible {
     case createFailed(Int32)
     case formatFailed(Int32)
     case pasteEncodeFailed(Int32)
+    case inputEncodeFailed(Int32)
 
     public var description: String {
       switch self {
@@ -188,6 +274,8 @@ public final class GhosttyVTBridge {
         return "libghostty-vt format failed with code \(code)"
       case .pasteEncodeFailed(let code):
         return "libghostty-vt paste encode failed with code \(code)"
+      case .inputEncodeFailed(let code):
+        return "libghostty-vt input encode failed with code \(code)"
       }
     }
   }
@@ -265,6 +353,124 @@ public final class GhosttyVTBridge {
     locked {
       guard let handle else { return false }
       return proghostty_vt_mouse_reporting_active(handle)
+    }
+  }
+
+  public func scrollOwnership() throws -> TerminalScrollOwnership {
+    try locked {
+      guard let handle else { return .localScrollback }
+      var ownership = ProGhosttyVTScrollOwnership()
+      let result = proghostty_vt_scroll_ownership(handle, &ownership)
+      guard result == 0 else {
+        throw BridgeError.inputEncodeFailed(result)
+      }
+      switch ownership.kind {
+      case PROGHOSTTY_VT_SCROLL_MOUSE_REPORTING:
+        return .mouseReporting
+      case PROGHOSTTY_VT_SCROLL_ALTERNATE_CURSOR_KEYS:
+        return .alternateCursorKeys(applicationMode: ownership.application_cursor_keys)
+      case PROGHOSTTY_VT_SCROLL_CONSUMED:
+        return .consumed
+      default:
+        return .localScrollback
+      }
+    }
+  }
+
+  public func encodedMouseInput(
+    _ event: TerminalMouseInputEvent,
+    geometry: TerminalMouseGeometry
+  ) throws -> Data {
+    try locked {
+      guard let handle else { return Data() }
+      var rawEvent = ProGhosttyVTMouseEvent(
+        action: rawMouseAction(event.action),
+        button: rawMouseButton(event.button),
+        shift: event.shift,
+        control: event.control,
+        alt: event.alt,
+        any_button_pressed: event.anyButtonPressed,
+        x: event.x,
+        y: event.y
+      )
+      var rawGeometry = ProGhosttyVTMouseGeometry(
+        screen_width: geometry.screenWidth,
+        screen_height: geometry.screenHeight,
+        cell_width: geometry.cellWidth,
+        cell_height: geometry.cellHeight,
+        padding_top: geometry.paddingTop,
+        padding_bottom: geometry.paddingBottom,
+        padding_right: geometry.paddingRight,
+        padding_left: geometry.paddingLeft
+      )
+      var pointer: UnsafeMutablePointer<UInt8>?
+      var length = 0
+      let result = proghostty_vt_encode_mouse_input(
+        handle,
+        &rawEvent,
+        &rawGeometry,
+        &pointer,
+        &length
+      )
+      guard result == 0 else {
+        throw BridgeError.inputEncodeFailed(result)
+      }
+      guard let pointer else { return Data() }
+      defer { proghostty_vt_free_bytes(pointer, length) }
+      return Data(bytes: pointer, count: length)
+    }
+  }
+
+  private func rawMouseAction(_ action: TerminalMouseAction) -> ProGhosttyVTMouseAction {
+    switch action {
+    case .press:
+      return PROGHOSTTY_VT_MOUSE_ACTION_PRESS
+    case .release:
+      return PROGHOSTTY_VT_MOUSE_ACTION_RELEASE
+    case .motion:
+      return PROGHOSTTY_VT_MOUSE_ACTION_MOTION
+    }
+  }
+
+  private func rawMouseButton(_ button: TerminalMouseButton?) -> ProGhosttyVTMouseButton {
+    switch button {
+    case .left:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_LEFT
+    case .right:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_RIGHT
+    case .middle:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_MIDDLE
+    case .wheelUp:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_FOUR
+    case .wheelDown:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_FIVE
+    case .wheelLeft:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_SEVEN
+    case .wheelRight:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_SIX
+    case nil:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_NONE
+    }
+  }
+
+  public func encodedAlternateScroll(wheelUp: Bool, count: Int) throws -> Data {
+    try locked {
+      guard let handle, count > 0 else { return Data() }
+      var pointer: UnsafeMutablePointer<UInt8>?
+      var length = 0
+      let result = proghostty_vt_encode_alternate_scroll(
+        handle,
+        wheelUp,
+        count,
+        &pointer,
+        &length
+      )
+      guard result == 0 else {
+        throw BridgeError.inputEncodeFailed(result)
+      }
+      guard let pointer else { return Data() }
+      defer { proghostty_vt_free_bytes(pointer, length) }
+      return Data(bytes: pointer, count: length)
     }
   }
 

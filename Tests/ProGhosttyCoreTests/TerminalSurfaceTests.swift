@@ -6,6 +6,286 @@ import Testing
 
 @Suite("Terminal surface", .serialized)
 struct TerminalSurfaceTests {
+  @MainActor @Test func liveGridRoutesDiscreteMouseReportingWheelToPTYInput() throws {
+    let gridView = PTYGridView()
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    gridView.terminalMouseEncodeHandler = { _, _ in Data("m".utf8) }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.scrollWheel(with: try scrollEvent(deltaY: 1))
+
+    #expect(emitted == Data("mmm".utf8))
+  }
+
+  @MainActor @Test func liveGridRoutesAlternateWheelToCursorKeyEncoder() throws {
+    let gridView = PTYGridView()
+    gridView.terminalScrollOwnershipHandler = { .alternateCursorKeys(applicationMode: false) }
+    var request: (wheelUp: Bool, count: Int)?
+    gridView.terminalAlternateScrollEncodeHandler = { wheelUp, count in
+      request = (wheelUp, count)
+      return Data("cursor".utf8)
+    }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.scrollWheel(with: try scrollEvent(deltaY: -1))
+
+    #expect(request?.wheelUp == false)
+    #expect(request?.count == 3)
+    #expect(emitted == Data("cursor".utf8))
+  }
+
+  @MainActor @Test func liveGridConsumesDisabledAlternateScrollWithoutPTYInput() throws {
+    let gridView = PTYGridView()
+    gridView.terminalScrollOwnershipHandler = { .consumed }
+    var encoded = false
+    gridView.terminalMouseEncodeHandler = { _, _ in
+      encoded = true
+      return Data("unexpected".utf8)
+    }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.scrollWheel(with: try scrollEvent(deltaY: 1))
+
+    #expect(!encoded)
+    #expect(emitted.isEmpty)
+  }
+
+  @MainActor @Test func liveGridRoutesCapturedMousePressAndRelease() throws {
+    let gridView = PTYGridView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    var events: [TerminalMouseInputEvent] = []
+    gridView.terminalMouseEncodeHandler = { event, _ in
+      events.append(event)
+      return Data([UInt8(events.count)])
+    }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: 50, y: 40), in: gridView))
+    gridView.mouseUp(with: try mouseEvent(.leftMouseUp, viewPoint: NSPoint(x: 50, y: 40), in: gridView))
+
+    #expect(events.map(\.action) == [.press, .release])
+    #expect(events.map(\.button) == [.left, .left])
+    #expect(events[0].anyButtonPressed)
+    #expect(!events[1].anyButtonPressed)
+    #expect(emitted == Data([1, 2]))
+  }
+
+  @MainActor @Test func capturedMouseReleaseUsesPressOwnershipDecision() throws {
+    let gridView = PTYGridView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    var ownership: TerminalScrollOwnership? = .mouseReporting
+    gridView.terminalScrollOwnershipHandler = { ownership }
+    var actions: [TerminalMouseAction] = []
+    gridView.terminalMouseEncodeHandler = { event, _ in
+      actions.append(event.action)
+      return Data("m".utf8)
+    }
+
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: 50, y: 40), in: gridView))
+    ownership = .localScrollback
+    gridView.mouseUp(with: try mouseEvent(.leftMouseUp, viewPoint: NSPoint(x: 50, y: 40), in: gridView))
+
+    #expect(actions == [.press, .release])
+  }
+
+  @MainActor @Test func liveGridRoutesCapturedRightButtonWithoutOpeningLocalMenu() throws {
+    let gridView = PTYGridView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    var buttons: [TerminalMouseButton?] = []
+    gridView.terminalMouseEncodeHandler = { event, _ in
+      buttons.append(event.button)
+      return Data("r".utf8)
+    }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.rightMouseDown(with: try mouseEvent(.rightMouseDown, viewPoint: NSPoint(x: 50, y: 40), in: gridView))
+    gridView.rightMouseUp(with: try mouseEvent(.rightMouseUp, viewPoint: NSPoint(x: 50, y: 40), in: gridView))
+
+    #expect(buttons == [.right, .right])
+    #expect(emitted == Data("rr".utf8))
+  }
+
+  @MainActor @Test func shiftLeftDragRemainsLocalDuringMouseReporting() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["abcdef"], cols: 12, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    var encoded = 0
+    gridView.terminalMouseEncodeHandler = { _, _ in
+      encoded += 1
+      return Data("m".utf8)
+    }
+    let start = PTYGridView.textGlyphRect(row: 0, col: 1, cellSize: cellSize, inset: inset)
+    let end = PTYGridView.textGlyphRect(row: 0, col: 3, cellSize: cellSize, inset: inset)
+
+    gridView.mouseDown(with: try mouseEvent(
+      .leftMouseDown,
+      viewPoint: NSPoint(x: start.midX, y: start.midY),
+      in: gridView,
+      modifierFlags: .shift
+    ))
+    gridView.mouseDragged(with: try mouseEvent(
+      .leftMouseDragged,
+      viewPoint: NSPoint(x: end.midX, y: end.midY),
+      in: gridView,
+      modifierFlags: .shift
+    ))
+    gridView.mouseUp(with: try mouseEvent(
+      .leftMouseUp,
+      viewPoint: NSPoint(x: end.midX, y: end.midY),
+      in: gridView,
+      modifierFlags: .shift
+    ))
+
+    #expect(encoded == 0)
+    #expect(gridView.selectedText == "bcd")
+  }
+
+  @MainActor @Test func capturedMousePressClearsExistingLocalSelection() throws {
+    let gridView = PTYGridView()
+    let frame = frameWithText(rows: ["abcdef"], cols: 12, cursorX: 0, cursorY: 0)
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0,
+      y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+    let start = PTYGridView.textGlyphRect(row: 0, col: 1, cellSize: cellSize, inset: inset)
+    let end = PTYGridView.textGlyphRect(row: 0, col: 3, cellSize: cellSize, inset: inset)
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: gridView))
+    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: end.midX, y: end.midY), in: gridView))
+    gridView.mouseUp(with: try mouseEvent(.leftMouseUp, viewPoint: NSPoint(x: end.midX, y: end.midY), in: gridView))
+    #expect(gridView.selectedText == "bcd")
+
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    gridView.terminalMouseEncodeHandler = { _, _ in Data("m".utf8) }
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: gridView))
+
+    #expect(gridView.selectedText == nil)
+  }
+
+  @MainActor @Test func liveGridCoalescesCapturedMouseMotion() throws {
+    let gridView = PTYGridView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    var events: [TerminalMouseInputEvent] = []
+    gridView.terminalMouseEncodeHandler = { event, _ in
+      events.append(event)
+      return Data("m".utf8)
+    }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.mouseMoved(with: try mouseEvent(.mouseMoved, viewPoint: NSPoint(x: 10, y: 20), in: gridView))
+    gridView.mouseMoved(with: try mouseEvent(.mouseMoved, viewPoint: NSPoint(x: 30, y: 40), in: gridView))
+    gridView.flushPendingTerminalMouseMotionForTests()
+
+    #expect(events.count == 1)
+    #expect(events[0].action == .motion)
+    #expect(events[0].button == nil)
+    #expect(events[0].x == 30)
+    #expect(events[0].y == 40)
+    #expect(emitted == Data("m".utf8))
+  }
+
+  @MainActor @Test func capturedMouseDragReportsPressedButtonMotion() throws {
+    let gridView = PTYGridView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    var events: [TerminalMouseInputEvent] = []
+    gridView.terminalMouseEncodeHandler = { event, _ in
+      events.append(event)
+      return Data("m".utf8)
+    }
+
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: 10, y: 20), in: gridView))
+    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: 30, y: 40), in: gridView))
+    gridView.flushPendingTerminalMouseMotionForTests()
+    gridView.mouseUp(with: try mouseEvent(.leftMouseUp, viewPoint: NSPoint(x: 30, y: 40), in: gridView))
+
+    #expect(events.map(\.action) == [.press, .motion, .release])
+    #expect(events.map(\.button) == [.left, .left, .left])
+    #expect(events[1].anyButtonPressed)
+  }
+
+  @MainActor @Test func focusLossReleasesCapturedMouseButtons() throws {
+    let gridView = PTYGridView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    var actions: [TerminalMouseAction] = []
+    gridView.terminalMouseEncodeHandler = { event, _ in
+      actions.append(event.action)
+      return Data("m".utf8)
+    }
+
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: 10, y: 20), in: gridView))
+    _ = gridView.resignFirstResponder()
+
+    #expect(actions == [.press, .release])
+  }
+
+  @MainActor @Test func localPressDoesNotCreateTerminalReleaseAfterModeChange() throws {
+    let gridView = PTYGridView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    var ownership: TerminalScrollOwnership? = .localScrollback
+    gridView.terminalScrollOwnershipHandler = { ownership }
+    var actions: [TerminalMouseAction] = []
+    gridView.terminalMouseEncodeHandler = { event, _ in
+      actions.append(event.action)
+      return Data("m".utf8)
+    }
+
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: 10, y: 20), in: gridView))
+    ownership = .mouseReporting
+    gridView.mouseUp(with: try mouseEvent(.leftMouseUp, viewPoint: NSPoint(x: 10, y: 20), in: gridView))
+
+    #expect(actions.isEmpty)
+  }
+
+  @MainActor @Test func ownershipQueryFailureUsesLastSuccessfulRoute() throws {
+    let gridView = PTYGridView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    var ownership: TerminalScrollOwnership? = .mouseReporting
+    gridView.terminalScrollOwnershipHandler = { ownership }
+    gridView.terminalMouseEncodeHandler = { _, _ in Data("m".utf8) }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.scrollWheel(with: try scrollEvent(deltaY: 1))
+    ownership = nil
+    gridView.scrollWheel(with: try scrollEvent(deltaY: 1))
+
+    #expect(emitted == Data("mmmmmm".utf8))
+  }
+
+  @MainActor @Test func liveGridRoutesHorizontalWheelToMouseButtonsSixAndSeven() throws {
+    let gridView = PTYGridView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    var buttons: [TerminalMouseButton?] = []
+    gridView.terminalMouseEncodeHandler = { event, _ in
+      buttons.append(event.button)
+      return Data("h".utf8)
+    }
+    var emitted = Data()
+    gridView.inputHandler = { emitted.append($0) }
+
+    gridView.scrollWheel(with: try scrollEvent(deltaY: 0, deltaX: 1))
+    gridView.scrollWheel(with: try scrollEvent(deltaY: 0, deltaX: -1))
+
+    #expect(buttons == [.wheelRight, .wheelLeft])
+    #expect(emitted == Data("hhhhhh".utf8))
+  }
+
   @Test func builtInPalettesUseDistinctReadableGrays() {
     let light = TerminalSurfacePalette.light
     let dark = TerminalSurfacePalette.dark
@@ -18,6 +298,18 @@ struct TerminalSurfaceTests {
     #expect(light.inactiveForegroundBlend < 0.40)
     #expect(dark.inactiveForegroundBlend > 0.20)
     #expect(dark.inactiveForegroundBlend < 0.40)
+  }
+
+  private func scrollEvent(deltaY: Int32, deltaX: Int32 = 0) throws -> NSEvent {
+    let cgEvent = try #require(CGEvent(
+      scrollWheelEvent2Source: nil,
+      units: .line,
+      wheelCount: 2,
+      wheel1: deltaY,
+      wheel2: deltaX,
+      wheel3: 0
+    ))
+    return try #require(NSEvent(cgEvent: cgEvent))
   }
 
   @MainActor @Test func mockSurfaceDoesNotExposeNativeScrollers() throws {
@@ -1818,6 +2110,12 @@ struct TerminalSurfaceTests {
       height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
     )
     gridView.render(frame, isFocused: true)
+    gridView.terminalScrollOwnershipHandler = { .mouseReporting }
+    var encodedMouse = false
+    gridView.terminalMouseEncodeHandler = { _, _ in
+      encodedMouse = true
+      return Data("unexpected".utf8)
+    }
     var openedURL: URL?
     gridView.openURLHandler = { openedURL = $0 }
     let rect = PTYGridView.textGlyphRect(row: 0, col: 9, cellSize: cellSize, inset: inset)
@@ -1837,6 +2135,7 @@ struct TerminalSurfaceTests {
     gridView.mouseDown(with: event)
 
     #expect(openedURL?.absoluteString == "http://localhost:5173")
+    #expect(!encodedMouse)
   }
 
   @MainActor @Test func ptyGridPlainClickOnURLDoesNotOpenURL() throws {
@@ -2394,12 +2693,17 @@ struct TerminalSurfaceTests {
     return GhosttyTerminalCellRow(cells: frame.cells)
   }
 
-  @MainActor private func mouseEvent(_ type: NSEvent.EventType, viewPoint: NSPoint, in view: NSView) throws -> NSEvent {
+  @MainActor private func mouseEvent(
+    _ type: NSEvent.EventType,
+    viewPoint: NSPoint,
+    in view: NSView,
+    modifierFlags: NSEvent.ModifierFlags = []
+  ) throws -> NSEvent {
     let windowPoint = NSPoint(x: viewPoint.x, y: view.bounds.height - viewPoint.y)
     return try #require(NSEvent.mouseEvent(
       with: type,
       location: windowPoint,
-      modifierFlags: [],
+      modifierFlags: modifierFlags,
       timestamp: 0,
       windowNumber: 0,
       context: nil,
