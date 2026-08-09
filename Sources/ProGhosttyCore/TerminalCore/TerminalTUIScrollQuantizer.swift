@@ -6,25 +6,25 @@ struct TerminalTUIScrollQuantizer: Sendable, Equatable {
 
   private(set) var pendingDelta = 0.0
 
-  mutating func consume(delta: Double, precise: Bool, cellHeight: Double) -> Int {
-    guard delta != 0, cellHeight > 0 else { return 0 }
+  mutating func consume(delta: Double, precise: Bool, unitSize: Double) -> Int {
+    guard delta != 0, unitSize > 0 else { return 0 }
 
     let adjusted: Double
     if precise {
       adjusted = delta * Self.preciseMultiplier
     } else {
       let normalized = delta > 0 ? max(delta, 1) : min(delta, -1)
-      adjusted = normalized * cellHeight * Self.discreteMultiplier
+      adjusted = normalized * unitSize * Self.discreteMultiplier
     }
 
     let accumulated = pendingDelta + adjusted
-    guard abs(accumulated) >= cellHeight else {
+    guard abs(accumulated) >= unitSize else {
       pendingDelta = accumulated
       return 0
     }
 
-    let units = Int((accumulated / cellHeight).rounded(.towardZero))
-    pendingDelta = accumulated - Double(units) * cellHeight
+    let units = Int((accumulated / unitSize).rounded(.towardZero))
+    pendingDelta = accumulated - Double(units) * unitSize
     return units
   }
 

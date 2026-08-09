@@ -199,18 +199,18 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       return bridge.isMouseReportingActive()
     }
     gridView.terminalScrollOwnershipHandler = { [weak self] in
-      guard let self, let bridge = self.surfaces[id]?.bridge else { return .consumed }
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return nil }
       do {
         return try bridge.scrollOwnership()
       } catch {
         PTYRenderDebugLog.write("scroll-ownership-error session=\(id) error=\(error)")
-        return .consumed
+        return nil
       }
     }
     gridView.terminalMouseEncodeHandler = { [weak self] event, geometry in
       guard let self, let bridge = self.surfaces[id]?.bridge else { return nil }
       do {
-        return try bridge.encodedMouseScroll(event, geometry: geometry)
+        return try bridge.encodedMouseInput(event, geometry: geometry)
       } catch {
         PTYRenderDebugLog.write("mouse-scroll-encode-error session=\(id) error=\(error)")
         return nil

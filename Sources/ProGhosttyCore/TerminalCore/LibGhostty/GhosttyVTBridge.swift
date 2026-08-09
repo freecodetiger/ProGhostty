@@ -181,26 +181,48 @@ public enum TerminalScrollOwnership: Sendable, Equatable {
   case consumed
 }
 
-public struct TerminalMouseScrollEvent: Sendable, Equatable {
-  public var wheelUp: Bool
+public enum TerminalMouseAction: Sendable, Equatable {
+  case press
+  case release
+  case motion
+}
+
+public enum TerminalMouseButton: Sendable, Hashable {
+  case left
+  case right
+  case middle
+  case wheelUp
+  case wheelDown
+  case wheelLeft
+  case wheelRight
+}
+
+public struct TerminalMouseInputEvent: Sendable, Equatable {
+  public var action: TerminalMouseAction
+  public var button: TerminalMouseButton?
   public var shift: Bool
   public var control: Bool
   public var alt: Bool
+  public var anyButtonPressed: Bool
   public var x: Float
   public var y: Float
 
   public init(
-    wheelUp: Bool,
+    action: TerminalMouseAction,
+    button: TerminalMouseButton? = nil,
     shift: Bool = false,
     control: Bool = false,
     alt: Bool = false,
+    anyButtonPressed: Bool = false,
     x: Float,
     y: Float
   ) {
-    self.wheelUp = wheelUp
+    self.action = action
+    self.button = button
     self.shift = shift
     self.control = control
     self.alt = alt
+    self.anyButtonPressed = anyButtonPressed
     self.x = x
     self.y = y
   }
@@ -355,17 +377,19 @@ public final class GhosttyVTBridge {
     }
   }
 
-  public func encodedMouseScroll(
-    _ event: TerminalMouseScrollEvent,
+  public func encodedMouseInput(
+    _ event: TerminalMouseInputEvent,
     geometry: TerminalMouseGeometry
   ) throws -> Data {
     try locked {
       guard let handle else { return Data() }
       var rawEvent = ProGhosttyVTMouseEvent(
-        wheel_up: event.wheelUp,
+        action: rawMouseAction(event.action),
+        button: rawMouseButton(event.button),
         shift: event.shift,
         control: event.control,
         alt: event.alt,
+        any_button_pressed: event.anyButtonPressed,
         x: event.x,
         y: event.y
       )
@@ -381,7 +405,7 @@ public final class GhosttyVTBridge {
       )
       var pointer: UnsafeMutablePointer<UInt8>?
       var length = 0
-      let result = proghostty_vt_encode_mouse(
+      let result = proghostty_vt_encode_mouse_input(
         handle,
         &rawEvent,
         &rawGeometry,
@@ -394,6 +418,38 @@ public final class GhosttyVTBridge {
       guard let pointer else { return Data() }
       defer { proghostty_vt_free_bytes(pointer, length) }
       return Data(bytes: pointer, count: length)
+    }
+  }
+
+  private func rawMouseAction(_ action: TerminalMouseAction) -> ProGhosttyVTMouseAction {
+    switch action {
+    case .press:
+      return PROGHOSTTY_VT_MOUSE_ACTION_PRESS
+    case .release:
+      return PROGHOSTTY_VT_MOUSE_ACTION_RELEASE
+    case .motion:
+      return PROGHOSTTY_VT_MOUSE_ACTION_MOTION
+    }
+  }
+
+  private func rawMouseButton(_ button: TerminalMouseButton?) -> ProGhosttyVTMouseButton {
+    switch button {
+    case .left:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_LEFT
+    case .right:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_RIGHT
+    case .middle:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_MIDDLE
+    case .wheelUp:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_FOUR
+    case .wheelDown:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_FIVE
+    case .wheelLeft:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_SEVEN
+    case .wheelRight:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_SIX
+    case nil:
+      return PROGHOSTTY_VT_MOUSE_BUTTON_NONE
     }
   }
 

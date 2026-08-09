@@ -84,11 +84,30 @@ typedef struct {
   bool application_cursor_keys;
 } ProGhosttyVTScrollOwnership;
 
+typedef enum {
+  PROGHOSTTY_VT_MOUSE_ACTION_PRESS = 0,
+  PROGHOSTTY_VT_MOUSE_ACTION_RELEASE = 1,
+  PROGHOSTTY_VT_MOUSE_ACTION_MOTION = 2,
+} ProGhosttyVTMouseAction;
+
+typedef enum {
+  PROGHOSTTY_VT_MOUSE_BUTTON_NONE = 0,
+  PROGHOSTTY_VT_MOUSE_BUTTON_LEFT = 1,
+  PROGHOSTTY_VT_MOUSE_BUTTON_RIGHT = 2,
+  PROGHOSTTY_VT_MOUSE_BUTTON_MIDDLE = 3,
+  PROGHOSTTY_VT_MOUSE_BUTTON_FOUR = 4,
+  PROGHOSTTY_VT_MOUSE_BUTTON_FIVE = 5,
+  PROGHOSTTY_VT_MOUSE_BUTTON_SIX = 6,
+  PROGHOSTTY_VT_MOUSE_BUTTON_SEVEN = 7,
+} ProGhosttyVTMouseButton;
+
 typedef struct {
-  bool wheel_up;
+  ProGhosttyVTMouseAction action;
+  ProGhosttyVTMouseButton button;
   bool shift;
   bool control;
   bool alt;
+  bool any_button_pressed;
   float x;
   float y;
 } ProGhosttyVTMouseEvent;
@@ -129,7 +148,7 @@ int proghostty_vt_format_html(ProGhosttyVT *vt, uint8_t **out, size_t *out_len);
 int proghostty_vt_encode_paste(ProGhosttyVT *vt, const uint8_t *data, size_t len, uint8_t **out, size_t *out_len);
 bool proghostty_vt_mouse_reporting_active(ProGhosttyVT *vt);
 int proghostty_vt_scroll_ownership(ProGhosttyVT *vt, ProGhosttyVTScrollOwnership *out);
-int proghostty_vt_encode_mouse(
+int proghostty_vt_encode_mouse_input(
   ProGhosttyVT *vt,
   const ProGhosttyVTMouseEvent *event,
   const ProGhosttyVTMouseGeometry *geometry,

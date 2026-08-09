@@ -948,8 +948,8 @@ public class PTYGridView: NSView {
   /// (modes 1000/1002/1003). When active, clicks should be forwarded to the
   /// PTY as mouse reports rather than interpreted as click-to-position.
   public var mouseReportingActiveHandler: (() -> Bool)?
-  public var terminalScrollOwnershipHandler: (() -> TerminalScrollOwnership)?
-  public var terminalMouseEncodeHandler: ((TerminalMouseScrollEvent, TerminalMouseGeometry) -> Data?)?
+  public var terminalScrollOwnershipHandler: (() -> TerminalScrollOwnership?)?
+  public var terminalMouseEncodeHandler: ((TerminalMouseInputEvent, TerminalMouseGeometry) -> Data?)?
   public var terminalAlternateScrollEncodeHandler: ((_ wheelUp: Bool, _ count: Int) -> Data?)?
   /// Localized popover labels, pushed from the App layer (which owns the language
   /// setting). Defaults to English so Core works standalone.
@@ -970,8 +970,20 @@ public class PTYGridView: NSView {
   private var isFocusedTerminalStorage = true
   private var rendererOptions = TerminalRendererOptions()
   private var suppressMomentumScroll = false
-  private var tuiScrollQuantizer = TerminalTUIScrollQuantizer()
+  private var tuiVerticalScrollQuantizer = TerminalTUIScrollQuantizer()
+  private var tuiHorizontalScrollQuantizer = TerminalTUIScrollQuantizer()
   private var tuiScrollOwnership: TerminalScrollOwnership?
+  private var lastResolvedScrollOwnership: TerminalScrollOwnership?
+  private var pressedMouseButtons: Set<TerminalMouseButton> = []
+  private var forwardedMouseButtons: Set<TerminalMouseButton> = []
+  private var pendingTerminalMouseMotion: (
+    point: NSPoint,
+    flags: NSEvent.ModifierFlags,
+    button: TerminalMouseButton?
+  )?
+  private var terminalMouseMotionFlushScheduled = false
+  private var lastTerminalMousePoint: NSPoint?
+  private static let terminalMouseButtonOrder: [TerminalMouseButton] = [.left, .right, .middle]
   /// Pattern-2 smooth-scroll physics (display-link driven). Sole owner of how
   /// the browse position evolves over time; the display-link tick is the ONLY
   /// writer of `viewport.visualOffsetY` while browsing, so there is no async
@@ -1508,9 +1520,9 @@ public class PTYGridView: NSView {
       suppressMomentumScroll = false
     }
     PTYRenderDebugLog.write(
-      "wheel precise=\(event.hasPreciseScrollingDeltas) deltaY=\(String(format: "%.3f", event.scrollingDeltaY)) phase=\(event.phase.rawValue) momentum=\(event.momentumPhase.rawValue)"
+      "wheel precise=\(event.hasPreciseScrollingDeltas) deltaX=\(String(format: "%.3f", event.scrollingDeltaX)) deltaY=\(String(format: "%.3f", event.scrollingDeltaY)) phase=\(event.phase.rawValue) momentum=\(event.momentumPhase.rawValue)"
     )
-    let ownership = terminalScrollOwnershipHandler?() ?? fallbackScrollOwnership
+    let ownership = resolvedScrollOwnership()
     PTYRenderDebugLog.write("wheel-route ownership=\(String(describing: ownership))")
     guard ownership == .localScrollback else {
       handleTUIScroll(event, ownership: ownership)
@@ -1532,74 +1544,103 @@ public class PTYGridView: NSView {
       return
     }
     if tuiScrollOwnership != ownership {
-      tuiScrollQuantizer.reset()
+      tuiVerticalScrollQuantizer.reset()
+      tuiHorizontalScrollQuantizer.reset()
       tuiScrollOwnership = ownership
     }
-    let units = tuiScrollQuantizer.consume(
+    let verticalUnits = tuiVerticalScrollQuantizer.consume(
       delta: Double(event.scrollingDeltaY),
       precise: event.hasPreciseScrollingDeltas,
-      cellHeight: Double(cellSize.height)
+      unitSize: Double(cellSize.height)
     )
-    guard units != 0 else {
-      let pending = String(format: "%.3f", tuiScrollQuantizer.pendingDelta)
+    let horizontalUnits = tuiHorizontalScrollQuantizer.consume(
+      delta: Double(event.scrollingDeltaX),
+      precise: event.hasPreciseScrollingDeltas,
+      unitSize: Double(cellSize.width)
+    )
+    guard verticalUnits != 0 || horizontalUnits != 0 else {
+      let pendingY = String(format: "%.3f", tuiVerticalScrollQuantizer.pendingDelta)
+      let pendingX = String(format: "%.3f", tuiHorizontalScrollQuantizer.pendingDelta)
       PTYRenderDebugLog.write(
-        "wheel-tui ownership=\(String(describing: ownership)) units=0 pending=\(pending)"
+        "wheel-tui ownership=\(String(describing: ownership)) units=0 pendingX=\(pendingX) pendingY=\(pendingY)"
       )
       return
     }
 
-    let wheelUp = units > 0
-    let count = abs(units)
-    let encoded: Data?
+    var encoded = Data()
     switch ownership {
     case .mouseReporting:
       let point = convert(event.locationInWindow, from: nil)
-      let scale = max(1, window?.backingScaleFactor ?? 1)
-      let mouseEvent = TerminalMouseScrollEvent(
-        wheelUp: wheelUp,
-        shift: event.modifierFlags.contains(.shift),
-        control: event.modifierFlags.contains(.control),
-        alt: event.modifierFlags.contains(.option),
-        x: Float(point.x * scale),
-        y: Float(point.y * scale)
-      )
-      let geometry = TerminalMouseGeometry(
-        screenWidth: Self.pixelDimension(bounds.width, scale: scale),
-        screenHeight: Self.pixelDimension(bounds.height, scale: scale),
-        cellWidth: Self.pixelDimension(cellSize.width, scale: scale),
-        cellHeight: Self.pixelDimension(cellSize.height, scale: scale),
-        paddingTop: Self.pixelDimension(contentInset.height, scale: scale),
-        paddingBottom: Self.pixelDimension(contentInset.height, scale: scale),
-        paddingRight: Self.pixelDimension(contentInset.width, scale: scale),
-        paddingLeft: Self.pixelDimension(contentInset.width, scale: scale)
-      )
-      if let unit = terminalMouseEncodeHandler?(mouseEvent, geometry), !unit.isEmpty {
-        var repeated = Data(capacity: unit.count * count)
-        for _ in 0..<count { repeated.append(unit) }
-        encoded = repeated
-      } else {
-        encoded = nil
+      clearLocalSelectionForTerminalInput()
+      if verticalUnits != 0 {
+        appendEncodedWheel(
+          to: &encoded,
+          button: verticalUnits > 0 ? .wheelUp : .wheelDown,
+          count: abs(verticalUnits),
+          point: point,
+          flags: event.modifierFlags
+        )
+      }
+      if horizontalUnits != 0 {
+        appendEncodedWheel(
+          to: &encoded,
+          button: horizontalUnits > 0 ? .wheelRight : .wheelLeft,
+          count: abs(horizontalUnits),
+          point: point,
+          flags: event.modifierFlags
+        )
       }
     case .alternateCursorKeys:
-      encoded = terminalAlternateScrollEncodeHandler?(wheelUp, count)
+      if verticalUnits != 0 {
+        clearLocalSelectionForTerminalInput()
+        encoded = terminalAlternateScrollEncodeHandler?(verticalUnits > 0, abs(verticalUnits)) ?? Data()
+      }
     case .localScrollback, .consumed:
-      encoded = nil
+      break
     }
-    if let encoded, !encoded.isEmpty {
+    if !encoded.isEmpty {
       PTYRenderDebugLog.write(
-        "wheel-tui ownership=\(String(describing: ownership)) units=\(units) encodedBytes=\(encoded.count)"
+        "wheel-tui ownership=\(String(describing: ownership)) unitsX=\(horizontalUnits) unitsY=\(verticalUnits) encodedBytes=\(encoded.count)"
       )
       inputHandler?(encoded)
     } else {
       PTYRenderDebugLog.write(
-        "wheel-tui ownership=\(String(describing: ownership)) units=\(units) encodedBytes=0"
+        "wheel-tui ownership=\(String(describing: ownership)) unitsX=\(horizontalUnits) unitsY=\(verticalUnits) encodedBytes=0"
       )
     }
   }
 
   private func resetTUIScrollInput() {
-    tuiScrollQuantizer.reset()
+    tuiVerticalScrollQuantizer.reset()
+    tuiHorizontalScrollQuantizer.reset()
     tuiScrollOwnership = nil
+  }
+
+  private func resolvedScrollOwnership() -> TerminalScrollOwnership {
+    if let ownership = terminalScrollOwnershipHandler?() {
+      lastResolvedScrollOwnership = ownership
+      return ownership
+    }
+    return lastResolvedScrollOwnership ?? fallbackScrollOwnership
+  }
+
+  private func appendEncodedWheel(
+    to data: inout Data,
+    button: TerminalMouseButton,
+    count: Int,
+    point: NSPoint,
+    flags: NSEvent.ModifierFlags
+  ) {
+    guard count > 0,
+          let unit = encodedTerminalMouseInput(
+            action: .press,
+            button: button,
+            point: point,
+            flags: flags
+          ),
+          !unit.isEmpty else { return }
+    data.reserveCapacity(data.count + unit.count * count)
+    for _ in 0..<count { data.append(unit) }
   }
 
   private static func pixelDimension(_ value: CGFloat, scale: CGFloat) -> UInt32 {
@@ -1957,6 +1998,7 @@ public class PTYGridView: NSView {
   public override func mouseDown(with event: NSEvent) {
     activationHandler?()
     window?.makeFirstResponder(self)
+    if handleTerminalMouseButton(.press, button: .left, event: event) { return }
     stopSelectionAutoScroll()
     pendingLinkClick = nil
     clickToPositionDownPoint = nil
@@ -2048,6 +2090,10 @@ public class PTYGridView: NSView {
   }
 
   public override func mouseDragged(with event: NSEvent) {
+    if forwardedMouseButtons.contains(.left) {
+      queueTerminalMouseMotion(event, button: .left)
+      return
+    }
     let oldDirtyRects = selectionDirtyRects()
     let point = convert(event.locationInWindow, from: nil)
     // A real drag means this gesture is a selection / three-finger-drag, not a
@@ -2066,6 +2112,7 @@ public class PTYGridView: NSView {
   }
 
   public override func mouseUp(with event: NSEvent) {
+    if handleTerminalMouseButton(.release, button: .left, event: event) { return }
     isDraggingSelectionStorage = false
     selectionDragPoint = nil
     stopSelectionAutoScroll()
@@ -2095,6 +2142,180 @@ public class PTYGridView: NSView {
       clickToPositionDownPoint = nil
     }
     super.mouseUp(with: event)
+  }
+
+  public override func rightMouseDragged(with event: NSEvent) {
+    if forwardedMouseButtons.contains(.right) {
+      queueTerminalMouseMotion(event, button: .right)
+      return
+    }
+    super.rightMouseDragged(with: event)
+  }
+
+  public override func rightMouseUp(with event: NSEvent) {
+    if handleTerminalMouseButton(.release, button: .right, event: event) { return }
+    super.rightMouseUp(with: event)
+  }
+
+  public override func otherMouseDown(with event: NSEvent) {
+    activationHandler?()
+    window?.makeFirstResponder(self)
+    guard event.buttonNumber == 2 else {
+      super.otherMouseDown(with: event)
+      return
+    }
+    if handleTerminalMouseButton(.press, button: .middle, event: event) { return }
+    super.otherMouseDown(with: event)
+  }
+
+  public override func otherMouseDragged(with event: NSEvent) {
+    guard event.buttonNumber == 2 else {
+      super.otherMouseDragged(with: event)
+      return
+    }
+    if forwardedMouseButtons.contains(.middle) {
+      queueTerminalMouseMotion(event, button: .middle)
+      return
+    }
+    super.otherMouseDragged(with: event)
+  }
+
+  public override func otherMouseUp(with event: NSEvent) {
+    guard event.buttonNumber == 2 else {
+      super.otherMouseUp(with: event)
+      return
+    }
+    if handleTerminalMouseButton(.release, button: .middle, event: event) { return }
+    super.otherMouseUp(with: event)
+  }
+
+  private func handleTerminalMouseButton(
+    _ action: TerminalMouseAction,
+    button: TerminalMouseButton,
+    event: NSEvent
+  ) -> Bool {
+    let point = convert(event.locationInWindow, from: nil)
+    lastTerminalMousePoint = point
+    switch action {
+    case .press:
+      guard resolvedScrollOwnership() == .mouseReporting else { return false }
+      pressedMouseButtons.insert(button)
+      let localPrimaryOverride = button == .left
+        && (event.modifierFlags.contains(.shift) || event.modifierFlags.contains(.command))
+      guard !localPrimaryOverride else { return false }
+      forwardedMouseButtons.insert(button)
+      stopSelectionAutoScroll()
+      pendingLinkClick = nil
+      clickToPositionDownPoint = nil
+      clearLocalSelectionForTerminalInput()
+    case .release:
+      pressedMouseButtons.remove(button)
+      guard forwardedMouseButtons.remove(button) != nil else { return false }
+      pendingTerminalMouseMotion = nil
+    case .motion:
+      return false
+    }
+    if let encoded = encodedTerminalMouseInput(
+      action: action,
+      button: button,
+      point: point,
+      flags: event.modifierFlags
+    ), !encoded.isEmpty {
+      inputHandler?(encoded)
+    }
+    return true
+  }
+
+  private func encodedTerminalMouseInput(
+    action: TerminalMouseAction,
+    button: TerminalMouseButton?,
+    point: NSPoint,
+    flags: NSEvent.ModifierFlags
+  ) -> Data? {
+    lastTerminalMousePoint = point
+    let scale = max(1, window?.backingScaleFactor ?? 1)
+    let mouseEvent = TerminalMouseInputEvent(
+      action: action,
+      button: button,
+      shift: flags.contains(.shift),
+      control: flags.contains(.control),
+      alt: flags.contains(.option),
+      anyButtonPressed: !pressedMouseButtons.isEmpty,
+      x: Float(point.x * scale),
+      y: Float(point.y * scale)
+    )
+    let geometry = TerminalMouseGeometry(
+      screenWidth: Self.pixelDimension(bounds.width, scale: scale),
+      screenHeight: Self.pixelDimension(bounds.height, scale: scale),
+      cellWidth: Self.pixelDimension(cellSize.width, scale: scale),
+      cellHeight: Self.pixelDimension(cellSize.height, scale: scale),
+      paddingTop: Self.pixelDimension(contentInset.height, scale: scale),
+      paddingBottom: Self.pixelDimension(contentInset.height, scale: scale),
+      paddingRight: Self.pixelDimension(contentInset.width, scale: scale),
+      paddingLeft: Self.pixelDimension(contentInset.width, scale: scale)
+    )
+    return terminalMouseEncodeHandler?(mouseEvent, geometry)
+  }
+
+  private func queueTerminalMouseMotion(_ event: NSEvent, button: TerminalMouseButton?) {
+    pendingTerminalMouseMotion = (
+      point: convert(event.locationInWindow, from: nil),
+      flags: event.modifierFlags,
+      button: button
+    )
+    guard !terminalMouseMotionFlushScheduled else { return }
+    terminalMouseMotionFlushScheduled = true
+    DispatchQueue.main.async { [weak self] in
+      self?.flushPendingTerminalMouseMotion()
+    }
+  }
+
+  private func flushPendingTerminalMouseMotion() {
+    terminalMouseMotionFlushScheduled = false
+    guard let pending = pendingTerminalMouseMotion else { return }
+    pendingTerminalMouseMotion = nil
+    if let button = pending.button {
+      guard forwardedMouseButtons.contains(button) else { return }
+    } else {
+      guard resolvedScrollOwnership() == .mouseReporting else { return }
+    }
+    guard let encoded = encodedTerminalMouseInput(
+      action: .motion,
+      button: pending.button,
+      point: pending.point,
+      flags: pending.flags
+    ), !encoded.isEmpty else { return }
+    inputHandler?(encoded)
+  }
+
+  func flushPendingTerminalMouseMotionForTests() {
+    flushPendingTerminalMouseMotion()
+  }
+
+  private func clearLocalSelectionForTerminalInput() {
+    let dirtyRects = selectionDirtyRects()
+    selection.clear()
+    isDraggingSelectionStorage = false
+    selectionDragPoint = nil
+    invalidateSelectionRects(dirtyRects)
+  }
+
+  private func releaseForwardedMouseButtons() {
+    pendingTerminalMouseMotion = nil
+    let point = lastTerminalMousePoint ?? NSPoint(x: contentInset.width, y: contentInset.height)
+    for button in Self.terminalMouseButtonOrder where forwardedMouseButtons.contains(button) {
+      pressedMouseButtons.remove(button)
+      if let encoded = encodedTerminalMouseInput(
+        action: .release,
+        button: button,
+        point: point,
+        flags: []
+      ), !encoded.isEmpty {
+        inputHandler?(encoded)
+      }
+    }
+    forwardedMouseButtons.removeAll()
+    pressedMouseButtons.removeAll()
   }
 
   /// Attempts click-to-position cursor movement. Returns true if the click was
@@ -2272,6 +2493,8 @@ public class PTYGridView: NSView {
       // off-window leaks and fires against a dead render path.
       stopSmoothScrollBrowsing()
       resetTUIScrollInput()
+      releaseForwardedMouseButtons()
+      lastResolvedScrollOwnership = nil
       stopLinkHoverDisplayLink()
       hoveredLinkObject = nil
       hoveredLinkHit = nil
@@ -2289,6 +2512,14 @@ public class PTYGridView: NSView {
     // no link ring, no dwell, no Explore. One flag, checked here, so we never have
     // to keep the grid's hover state in sync with a sibling overlay's geometry.
     guard interactionEnabled else { return }
+    if resolvedScrollOwnership() == .mouseReporting {
+      let localButtonIsPressed = !pressedMouseButtons.subtracting(forwardedMouseButtons).isEmpty
+      if !localButtonIsPressed {
+        let button = Self.terminalMouseButtonOrder.first(where: forwardedMouseButtons.contains)
+        queueTerminalMouseMotion(event, button: button)
+        return
+      }
+    }
     // Self-heal a stale Explore Mode: if ⌘ was released while we were defocused
     // (e.g. ⌘-click opened an external app), the key-up flagsChanged never reached
     // us. Reconcile from live modifier state so the first move after returning
@@ -2320,6 +2551,7 @@ public class PTYGridView: NSView {
   /// which would otherwise strand Explore Mode "on". Exit it now. This is the
   /// general cure for "⌘ + another key leaves everything expanded".
   public override func resignFirstResponder() -> Bool {
+    releaseForwardedMouseButtons()
     setCommandLinkMode(false)
     clearHover()
     return super.resignFirstResponder()
@@ -2334,6 +2566,7 @@ public class PTYGridView: NSView {
     guard interactionEnabled != enabled else { return }
     interactionEnabled = enabled
     if !enabled {
+      releaseForwardedMouseButtons()
       setCommandLinkMode(false)
       clearHover()
     }
@@ -2384,6 +2617,8 @@ public class PTYGridView: NSView {
 
   public override func rightMouseDown(with event: NSEvent) {
     activationHandler?()
+    window?.makeFirstResponder(self)
+    if handleTerminalMouseButton(.press, button: .right, event: event) { return }
     guard let menu else {
       super.rightMouseDown(with: event)
       return

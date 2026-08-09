@@ -228,7 +228,7 @@ int proghostty_vt_scroll_ownership(ProGhosttyVT *vt, ProGhosttyVTScrollOwnership
   return GHOSTTY_SUCCESS;
 }
 
-int proghostty_vt_encode_mouse(
+int proghostty_vt_encode_mouse_input(
   ProGhosttyVT *vt,
   const ProGhosttyVTMouseEvent *event,
   const ProGhosttyVTMouseGeometry *geometry,
@@ -272,10 +272,62 @@ int proghostty_vt_encode_mouse(
   };
   ghostty_mouse_encoder_setopt(encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size);
 
-  ghostty_mouse_event_set_action(mouse_event, GHOSTTY_MOUSE_ACTION_PRESS);
-  ghostty_mouse_event_set_button(
-    mouse_event,
-    event->wheel_up ? GHOSTTY_MOUSE_BUTTON_FOUR : GHOSTTY_MOUSE_BUTTON_FIVE);
+  GhosttyMouseAction action;
+  switch (event->action) {
+    case PROGHOSTTY_VT_MOUSE_ACTION_PRESS:
+      action = GHOSTTY_MOUSE_ACTION_PRESS;
+      break;
+    case PROGHOSTTY_VT_MOUSE_ACTION_RELEASE:
+      action = GHOSTTY_MOUSE_ACTION_RELEASE;
+      break;
+    case PROGHOSTTY_VT_MOUSE_ACTION_MOTION:
+      action = GHOSTTY_MOUSE_ACTION_MOTION;
+      break;
+    default:
+      ghostty_mouse_event_free(mouse_event);
+      ghostty_mouse_encoder_free(encoder);
+      return GHOSTTY_INVALID_VALUE;
+  }
+  ghostty_mouse_event_set_action(mouse_event, action);
+
+  GhosttyMouseButton button;
+  switch (event->button) {
+    case PROGHOSTTY_VT_MOUSE_BUTTON_NONE:
+      ghostty_mouse_event_clear_button(mouse_event);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_LEFT:
+      button = GHOSTTY_MOUSE_BUTTON_LEFT;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_RIGHT:
+      button = GHOSTTY_MOUSE_BUTTON_RIGHT;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_MIDDLE:
+      button = GHOSTTY_MOUSE_BUTTON_MIDDLE;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_FOUR:
+      button = GHOSTTY_MOUSE_BUTTON_FOUR;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_FIVE:
+      button = GHOSTTY_MOUSE_BUTTON_FIVE;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_SIX:
+      button = GHOSTTY_MOUSE_BUTTON_SIX;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    case PROGHOSTTY_VT_MOUSE_BUTTON_SEVEN:
+      button = GHOSTTY_MOUSE_BUTTON_SEVEN;
+      ghostty_mouse_event_set_button(mouse_event, button);
+      break;
+    default:
+      ghostty_mouse_event_free(mouse_event);
+      ghostty_mouse_encoder_free(encoder);
+      return GHOSTTY_INVALID_VALUE;
+  }
   GhosttyMods mods = 0;
   if (event->shift) mods |= GHOSTTY_MODS_SHIFT;
   if (event->control) mods |= GHOSTTY_MODS_CTRL;
@@ -285,6 +337,10 @@ int proghostty_vt_encode_mouse(
     .x = event->x,
     .y = event->y,
   });
+  ghostty_mouse_encoder_setopt(
+    encoder,
+    GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
+    &event->any_button_pressed);
 
   size_t required = 0;
   result = ghostty_mouse_encoder_encode(encoder, mouse_event, NULL, 0, &required);

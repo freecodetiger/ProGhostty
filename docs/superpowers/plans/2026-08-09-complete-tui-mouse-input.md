@@ -6,6 +6,20 @@
 >
 > Scope: complete terminal mouse ownership after the vertical wheel fix.
 
+Status: implemented on `fix/tui-scroll-input-plan`; automated verification is
+complete and the interoperability matrix remains a release hand-test checklist.
+
+Implemented coverage:
+
+- generalized press/release/motion and buttons 1-7 across the C/Swift bridge;
+- primary, secondary, and middle-button capture with press-time ownership;
+- Shift primary-button selection and Command primary-button link overrides;
+- coalesced hover and drag motion reporting;
+- independent horizontal and vertical wheel quantization;
+- local selection cleanup before captured input;
+- last-successful ownership fallback and focus/detach button release;
+- X10, UTF-8, SGR, URxvt, and SGR-Pixels bridge tests.
+
 ## 1. Objective
 
 When a terminal application enables mouse reporting, ProGhostty must forward
