@@ -15,11 +15,11 @@
 
 | 步 | 内容 | 状态 |
 |---|---|---|
-| S0 | 抽 `AppComposition`（App 全局服务） | ⬜ 未开始 |
-| S1 | 建 `TerminalWindowModel`（每窗口状态） | ⬜ 未开始 |
-| S2 | 换 scene：`Window("main")` → `WindowGroup` | ⬜ 未开始 |
-| S3 | 修 6 处「单窗口硬编码」为「本窗口」 | ⬜ 未开始 |
-| S4 | 接 ⌘N 命令 + 翻转 `supportsMultipleTerminalWindows` | ⬜ 未开始 |
+| S0 | 抽 `AppComposition`（App 全局服务） | ✅ `b9c8692` |
+| S1 | 移 settings/appearance/workspaces/通知 → `AppComposition`，SettingsView 改绑 | ✅ `a78560e` |
+| S2 | 换 scene：`WindowGroup` + 每窗口 `AppModel` | ✅ `9a7cf1c` |
+| S3 | 修窗口相对化：AppModel↔NSWindow 绑定 + ⌘Q 聚合 | ✅ `dee2ba3` |
+| S4 | 接 ⌘N（WindowGroup 默认）+ 首窗恢复/新窗 fresh + 关窗 teardown | ✅ `04241ca` |
 
 ---
 
