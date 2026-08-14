@@ -80,7 +80,7 @@ final class AppModel: ObservableObject {
   /// AgentNotifyGateController (debt spec 3-9); objectWillChange is chained in
   /// init and these forwarders keep the SettingsView reads/bindings working.
   private(set) lazy var agentNotifyGate = AgentNotifyGateController(
-    hookManager: agentNotificationHookManager,
+    hookManager: composition.agentNotificationHookManager,
     setNotificationsEnabledSetting: { [weak self] enabled in
       self?.settings.notificationsEnabled = enabled
     },
@@ -101,24 +101,17 @@ final class AppModel: ObservableObject {
     set { agentNotifyGate.showUninstallSheet = newValue }
   }
 
+  private let composition: AppComposition
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
-  private let terminalNotificationCenter: TerminalNotificationCenter
-  private let terminalNotificationSoundPlayer: TerminalNotificationSoundPlaying
-  private let agentNotificationHookManager: AgentNotificationHookManager
   private let paneWorkspaceController: PaneWorkspaceController
-  private let updateChecker = AppUpdateChecker()
   private let focusStore = TerminalFocusStore()
   private let projectInfoPopover = ProjectInfoPopover()
-  private let workspaceStore: WorkspaceStore?
-  private let settingsStore: SettingsStore
-  private let terminalActionDispatcher = TerminalActionDispatcher()
-  private let utilityWindows = UtilityWindowController()
   /// The live settings window, if open — used by the window-close guard to
   /// leave utility windows unguarded.
-  var settingsWindow: NSWindow? { utilityWindows.settingsWindow }
+  var settingsWindow: NSWindow? { composition.utilityWindows.settingsWindow }
   private lazy var windowSizing = TerminalWindowSizingController { [weak self] window in
-    window === self?.utilityWindows.settingsWindow
+    window === self?.composition.utilityWindows.settingsWindow
   }
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
   private var cancellables: Set<AnyCancellable> = []
@@ -155,23 +148,15 @@ final class AppModel: ObservableObject {
     var source: TerminalDesktopNotification.Source
   }
 
-  init(
-    terminalNotificationCenter: TerminalNotificationCenter = TerminalNotificationCenter(),
-    terminalNotificationSoundPlayer: TerminalNotificationSoundPlaying = TerminalNotificationSoundPlayer(),
-    agentNotificationHookManager: AgentNotificationHookManager = AgentNotificationHookManager()
-  ) {
-    self.terminalNotificationCenter = terminalNotificationCenter
-    self.terminalNotificationSoundPlayer = terminalNotificationSoundPlayer
-    self.agentNotificationHookManager = agentNotificationHookManager
+  init() {
+    self.composition = AppComposition.shared ?? {
+      let composition = AppComposition()
+      AppComposition.shared = composition
+      return composition
+    }()
     DebugLog.write("AppModel init")
-    settingsStore = SettingsStore()
-    let loadedSettings = settingsStore.load()
+    let loadedSettings = composition.settingsStore.load()
     settings = loadedSettings
-    if let database = Self.openDatabase() {
-      workspaceStore = WorkspaceStore(database: database)
-    } else {
-      workspaceStore = nil
-    }
     let surfaceRegistry = PTYTerminalSurfaceRegistry()
     let sessionManager = PTYTerminalSessionManager(surfaceRegistry: surfaceRegistry)
     self.surfaceRegistry = surfaceRegistry
@@ -221,7 +206,7 @@ final class AppModel: ObservableObject {
   /// Refreshes whether the system has granted notification permission, so
   /// Settings can show a low-key hint when it hasn't.
   func refreshNotificationAuthorization() {
-    terminalNotificationCenter.refreshAuthorizationStatus { [weak self] granted in
+    composition.terminalNotificationCenter.refreshAuthorizationStatus { [weak self] granted in
       self?.systemNotificationsAuthorized = granted
     }
   }
@@ -263,7 +248,7 @@ final class AppModel: ObservableObject {
   }
 
   private func requestNotificationAuthorizationOnEnable() {
-    terminalNotificationCenter.requestAuthorizationForEnable()
+    composition.terminalNotificationCenter.requestAuthorizationForEnable()
     refreshNotificationAuthorization()
   }
 
@@ -342,7 +327,7 @@ final class AppModel: ObservableObject {
     workspace.layoutSnapshot = layout
     workspace.updatedAt = Date()
     do {
-      try workspaceStore?.save(workspace)
+      try composition.workspaceStore?.save(workspace)
       workspaceRuntimes[index].workspace = workspace
       updateWorkspaceCache(workspace)
     } catch {
@@ -987,7 +972,7 @@ final class AppModel: ObservableObject {
 
   func createWorkspace(name: String, rootPath: String?) {
     let workspace = Workspace(name: name.isEmpty ? "Workspace" : name, rootPath: rootPath)
-    try? workspaceStore?.save(workspace)
+    try? composition.workspaceStore?.save(workspace)
     refreshWorkspaces()
   }
 
@@ -997,7 +982,7 @@ final class AppModel: ObservableObject {
       defaultWorkingDirectory: settings.defaultWorkingDirectory
     )
     let workspace = Workspace(name: TitleFormatting.normalizedWorkspaceName(name), rootPath: resolvedRootPath)
-    try? workspaceStore?.save(workspace)
+    try? composition.workspaceStore?.save(workspace)
     refreshWorkspaces()
     createAndActivateWorkspace(workspace: workspace)
   }
@@ -1012,7 +997,7 @@ final class AppModel: ObservableObject {
     if let runtime {
       closeWorkspaceRuntime(id: runtime.id)
     }
-    try? workspaceStore?.delete(id: workspace.id)
+    try? composition.workspaceStore?.delete(id: workspace.id)
     refreshWorkspaces()
   }
 
@@ -1030,7 +1015,7 @@ final class AppModel: ObservableObject {
     if let runtime {
       closeWorkspaceRuntime(id: runtime.id)
     }
-    try? workspaceStore?.delete(id: workspace.id)
+    try? composition.workspaceStore?.delete(id: workspace.id)
     refreshWorkspaces()
   }
 
@@ -1076,7 +1061,7 @@ final class AppModel: ObservableObject {
       layout.workspaceId = workspace.id
       workspace.layoutSnapshot = layout
     }
-    try? workspaceStore?.save(workspace)
+    try? composition.workspaceStore?.save(workspace)
     refreshWorkspaces()
   }
 
@@ -1086,7 +1071,7 @@ final class AppModel: ObservableObject {
   }
 
   private func persistSettings() {
-    try? settingsStore.save(settings)
+    try? composition.settingsStore.save(settings)
   }
 
   private func rememberActiveWorkspaceContentSize() {
@@ -1118,7 +1103,7 @@ final class AppModel: ObservableObject {
     }
 
     do {
-      let availability = try await updateChecker.check(currentVersion: appShortVersionString())
+      let availability = try await composition.updateChecker.check(currentVersion: appShortVersionString())
       switch availability {
       case .upToDate:
         if manual {
@@ -1166,7 +1151,7 @@ final class AppModel: ObservableObject {
   }
 
   func closeSettingsWindow(_ window: NSWindow? = nil) {
-    utilityWindows.closeSettings(window)
+    composition.utilityWindows.closeSettings(window)
   }
 
   func appVersionString() -> String {
@@ -1178,7 +1163,7 @@ final class AppModel: ObservableObject {
   }
 
   func openSettingsWindow() {
-    utilityWindows.openSettings(
+    composition.utilityWindows.openSettings(
       makeContent: {
         NSHostingController(
           rootView: SettingsView()
@@ -1194,7 +1179,7 @@ final class AppModel: ObservableObject {
 
   /// Sidebar / split layout can briefly restore the system "Settings" title; cheap re-hide.
   func reassertSettingsWindowChrome() {
-    utilityWindows.reassertSettingsChrome { [weak self] window in
+    composition.utilityWindows.reassertSettingsChrome { [weak self] window in
       self?.applyConfigurationWindowAppearance(to: window)
     }
   }
@@ -1210,7 +1195,7 @@ final class AppModel: ObservableObject {
     surfaceRegistry.applySemanticLinkText(appText.semanticLinkText)
     applyFocusedTerminalSurface()
     for window in NSApp.windows
-      where window !== utilityWindows.settingsWindow
+      where window !== composition.utilityWindows.settingsWindow
     {
       ProGhosttyWindowAppearance.applyTerminalChrome(
         to: window,
@@ -1218,7 +1203,7 @@ final class AppModel: ObservableObject {
         usesDarkAppearance: usesDarkAppearance
       )
     }
-    if let window = utilityWindows.settingsWindow {
+    if let window = composition.utilityWindows.settingsWindow {
       applyConfigurationWindowAppearance(to: window)
     }
   }
@@ -1534,7 +1519,7 @@ final class AppModel: ObservableObject {
   }
 
   private func refreshWorkspaces() {
-    workspaces = (try? workspaceStore?.all()) ?? []
+    workspaces = (try? composition.workspaceStore?.all()) ?? []
     syncWorkspaceSwitcherState()
   }
 
@@ -1693,9 +1678,9 @@ final class AppModel: ObservableObject {
       case .inApp(let notification):
         showInAppNotification(notification, session: session)
       case .sound:
-        terminalNotificationSoundPlayer.playNotificationSound()
+        composition.terminalNotificationSoundPlayer.playNotificationSound()
       case .desktop(let notification):
-        terminalNotificationCenter.showDesktopNotification(notification, session: session)
+        composition.terminalNotificationCenter.showDesktopNotification(notification, session: session)
       }
     }
   }
@@ -1757,22 +1742,7 @@ final class AppModel: ObservableObject {
     ) else {
       return
     }
-    terminalActionDispatcher.dispatch(message, in: self)
+    composition.terminalActionDispatcher.dispatch(message, in: self)
   }
 
-  private static func openDatabase() -> AppDatabase? {
-    let appSupport = FileManager.default.urls(
-      for: .applicationSupportDirectory, in: .userDomainMask
-    ).first!
-    .appendingPathComponent("ProGhostty", isDirectory: true)
-    try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-
-    do {
-      return try AppDatabase(path: appSupport.appendingPathComponent("proghostty.sqlite").path)
-    } catch {
-      let fallback = FileManager.default.temporaryDirectory
-        .appendingPathComponent("proghostty-\(UUID().uuidString).sqlite")
-      return try? AppDatabase(path: fallback.path)
-    }
-  }
 }
