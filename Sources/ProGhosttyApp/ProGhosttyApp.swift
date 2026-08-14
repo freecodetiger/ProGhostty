@@ -82,8 +82,8 @@ struct ProGhosttyApp: App {
     }
     Settings {
       SettingsView()
-        .environmentObject(model)
-        .preferredColorScheme(model.appColorScheme)
+        .environmentObject(model.composition)
+        .preferredColorScheme(model.composition.appColorScheme)
     }
   }
 }

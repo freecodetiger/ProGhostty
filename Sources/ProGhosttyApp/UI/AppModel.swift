@@ -54,16 +54,11 @@ final class AppModel: ObservableObject {
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
   @Published var commandLine = ""
   @Published var sideInputStore = TerminalSideInputStore.empty
-  @Published var workspaces: [Workspace] = []
-  @Published var settings: AppSettings {
-    didSet {
-      applyTerminalAppearance()
-      persistSettings()
-    }
+  var workspaces: [Workspace] { composition.workspaces }
+  var settings: AppSettings {
+    get { composition.settings }
+    set { composition.settings = newValue }
   }
-  @Published var isCheckingForUpdates = false
-  @Published var updateCheckResult: UpdateCheckResult?
-  @Published var systemNotificationsAuthorized = true
 
   /// Notification presentation state lives in NotificationPresenter (debt
   /// spec 3-7); objectWillChange is chained in init so these forwarders keep
@@ -76,32 +71,7 @@ final class AppModel: ObservableObject {
     get { notifications.statusLine }
     set { notifications.statusLine = newValue }
   }
-  /// Install/uninstall gate for the notifications toggle lives in
-  /// AgentNotifyGateController (debt spec 3-9); objectWillChange is chained in
-  /// init and these forwarders keep the SettingsView reads/bindings working.
-  private(set) lazy var agentNotifyGate = AgentNotifyGateController(
-    hookManager: composition.agentNotificationHookManager,
-    setNotificationsEnabledSetting: { [weak self] enabled in
-      self?.settings.notificationsEnabled = enabled
-    },
-    didEnableNotifications: { [weak self] in
-      self?.requestNotificationAuthorizationOnEnable()
-    }
-  )
-
-  var agentNotifyHooksStatus: AgentNotifyHookStatus { agentNotifyGate.hooksStatus }
-  var agentNotifyHookError: String? { agentNotifyGate.hookError }
-  var isInstallingAgentNotifyHooks: Bool { agentNotifyGate.isInstalling }
-  var showAgentNotifyInstallSheet: Bool {
-    get { agentNotifyGate.showInstallSheet }
-    set { agentNotifyGate.showInstallSheet = newValue }
-  }
-  var showAgentNotifyUninstallSheet: Bool {
-    get { agentNotifyGate.showUninstallSheet }
-    set { agentNotifyGate.showUninstallSheet = newValue }
-  }
-
-  private let composition: AppComposition
+  let composition: AppComposition
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
   private let paneWorkspaceController: PaneWorkspaceController
@@ -155,8 +125,6 @@ final class AppModel: ObservableObject {
       return composition
     }()
     DebugLog.write("AppModel init")
-    let loadedSettings = composition.settingsStore.load()
-    settings = loadedSettings
     let surfaceRegistry = PTYTerminalSurfaceRegistry()
     let sessionManager = PTYTerminalSessionManager(surfaceRegistry: surfaceRegistry)
     self.surfaceRegistry = surfaceRegistry
@@ -186,11 +154,12 @@ final class AppModel: ObservableObject {
       self?.terminalFileInfo(target, from: sourceSession)
     }
     AppModel.shared = self
+    composition.registerWindow(self)
     // Forwarded presenter/controller state must keep publishing through AppModel.
     notifications.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
-    agentNotifyGate.objectWillChange
+    composition.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
     applyTerminalAppearance()
@@ -198,58 +167,6 @@ final class AppModel: ObservableObject {
     Task { await consumeEvents() }
     refreshWorkspaces()
     restorePersistedWorkspacesOrCreateDefault()
-    Task { await checkForUpdates(manual: false) }
-    refreshNotificationAuthorization()
-    refreshAgentNotifyHookStatus()
-  }
-
-  /// Refreshes whether the system has granted notification permission, so
-  /// Settings can show a low-key hint when it hasn't.
-  func refreshNotificationAuthorization() {
-    composition.terminalNotificationCenter.refreshAuthorizationStatus { [weak self] granted in
-      self?.systemNotificationsAuthorized = granted
-    }
-  }
-
-  /// Opens the macOS System Settings notifications pane for this app.
-  func openSystemNotificationSettings() {
-    guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") else { return }
-    NSWorkspace.shared.open(url)
-  }
-
-  // MARK: Agent notify hooks (Settings gate) — thin forwarders → AgentNotifyGateController
-
-  func refreshAgentNotifyHookStatus() {
-    agentNotifyGate.refreshStatus()
-  }
-
-  func setNotificationsEnabled(_ enabled: Bool) {
-    agentNotifyGate.setNotificationsEnabled(enabled)
-  }
-
-  func confirmInstallAgentNotifyHooks() {
-    agentNotifyGate.confirmInstall()
-  }
-
-  func cancelInstallAgentNotifyHooks() {
-    agentNotifyGate.cancelInstall()
-  }
-
-  func confirmUninstallAgentNotifyHooks(removeHooks: Bool) {
-    agentNotifyGate.confirmUninstall(removeHooks: removeHooks)
-  }
-
-  func cancelUninstallAgentNotifyHooks() {
-    agentNotifyGate.cancelUninstall()
-  }
-
-  func repairAgentNotifyHooks() {
-    agentNotifyGate.repair()
-  }
-
-  private func requestNotificationAuthorizationOnEnable() {
-    composition.terminalNotificationCenter.requestAuthorizationForEnable()
-    refreshNotificationAuthorization()
   }
 
   func createAndActivateWorkspace(workspace: Workspace? = nil) {
@@ -329,17 +246,9 @@ final class AppModel: ObservableObject {
     do {
       try composition.workspaceStore?.save(workspace)
       workspaceRuntimes[index].workspace = workspace
-      updateWorkspaceCache(workspace)
+      composition.upsertWorkspace(workspace)
     } catch {
       shellIntegrationState = "workspace save unavailable: \(error.localizedDescription)"
-    }
-  }
-
-  private func updateWorkspaceCache(_ workspace: Workspace) {
-    if let index = workspaces.firstIndex(where: { $0.id == workspace.id }) {
-      workspaces[index] = workspace
-    } else {
-      workspaces.append(workspace)
     }
   }
 
@@ -599,31 +508,22 @@ final class AppModel: ObservableObject {
     return cwd
   }
 
-  var appText: AppText {
-    AppText(language: settings.appLanguage)
-  }
-
-  /// Live appearance derivation: settings + the current system light/dark
-  /// state, everything else computed by AppearanceViewModel (debt spec 3-6).
-  var appearance: AppearanceViewModel {
-    let match = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
-    return AppearanceViewModel(settings: settings, systemIsLight: match == .aqua)
-  }
-
-  var appColorScheme: ColorScheme? { appearance.appColorScheme }
-  var terminalPalette: TerminalSurfacePalette { appearance.terminalPalette }
-  var usesDarkAppearance: Bool { appearance.usesDarkAppearance }
-  var terminalBackgroundColor: NSColor { appearance.terminalBackgroundColor }
-  var configurationColorScheme: ColorScheme { appearance.configurationColorScheme }
-  var settingsThemePalette: ProGhosttySettingsThemeColors { appearance.settingsThemePalette }
-  var configurationWindowBackgroundColor: NSColor { appearance.configurationWindowBackgroundColor }
-  var configurationBarBackgroundColor: NSColor { appearance.configurationBarBackgroundColor }
-  var configurationSectionBackgroundColor: NSColor { appearance.configurationSectionBackgroundColor }
-  var configurationTextBackgroundColor: NSColor { appearance.configurationTextBackgroundColor }
-  var configurationSeparatorColor: NSColor { appearance.configurationSeparatorColor }
-  var configurationPrimaryTextColor: NSColor { appearance.configurationPrimaryTextColor }
-  var configurationSecondaryTextColor: NSColor { appearance.configurationSecondaryTextColor }
-  var configurationTertiaryTextColor: NSColor { appearance.configurationTertiaryTextColor }
+  var appText: AppText { composition.appText }
+  var appearance: AppearanceViewModel { composition.appearance }
+  var appColorScheme: ColorScheme? { composition.appColorScheme }
+  var terminalPalette: TerminalSurfacePalette { composition.terminalPalette }
+  var usesDarkAppearance: Bool { composition.usesDarkAppearance }
+  var terminalBackgroundColor: NSColor { composition.terminalBackgroundColor }
+  var configurationColorScheme: ColorScheme { composition.configurationColorScheme }
+  var settingsThemePalette: ProGhosttySettingsThemeColors { composition.settingsThemePalette }
+  var configurationWindowBackgroundColor: NSColor { composition.configurationWindowBackgroundColor }
+  var configurationBarBackgroundColor: NSColor { composition.configurationBarBackgroundColor }
+  var configurationSectionBackgroundColor: NSColor { composition.configurationSectionBackgroundColor }
+  var configurationTextBackgroundColor: NSColor { composition.configurationTextBackgroundColor }
+  var configurationSeparatorColor: NSColor { composition.configurationSeparatorColor }
+  var configurationPrimaryTextColor: NSColor { composition.configurationPrimaryTextColor }
+  var configurationSecondaryTextColor: NSColor { composition.configurationSecondaryTextColor }
+  var configurationTertiaryTextColor: NSColor { composition.configurationTertiaryTextColor }
 
   var selectedSessionID: TerminalSessionID? {
     activeWorkspace?.selectedSessionID(focusStore: focusStore)
@@ -1065,15 +965,6 @@ final class AppModel: ObservableObject {
     refreshWorkspaces()
   }
 
-  func saveSettings() {
-    persistSettings()
-    showTitlebarToast(appText.settingsSavedToast, style: .success, lifetime: .settingsSaved)
-  }
-
-  private func persistSettings() {
-    try? composition.settingsStore.save(settings)
-  }
-
   private func rememberActiveWorkspaceContentSize() {
     guard let activeWorkspaceID else { return }
     windowSizing.rememberContentSize(for: activeWorkspaceID)
@@ -1089,42 +980,6 @@ final class AppModel: ObservableObject {
 
   private func terminalWindowMaximumContentSize() -> NSSize? {
     windowSizing.maximumContentSize()
-  }
-
-  func checkForUpdates(manual: Bool) async {
-    if manual {
-      isCheckingForUpdates = true
-      updateCheckResult = nil
-    }
-    defer {
-      if manual {
-        isCheckingForUpdates = false
-      }
-    }
-
-    do {
-      let availability = try await composition.updateChecker.check(currentVersion: appShortVersionString())
-      switch availability {
-      case .upToDate:
-        if manual {
-          updateCheckResult = .upToDate
-        }
-      case .available(let update):
-        if manual {
-          updateCheckResult = .available(update)
-        } else {
-          showTitlebarToast(
-            "\(appText.updateAvailableToast) \(update.version)",
-            style: .update(update.releaseURL),
-            lifetime: .persistent
-          )
-        }
-      }
-    } catch {
-      if manual {
-        updateCheckResult = .failed
-      }
-    }
   }
 
   func openTitlebarToastAction() {
@@ -1145,46 +1000,11 @@ final class AppModel: ObservableObject {
     restoreTerminalKeyboardFocus()
   }
 
-  func resetSettings() {
-    settings = .defaults
-    saveSettings()
-  }
-
-  func closeSettingsWindow(_ window: NSWindow? = nil) {
-    composition.utilityWindows.closeSettings(window)
-  }
-
-  func appVersionString() -> String {
-    appShortVersionString()
-  }
-
-  private func appShortVersionString() -> String {
-    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
-  }
-
   func openSettingsWindow() {
-    composition.utilityWindows.openSettings(
-      makeContent: {
-        NSHostingController(
-          rootView: SettingsView()
-            .environmentObject(self)
-            .preferredColorScheme(configurationColorScheme)
-        )
-      },
-      applyChrome: { [weak self] window in
-        self?.applyConfigurationWindowAppearance(to: window)
-      }
-    )
+    composition.openSettingsWindow()
   }
 
-  /// Sidebar / split layout can briefly restore the system "Settings" title; cheap re-hide.
-  func reassertSettingsWindowChrome() {
-    composition.utilityWindows.reassertSettingsChrome { [weak self] window in
-      self?.applyConfigurationWindowAppearance(to: window)
-    }
-  }
-
-  private func applyTerminalAppearance() {
+  func applyTerminalAppearance() {
     surfaceRegistry.applyPalette(terminalPalette)
     surfaceRegistry.applyFont(
       family: settings.fontFamily,
@@ -1204,17 +1024,8 @@ final class AppModel: ObservableObject {
       )
     }
     if let window = composition.utilityWindows.settingsWindow {
-      applyConfigurationWindowAppearance(to: window)
+      composition.applyConfigurationWindowAppearance(to: window)
     }
-  }
-
-  private func applyConfigurationWindowAppearance(to window: NSWindow) {
-    let background = settingsThemePalette.windowBackground
-    ProGhosttyWindowAppearance.applyConfigurationChrome(
-      to: window,
-      backgroundColor: background,
-      usesDarkAppearance: usesDarkAppearance
-    )
   }
 
   private func applyFocusedTerminalSurface() {
@@ -1243,6 +1054,12 @@ final class AppModel: ObservableObject {
     lifetime: ProGhosttyTitlebarToastLifetime = .transient(1.8)
   ) {
     notifications.showTitlebarToast(message, style: style, lifetime: lifetime)
+  }
+
+  /// Broadcast entry point for app-global toasts (update available, settings
+  /// saved) so AppComposition can surface them in each window's titlebar.
+  func presentTitlebarToast(_ message: String, style: TitlebarToast.Style, lifetime: ProGhosttyTitlebarToastLifetime) {
+    showTitlebarToast(message, style: style, lifetime: lifetime)
   }
 
   private var effectiveThemeName: String {
@@ -1519,7 +1336,7 @@ final class AppModel: ObservableObject {
   }
 
   private func refreshWorkspaces() {
-    workspaces = (try? composition.workspaceStore?.all()) ?? []
+    composition.refreshWorkspaces()
     syncWorkspaceSwitcherState()
   }
 
