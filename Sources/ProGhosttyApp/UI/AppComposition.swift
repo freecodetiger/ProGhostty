@@ -85,9 +85,23 @@ final class AppComposition: ObservableObject {
 
   // MARK: 窗口注册
 
+  private var hasOpenedInitialWindow = false
+
   func registerWindow(_ window: AppModel) {
     guard !windowModels.contains(where: { $0 === window }) else { return }
     windowModels.append(window)
+  }
+
+  func unregisterWindow(_ window: AppModel) {
+    windowModels.removeAll { $0 === window }
+  }
+
+  /// True exactly once, for the first window (app launch), so it restores the
+  /// last session while subsequent windows (⌘N) open a fresh default workspace.
+  func claimInitialWindow() -> Bool {
+    if hasOpenedInitialWindow { return false }
+    hasOpenedInitialWindow = true
+    return true
   }
 
   private func broadcastAppearance() {

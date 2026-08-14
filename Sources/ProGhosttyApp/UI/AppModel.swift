@@ -162,7 +162,11 @@ final class AppModel: ObservableObject {
 
     Task { await consumeEvents() }
     refreshWorkspaces()
-    restorePersistedWorkspacesOrCreateDefault()
+    if composition.claimInitialWindow() {
+      restorePersistedWorkspacesOrCreateDefault()
+    } else {
+      createAndActivateWorkspace(workspace: nil)
+    }
   }
 
   func createAndActivateWorkspace(workspace: Workspace? = nil) {
@@ -1035,8 +1039,25 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private var windowCloseObserver: AnyCancellable?
+
   func bindWindow(_ window: NSWindow?) {
     self.window = window
+    windowCloseObserver?.cancel()
+    windowCloseObserver = nil
+    guard let window else { return }
+    windowCloseObserver = NotificationCenter.default
+      .publisher(for: NSWindow.willCloseNotification, object: window)
+      .sink { [weak self] _ in self?.handleWindowClosed() }
+  }
+
+  private func handleWindowClosed() {
+    let runtimes = workspaceRuntimes
+    for runtime in runtimes {
+      _ = paneWorkspaceController.closeWorkspace(workspaceID: runtime.id)
+    }
+    workspaceRuntimes.removeAll()
+    composition.unregisterWindow(self)
   }
 
   func activateMainWindowAndFocusTerminal() {

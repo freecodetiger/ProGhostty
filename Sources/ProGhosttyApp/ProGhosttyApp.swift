@@ -65,12 +65,6 @@ private struct ProGhosttyCommands: Commands {
   let composition: AppComposition
 
   var body: some Commands {
-    CommandGroup(replacing: .newItem) {
-      if ProGhosttyWindowPolicy.supportsMultipleTerminalWindows {
-        Button("New Window") {}
-      }
-    }
-
     CommandGroup(replacing: .appSettings) {
       Button(composition.appText.settings + "...") {
         composition.openSettingsWindow()
