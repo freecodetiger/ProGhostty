@@ -6,10 +6,6 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
-  /// Weak back-link so the NSApplicationDelegate can reach running sessions when
-  /// ⌘Q / terminate needs a confirmation check.
-  static weak var shared: AppModel?
-
   struct WorkspaceRuntime: Identifiable, Equatable {
     var layout: WorkspaceLayout
     var workspace: Workspace?
@@ -72,6 +68,8 @@ final class AppModel: ObservableObject {
     set { notifications.statusLine = newValue }
   }
   let composition: AppComposition
+  /// The terminal window this model drives; bound from the view layer.
+  weak var window: NSWindow?
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
   private let paneWorkspaceController: PaneWorkspaceController
@@ -80,9 +78,12 @@ final class AppModel: ObservableObject {
   /// The live settings window, if open — used by the window-close guard to
   /// leave utility windows unguarded.
   var settingsWindow: NSWindow? { composition.utilityWindows.settingsWindow }
-  private lazy var windowSizing = TerminalWindowSizingController { [weak self] window in
-    window === self?.composition.utilityWindows.settingsWindow
-  }
+  private lazy var windowSizing = TerminalWindowSizingController(
+    isExcludedWindow: { [weak self] window in
+      window === self?.composition.utilityWindows.settingsWindow
+    },
+    windowProvider: { [weak self] in self?.window }
+  )
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
   private var cancellables: Set<AnyCancellable> = []
   private let paneSplitAvailabilityController = PaneSplitAvailabilityController()
@@ -149,7 +150,6 @@ final class AppModel: ObservableObject {
     surfaceRegistry.setFileInfoProvider { [weak self] sourceSession, target in
       self?.terminalFileInfo(target, from: sourceSession)
     }
-    AppModel.shared = self
     composition.registerWindow(self)
     // Forwarded presenter/controller state must keep publishing through AppModel.
     notifications.objectWillChange
@@ -1035,12 +1035,15 @@ final class AppModel: ObservableObject {
     }
   }
 
+  func bindWindow(_ window: NSWindow?) {
+    self.window = window
+  }
+
   func activateMainWindowAndFocusTerminal() {
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
-    NSApp.windows.first { window in
-      window.title == "ProGhostty" || window.contentViewController != nil
-    }?.makeKeyAndOrderFront(nil)
+    let target = window ?? NSApp.windows.first { $0.title == "ProGhostty" || $0.contentViewController != nil }
+    target?.makeKeyAndOrderFront(nil)
     restoreTerminalKeyboardFocus()
   }
 
@@ -1481,7 +1484,7 @@ final class AppModel: ObservableObject {
 
   private func closeTerminalWindowIfNoWorkspace() {
     guard workspaceRuntimes.isEmpty else { return }
-    guard let window = NSApp.windows.first(where: { !($0 is NSPanel) && $0 !== settingsWindow }) else { return }
+    guard let window else { return }
     window.performClose(nil)
   }
 

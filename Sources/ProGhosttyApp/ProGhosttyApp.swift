@@ -148,12 +148,12 @@ final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
     // last window terminates the app, so this is the quit confirmation moved
     // ahead of the close instead of after it.
     windowCloseGuard = TerminalWindowCloseGuard { [weak self] _ in
-      guard let self, let model = AppModel.shared else { return true }
-      guard model.hasAnyForegroundSession() else { return true }
+      guard let self, let composition = AppComposition.shared else { return true }
+      guard composition.hasAnyForegroundSession() else { return true }
       if self.isConfirmingQuit { return false }
       self.isConfirmingQuit = true
       defer { self.isConfirmingQuit = false }
-      guard model.confirmQuitWithForegroundProcess() else { return false }
+      guard composition.confirmQuitWithForegroundProcess() else { return false }
       self.quitApprovedByWindowClose = true
       return true
     }
@@ -164,13 +164,13 @@ final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    guard let model = AppModel.shared else { return .terminateNow }
+    guard let composition = AppComposition.shared else { return .terminateNow }
     // Already confirmed in the window-close guard — don't ask twice.
     if quitApprovedByWindowClose {
       quitApprovedByWindowClose = false
       return .terminateNow
     }
-    guard model.hasAnyForegroundSession() else { return .terminateNow }
+    guard composition.hasAnyForegroundSession() else { return .terminateNow }
     // A confirmation modal is already up (it pumps the run loop, so repeated
     // terminate requests can arrive re-entrantly) — refuse instead of
     // stacking another dialog.
@@ -179,7 +179,7 @@ final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
     defer { isConfirmingQuit = false }
     // The confirmation dialog blocks the main run-loop until answered, so we
     // can return a synchronous reply.
-    if model.confirmQuitWithForegroundProcess() {
+    if composition.confirmQuitWithForegroundProcess() {
       return .terminateNow
     }
     return .terminateCancel

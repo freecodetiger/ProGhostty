@@ -37,7 +37,7 @@ final class TerminalWindowCloseGuard: NSObject {
   /// and the settings window. Re-wraps if SwiftUI swapped the delegate.
   private func installIfNeeded(on window: NSWindow) {
     guard !(window is NSPanel) else { return }
-    if let settings = AppModel.shared?.settingsWindow, window === settings { return }
+    if let settings = AppComposition.shared?.utilityWindows.settingsWindow, window === settings { return }
     if window.delegate is WindowDelegateProxy { return }
     let proxy = WindowDelegateProxy(base: window.delegate, shouldClose: shouldClose)
     proxies[ObjectIdentifier(window)] = proxy

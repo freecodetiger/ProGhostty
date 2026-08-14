@@ -12,9 +12,11 @@ import ProGhosttyCore
 final class TerminalWindowSizingController {
   private var rememberedContentSizes: [UUID: NSSize] = [:]
   private let isExcludedWindow: (NSWindow) -> Bool
+  private let windowProvider: () -> NSWindow?
 
-  init(isExcludedWindow: @escaping (NSWindow) -> Bool) {
+  init(isExcludedWindow: @escaping (NSWindow) -> Bool, windowProvider: @escaping () -> NSWindow?) {
     self.isExcludedWindow = isExcludedWindow
+    self.windowProvider = windowProvider
   }
 
   func rememberContentSize(for workspaceID: UUID) {
@@ -90,6 +92,10 @@ final class TerminalWindowSizingController {
       return true
     }
 
+    if let owned = windowProvider(), isTerminalCandidate(owned) {
+      return owned
+    }
+    // Fallback when the owning window isn't bound yet.
     if let keyWindow = NSApp.keyWindow, isTerminalCandidate(keyWindow) {
       return keyWindow
     }

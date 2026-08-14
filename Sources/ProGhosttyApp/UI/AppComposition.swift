@@ -11,8 +11,7 @@ import SwiftUI
 /// focusStore）**不**在这里——它们归属各自的 `AppModel`（见 `.claude/MULTI_WINDOW_SPEC.md` §2.3）。
 @MainActor
 final class AppComposition: ObservableObject {
-  /// 供 AppDelegate 等 app 级对象回链。weak 与 `AppModel.shared` 同理由：
-  /// 真正持有者是创建它的对象（当前是首个 `AppModel`）。
+  /// 供 AppDelegate 等 app 级对象回链。weak：真正持有者是 App 层的 `@StateObject`。
   static weak var shared: AppComposition?
 
   // MARK: 服务（组合根）
@@ -95,6 +94,20 @@ final class AppComposition: ObservableObject {
     for window in windowModels {
       window.applyTerminalAppearance()
     }
+    if let settingsWindow = utilityWindows.settingsWindow {
+      applyConfigurationWindowAppearance(to: settingsWindow)
+    }
+  }
+
+  // MARK: ⌘Q / 窗口关闭聚合
+
+  func hasAnyForegroundSession() -> Bool {
+    windowModels.contains { $0.hasAnyForegroundSession() }
+  }
+
+  func confirmQuitWithForegroundProcess() -> Bool {
+    guard let first = windowModels.first else { return true }
+    return first.confirmQuitWithForegroundProcess()
   }
 
   private func broadcastToast(
