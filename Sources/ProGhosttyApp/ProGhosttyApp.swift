@@ -8,7 +8,7 @@ struct ProGhosttyApp: App {
   @StateObject private var composition = AppComposition()
 
   var body: some Scene {
-    WindowGroup {
+    WindowGroup(id: "main") {
       TerminalWindowRoot(composition: composition)
     }
     .defaultSize(
@@ -33,6 +33,7 @@ struct ProGhosttyApp: App {
 @MainActor
 private struct TerminalWindowRoot: View {
   @StateObject private var model: AppModel
+  @Environment(\.openWindow) private var openWindow
 
   init(composition: AppComposition) {
     _model = StateObject(wrappedValue: AppModel(composition: composition))
@@ -46,6 +47,9 @@ private struct TerminalWindowRoot: View {
         minHeight: ProGhosttyWindowSizing.minimumContentHeight
       )
       .focusedSceneValue(\.terminalWindowModel, model)
+      .onAppear {
+        ProGhosttyAppDelegate.openNewWindow = { openWindow(id: "main") }
+      }
   }
 }
 
@@ -62,9 +66,17 @@ extension FocusedValues {
 
 private struct ProGhosttyCommands: Commands {
   @FocusedValue(\.terminalWindowModel) private var focusedModel
+  @Environment(\.openWindow) private var openWindow
   let composition: AppComposition
 
   var body: some Commands {
+    CommandGroup(replacing: .newItem) {
+      Button("New Window") {
+        openWindow(id: "main")
+      }
+      .keyboardShortcut("n", modifiers: .command)
+    }
+
     CommandGroup(replacing: .appSettings) {
       Button(composition.appText.settings + "...") {
         composition.openSettingsWindow()
@@ -120,6 +132,9 @@ private struct ProGhosttyCommands: Commands {
 }
 
 final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
+  /// Bridges SwiftUI's `openWindow` to AppKit (Dock menu). Set once from
+  /// `TerminalWindowRoot.onAppear`. Main-thread only.
+  nonisolated(unsafe) static var openNewWindow: (() -> Void)?
   private var windowCloseGuard: TerminalWindowCloseGuard?
   /// True while the quit confirmation modal is up: duplicate terminate/close
   /// requests (the modal pumps the run loop) are dropped instead of stacking
@@ -151,6 +166,18 @@ final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
       self.quitApprovedByWindowClose = true
       return true
     }
+  }
+
+  func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+    let menu = NSMenu()
+    let newWindow = NSMenuItem(title: "New Window", action: #selector(newWindowAction), keyEquivalent: "")
+    newWindow.target = self
+    menu.addItem(newWindow)
+    return menu
+  }
+
+  @objc private func newWindowAction() {
+    Self.openNewWindow?()
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
