@@ -1005,6 +1005,11 @@ final class AppModel: ObservableObject {
   }
 
   func applyTerminalAppearance() {
+    // Only push palette/font/renderer into this window's surfaces. Window chrome
+    // is applied by TerminalChromeSyncView / WorkspaceTitlebarView (which target
+    // the owning view.window after setup). Applying chrome here ran during
+    // per-window AppModel.init, before SwiftUI finished building the titlebar,
+    // which corrupted the theme frame and hid the traffic lights.
     surfaceRegistry.applyPalette(terminalPalette)
     surfaceRegistry.applyFont(
       family: settings.fontFamily,
@@ -1014,18 +1019,6 @@ final class AppModel: ObservableObject {
     surfaceRegistry.applyRendererOptions(settings.terminalRendererOptions)
     surfaceRegistry.applySemanticLinkText(appText.semanticLinkText)
     applyFocusedTerminalSurface()
-    for window in NSApp.windows
-      where window !== composition.utilityWindows.settingsWindow
-    {
-      ProGhosttyWindowAppearance.applyTerminalChrome(
-        to: window,
-        backgroundColor: terminalBackgroundColor,
-        usesDarkAppearance: usesDarkAppearance
-      )
-    }
-    if let window = composition.utilityWindows.settingsWindow {
-      composition.applyConfigurationWindowAppearance(to: window)
-    }
   }
 
   private func applyFocusedTerminalSurface() {
