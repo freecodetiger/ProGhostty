@@ -5,85 +5,122 @@ import SwiftUI
 @main
 struct ProGhosttyApp: App {
   @NSApplicationDelegateAdaptor(ProGhosttyAppDelegate.self) private var appDelegate
-  @StateObject private var model = AppModel()
+  @StateObject private var composition = AppComposition()
 
   var body: some Scene {
-    Window("ProGhostty", id: "main") {
-      RootView()
-        .environmentObject(model)
-        .frame(
-          minWidth: ProGhosttyWindowSizing.minimumContentWidth,
-          minHeight: ProGhosttyWindowSizing.minimumContentHeight
-        )
+    WindowGroup {
+      TerminalWindowRoot(composition: composition)
     }
     .defaultSize(
       width: ProGhosttyWindowSizing.defaultContentWidth,
       height: ProGhosttyWindowSizing.defaultContentHeight
     )
     .commands {
-      CommandGroup(replacing: .newItem) {
-        if ProGhosttyWindowPolicy.supportsMultipleTerminalWindows {
-          Button("New Window") {}
-        }
-      }
-
-      CommandGroup(replacing: .appSettings) {
-        Button(model.appText.settings + "...") {
-          model.openSettingsWindow()
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .openSettings).swiftUIShortcut)
-      }
-
-      CommandMenu("Workspace") {
-        Button("Switch Workspace...") {
-          model.openWorkspaceSwitcher()
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .openWorkspaceSwitcher).swiftUIShortcut)
-      }
-
-      CommandMenu("Pane") {
-        Button("Split Right") {
-          model.splitSelectedTerminal(axis: .horizontal)
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .splitRight).swiftUIShortcut)
-
-        Button("Split Down") {
-          model.splitSelectedTerminal(axis: .vertical)
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .splitDown).swiftUIShortcut)
-
-        Divider()
-
-        Button("Close Pane") {
-          model.closeSelectedPane()
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .closePane).swiftUIShortcut)
-
-        Divider()
-
-        Button("Rename Pane") {
-          model.startRenamePane()
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .renamePane).swiftUIShortcut)
-
-        Divider()
-
-        Button("Focus Previous Pane") {
-          model.focusNeighbor(offset: -1)
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .focusPreviousPane).swiftUIShortcut)
-
-        Button("Focus Next Pane") {
-          model.focusNeighbor(offset: 1)
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .focusNextPane).swiftUIShortcut)
-      }
-
+      ProGhosttyCommands(composition: composition)
     }
+
     Settings {
       SettingsView()
-        .environmentObject(model.composition)
-        .preferredColorScheme(model.composition.appColorScheme)
+        .environmentObject(composition)
+        .preferredColorScheme(composition.appColorScheme)
+    }
+  }
+}
+
+/// Per-window root: owns the window's `AppModel` (terminal session stack +
+/// workspace runtime) and publishes it as the focused scene value so menu
+/// commands route to the key window.
+@MainActor
+private struct TerminalWindowRoot: View {
+  @StateObject private var model: AppModel
+
+  init(composition: AppComposition) {
+    _model = StateObject(wrappedValue: AppModel(composition: composition))
+  }
+
+  var body: some View {
+    RootView()
+      .environmentObject(model)
+      .frame(
+        minWidth: ProGhosttyWindowSizing.minimumContentWidth,
+        minHeight: ProGhosttyWindowSizing.minimumContentHeight
+      )
+      .focusedSceneValue(\.terminalWindowModel, model)
+  }
+}
+
+private struct TerminalWindowModelKey: FocusedValueKey {
+  typealias Value = AppModel
+}
+
+extension FocusedValues {
+  var terminalWindowModel: AppModel? {
+    get { self[TerminalWindowModelKey.self] }
+    set { self[TerminalWindowModelKey.self] = newValue }
+  }
+}
+
+private struct ProGhosttyCommands: Commands {
+  @FocusedValue(\.terminalWindowModel) private var focusedModel
+  let composition: AppComposition
+
+  var body: some Commands {
+    CommandGroup(replacing: .newItem) {
+      if ProGhosttyWindowPolicy.supportsMultipleTerminalWindows {
+        Button("New Window") {}
+      }
+    }
+
+    CommandGroup(replacing: .appSettings) {
+      Button(composition.appText.settings + "...") {
+        composition.openSettingsWindow()
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .openSettings).swiftUIShortcut)
+    }
+
+    CommandMenu("Workspace") {
+      Button("Switch Workspace...") {
+        focusedModel?.openWorkspaceSwitcher()
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .openWorkspaceSwitcher).swiftUIShortcut)
+    }
+
+    CommandMenu("Pane") {
+      Button("Split Right") {
+        focusedModel?.splitSelectedTerminal(axis: .horizontal)
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .splitRight).swiftUIShortcut)
+
+      Button("Split Down") {
+        focusedModel?.splitSelectedTerminal(axis: .vertical)
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .splitDown).swiftUIShortcut)
+
+      Divider()
+
+      Button("Close Pane") {
+        focusedModel?.closeSelectedPane()
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .closePane).swiftUIShortcut)
+
+      Divider()
+
+      Button("Rename Pane") {
+        focusedModel?.startRenamePane()
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .renamePane).swiftUIShortcut)
+
+      Divider()
+
+      Button("Focus Previous Pane") {
+        focusedModel?.focusNeighbor(offset: -1)
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .focusPreviousPane).swiftUIShortcut)
+
+      Button("Focus Next Pane") {
+        focusedModel?.focusNeighbor(offset: 1)
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .focusNextPane).swiftUIShortcut)
     }
   }
 }

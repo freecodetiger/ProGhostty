@@ -81,6 +81,7 @@ final class AppComposition: ObservableObject {
     Task { await checkForUpdates(manual: false) }
     refreshNotificationAuthorization()
     refreshAgentNotifyHookStatus()
+    AppComposition.shared = self
   }
 
   // MARK: 窗口注册

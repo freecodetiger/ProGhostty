@@ -118,12 +118,8 @@ final class AppModel: ObservableObject {
     var source: TerminalDesktopNotification.Source
   }
 
-  init() {
-    self.composition = AppComposition.shared ?? {
-      let composition = AppComposition()
-      AppComposition.shared = composition
-      return composition
-    }()
+  init(composition: AppComposition) {
+    self.composition = composition
     DebugLog.write("AppModel init")
     let surfaceRegistry = PTYTerminalSurfaceRegistry()
     let sessionManager = PTYTerminalSessionManager(surfaceRegistry: surfaceRegistry)
