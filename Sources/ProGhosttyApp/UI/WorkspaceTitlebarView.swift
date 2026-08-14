@@ -392,6 +392,13 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         NSWindow.didResignKeyNotification,
         NSWindow.didBecomeMainNotification,
         NSWindow.didResignMainNotification,
+        // Fullscreen enter/exit rebuilds the titlebar host hierarchy, detaching
+        // our custom titlebar views. Re-run the appearance path so they re-attach
+        // (installTitlebarBackground/Controls re-add when superview !== host).
+        NSWindow.willEnterFullScreenNotification,
+        NSWindow.didEnterFullScreenNotification,
+        NSWindow.willExitFullScreenNotification,
+        NSWindow.didExitFullScreenNotification,
       ]
       for name in notifications {
         let observer = NotificationCenter.default.addObserver(
