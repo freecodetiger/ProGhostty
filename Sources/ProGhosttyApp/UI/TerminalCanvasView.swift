@@ -52,6 +52,7 @@ private struct TerminalTreeLayoutView: NSViewControllerRepresentable {
       onSplit: { paneID, axis in model.splitPane(paneID, axis: axis) },
       onClose: { paneID in model.closePane(paneID) },
       onRename: { model.startRenamePane() },
+      onSideInput: { model.openSideInput() },
       onPasteDroppedPaths: { paneID, text in model.pasteDroppedPaths(text, intoPane: paneID) },
       menuText: model.appText,
       keyboardShortcuts: model.settings.keyboardShortcuts,
@@ -94,6 +95,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
   private var onSplit: ((UUID, SplitAxis) -> Void)?
   private var onClose: ((UUID) -> Void)?
   private var onRename: (() -> Void)?
+  private var onSideInput: (() -> Void)?
   private var onPasteDroppedPaths: ((UUID, String) -> Void)?
   private var menuText = AppText(language: "system")
   private var keyboardShortcuts = KeyboardShortcutSettings.defaults
@@ -127,6 +129,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
     onRename: @escaping () -> Void,
+    onSideInput: @escaping () -> Void,
     onPasteDroppedPaths: @escaping (UUID, String) -> Void,
     menuText: AppText,
     keyboardShortcuts: KeyboardShortcutSettings,
@@ -154,6 +157,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
     self.onSplit = onSplit
     self.onClose = onClose
     self.onRename = onRename
+    self.onSideInput = onSideInput
     self.onPasteDroppedPaths = onPasteDroppedPaths
     self.menuText = menuText
     self.keyboardShortcuts = keyboardShortcuts
@@ -258,6 +262,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
         onSplit: { [weak self] paneID, axis in self?.onSplit?(paneID, axis) },
         onClose: { [weak self] paneID in self?.onClose?(paneID) },
             onRename: { [weak self] in self?.onRename?() },
+            onSideInput: { [weak self] in self?.onSideInput?() },
         onPasteDroppedPaths: { [weak self] paneID, text in self?.onPasteDroppedPaths?(paneID, text) },
         menuText: menuText,
         palette: palette,
@@ -299,6 +304,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       controller.onRatioChanged = onRatioChanged
       controller.onWorkspaceSwitcher = onWorkspaceSwitcher
       controller.onSettings = onSettings
+      controller.onSideInput = onSideInput
       controller.sideInputStore = sideInputStore
       controller.onSideInputTextChanged = onSideInputTextChanged
       controller.onSubmitSideInput = onSubmitSideInput
@@ -467,6 +473,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       splitController.onCancelSideInput = onCancelSideInput
       splitController.sideInputPlaceholder = sideInputPlaceholder
       splitController.onSideInputFocusRequestHandled = onSideInputFocusRequestHandled
+      splitController.onSideInput = onSideInput
       splitController.view.layer?.backgroundColor = palette.background.cgColor
       if let splitView = splitController.view as? TerminalSplitView {
         splitView.customDividerColor = palette.splitDivider
@@ -507,6 +514,7 @@ final class SplitContainerViewController: NSViewController, NSSplitViewDelegate 
       onSplit: { [weak self] paneID, axis in self?.onSplit?(paneID, axis) },
       onClose: { [weak self] paneID in self?.onClose?(paneID) },
         onRename: { [weak self] in self?.onRename?() },
+        onSideInput: { [weak self] in self?.onSideInput?() },
       onPasteDroppedPaths: { [weak self] paneID, text in self?.onPasteDroppedPaths?(paneID, text) },
       menuText: menuText,
       palette: palette,
@@ -866,6 +874,7 @@ final class TerminalPaneViewController: NSViewController {
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
     onRename: @escaping () -> Void,
+    onSideInput: @escaping () -> Void,
     onPasteDroppedPaths: @escaping (UUID, String) -> Void,
     menuText: AppText,
     palette: TerminalSurfacePalette,
@@ -910,6 +919,7 @@ final class TerminalPaneViewController: NSViewController {
       onSplit: onSplit,
       onClose: onClose,
         onRename: onRename,
+        onSideInput: onSideInput,
       text: menuText,
       keyboardShortcuts: keyboardShortcuts,
       onWorkspaceSwitcher: onWorkspaceSwitcher,
@@ -1183,6 +1193,7 @@ final class TerminalPaneViewController: NSViewController {
     onSplit: @escaping (UUID, SplitAxis) -> Void,
     onClose: @escaping (UUID) -> Void,
     onRename: @escaping () -> Void,
+    onSideInput: @escaping () -> Void,
     text: AppText,
     keyboardShortcuts: KeyboardShortcutSettings,
     onWorkspaceSwitcher: @escaping () -> Void,
@@ -1214,6 +1225,10 @@ final class TerminalPaneViewController: NSViewController {
     menu.addItem(ClosureMenuItem(
       title: text.renamePane,
       handler: { onRename() }
+    ))
+    menu.addItem(ClosureMenuItem(
+      title: text.sideInput,
+      handler: { onSideInput() }
     ))
     menu.addItem(.separator())
     menu.addItem(SplitControlMenuItem(

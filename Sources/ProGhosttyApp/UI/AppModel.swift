@@ -92,6 +92,7 @@ final class AppModel: ObservableObject {
   private var bareTokenExistenceCache: [String: (exists: Bool, timestamp: CFTimeInterval)] = [:]
   private static let bareTokenExistenceTTL: CFTimeInterval = 2.0
   private static let bareTokenExistenceCacheLimit = 2048
+  private static let sideInputHintKey = "hasUsedSideInput"
 
   struct TitlebarToast: Equatable, Sendable {
     // Unique per presentation so re-showing the *same* message/style is still a
@@ -164,15 +165,28 @@ final class AppModel: ObservableObject {
     refreshWorkspaces()
     if composition.claimInitialWindow() {
       restorePersistedWorkspacesOrCreateDefault()
+      showSideInputHintIfNeeded()
     } else {
       createAndActivateWorkspace(workspace: nil)
     }
+  }
+
+  /// One-line onboarding hint for the side input, shown on launch until the
+  /// user first opens it. Deliberately minimal — just the shortcut, no pitch.
+  private func showSideInputHintIfNeeded() {
+    guard !UserDefaults.standard.bool(forKey: Self.sideInputHintKey) else { return }
+    let shortcut = settings.keyboardShortcuts.shortcut(for: .sideInput).displayString
+    showTitlebarToast("\(appText.sideInput) \(shortcut)", style: .info, lifetime: .transient(4.0))
   }
 
   func createAndActivateWorkspace(workspace: Workspace? = nil) {
     let cwd = AppSettings.terminalWorkingDirectory(
       workspaceRootPath: workspace?.rootPath,
       defaultWorkingDirectory: settings.defaultWorkingDirectory
+    )
+    let grid = Self.initialGridSize(
+      fontFamily: settings.fontFamily,
+      fontSize: CGFloat(settings.fontSize)
     )
 
     do {
@@ -182,7 +196,9 @@ final class AppModel: ObservableObject {
           workspace: workspace,
           layoutSnapshot: workspace.layoutSnapshot,
           fallbackShell: settings.defaultShell,
-          defaultWorkingDirectory: cwd
+          defaultWorkingDirectory: cwd,
+          rows: grid.rows,
+          cols: grid.cols
         )
       } else {
         let opened = try paneWorkspaceController.openTerminal(
@@ -274,6 +290,7 @@ final class AppModel: ObservableObject {
 
   func openSideInput() {
     guard let selectedPaneID, let selectedSessionID else { return }
+    UserDefaults.standard.set(true, forKey: Self.sideInputHintKey)
     sideInputStore.open(paneID: selectedPaneID, sessionID: selectedSessionID)
   }
 

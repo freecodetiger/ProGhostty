@@ -92,6 +92,11 @@ private struct ProGhosttyCommands: Commands {
     }
 
     CommandMenu("Pane") {
+      Button(composition.appText.sideInput) {
+        focusedModel?.openSideInput()
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .sideInput).swiftUIShortcut)
+
       Button("Split Right") {
         focusedModel?.splitSelectedTerminal(axis: .horizontal)
       }
