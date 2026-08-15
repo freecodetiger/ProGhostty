@@ -1383,13 +1383,34 @@ final class AppModel: ObservableObject {
   }
 
   private func sessionConfig(workspace: Workspace?, workingDirectory: String?) -> TerminalSessionConfig {
-    TerminalSessionConfig(
+    let grid = Self.initialGridSize(
+      fontFamily: settings.fontFamily,
+      fontSize: CGFloat(settings.fontSize)
+    )
+    return TerminalSessionConfig(
       shellPath: workspace?.defaultShell ?? settings.defaultShell,
       workingDirectory: workingDirectory,
       environment: [:],
-      rows: 24,
-      cols: 80,
+      rows: grid.rows,
+      cols: grid.cols,
       workspaceId: workspace?.id
+    )
+  }
+
+  /// Initial PTY grid size derived from the default window content size and the
+  /// configured font, so the shell's `$COLUMNS`/`$LINES` are correct from the
+  /// first prompt instead of the old hardcoded 24×80.
+  private static func initialGridSize(fontFamily: String, fontSize: CGFloat) -> TerminalGridSize {
+    let surfaceSize = CGSize(
+      width: ProGhosttyWindowSizing.defaultContentWidth,
+      height: ProGhosttyWindowSizing.defaultContentHeight
+    )
+    let scale = NSScreen.main?.backingScaleFactor ?? 2
+    return TerminalGridSizer.initialGridSize(
+      surfaceSize: surfaceSize,
+      fontFamily: fontFamily,
+      fontSize: fontSize,
+      scale: scale
     )
   }
 
