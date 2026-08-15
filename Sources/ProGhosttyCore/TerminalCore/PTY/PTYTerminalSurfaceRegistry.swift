@@ -604,6 +604,11 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       PTYRenderDebugLog.write(
         "render session=\(id) mode=live-grid rows=\(frame.rows) cols=\(frame.cols) alt=\(frame.isAlternateScreen) cursor=(\(frame.cursorX),\(frame.cursorY)) shape=\(frame.cursorShape) belowCursor=\(hasRenderedContentBelowCursor(in: frame))"
       )
+      if Self.firstRowIsBlank(frame) {
+        PTYRenderDebugLog.write(
+          "SUSPICIOUS-BLANK-TOP session=\(id) rows=\(frame.rows) cols=\(frame.cols) cursor=(\(frame.cursorX),\(frame.cursorY)) head=\"\(Self.headText(from: frame))\""
+        )
+      }
       if shouldTransferFocus {
         surface.gridView.window?.makeFirstResponder(surface.gridView)
       }
@@ -803,6 +808,27 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       }
     }
     return false
+  }
+
+  private static func firstRowIsBlank(_ frame: GhosttyTerminalFrame) -> Bool {
+    guard frame.rows > 0, frame.cols > 0, frame.cells.count >= frame.cols else { return false }
+    return frame.cells[0..<frame.cols].allSatisfy { $0.scalar == " " }
+  }
+
+  private static func headText(from frame: GhosttyTerminalFrame, maxRows: Int = 4) -> String {
+    guard frame.rows > 0, frame.cols > 0 else { return "" }
+    let lastRow = min(frame.rows, maxRows)
+    return (0..<lastRow)
+      .map { row in
+        let start = row * frame.cols
+        let end = min(start + frame.cols, frame.cells.count)
+        guard start < end else { return "" }
+        return frame.cells[start..<end]
+          .map { String($0.scalar) }
+          .joined()
+          .trimmingCharacters(in: .whitespaces)
+      }
+      .joined(separator: " | ")
   }
 
   private static func tailText(from frame: GhosttyTerminalFrame, maxRows: Int = 6) -> String {

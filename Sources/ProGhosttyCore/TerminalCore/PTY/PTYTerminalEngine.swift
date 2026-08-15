@@ -662,6 +662,19 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     let vtQueue = state.vtQueue
     let generation = state.resizeGeneration
     vtQueue.async { [weak self] in
+      if PTYRenderDebugLog.isEnabled {
+        let preview = data.prefix(240).reduce(into: "") { s, b in
+          switch b {
+          case 0x1b: s += "\\e"
+          case 0x0a: s += "\\n"
+          case 0x0d: s += "\\r"
+          case 0x07: s += "\\a"
+          case 0x20...0x7e: s.append(Character(UnicodeScalar(Int(b))!))
+          default: s += String(format: "\\x%02x", b)
+          }
+        }
+        PTYRenderDebugLog.write("pty-output session=\(id) bytes=\(data.count) preview=\"\(preview)\"")
+      }
       bridge.write(data)
       let wasPinnedToBottom = GhosttyVTQueueWork.viewportIsPinnedToBottom(bridge)
       if wasPinnedToBottom {
@@ -735,12 +748,19 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
   private func performScheduledResize(session id: TerminalSessionID, job: PendingResizeJob) {
     job.vtQueue.async { [weak self] in
       let totalStart = Date()
+      let before = PTYRenderDebugLog.isEnabled ? (try? job.bridge.frame()) : nil
       let wasPinnedToBottom = GhosttyVTQueueWork.viewportIsPinnedToBottom(job.bridge)
       let vtStart = Date()
       job.bridge.resize(cols: job.cols, rows: job.rows)
       PTYLaunch.resize(fileDescriptor: job.fileDescriptor, rows: job.rows, cols: job.cols)
       _ = Darwin.kill(job.pid, SIGWINCH)
       let vtDuration = Date().timeIntervalSince(vtStart)
+      if let before {
+        let after = try? job.bridge.frame()
+        PTYRenderDebugLog.write(
+          "resize-debug session=\(id) rows=\(before.rows)->\(after?.rows ?? -1) cursor=(\(before.cursorX),\(before.cursorY))->(\(after?.cursorX ?? -1),\(after?.cursorY ?? -1)) pinned=\(wasPinnedToBottom)"
+        )
+      }
 
       let snapshotStart = Date()
       if wasPinnedToBottom {

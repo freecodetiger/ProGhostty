@@ -298,8 +298,13 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       subtitleLabel.invalidateIntrinsicContentSize()
       subtitleLabel.needsLayout = true
       subtitleLabel.layoutSubtreeIfNeeded()
-      installedWindow?.contentView?.superview?.needsLayout = true
-      installedWindow?.contentView?.superview?.layoutSubtreeIfNeeded()
+      guard let host = installedWindow?.contentView?.superview else { return }
+      host.needsLayout = true
+      // Defer the host re-layout: forcing layoutSubtreeIfNeeded here synchronously
+      // re-enters the SwiftUI hosting view's layout and re-triggers updateNSView.
+      DispatchQueue.main.async {
+        host.layoutSubtreeIfNeeded()
+      }
     }
 
     private func middleTruncated(_ text: String, limit: Int) -> String {
@@ -313,6 +318,16 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
       let prefix = trimmed.prefix(prefixCount)
       let suffix = trimmed.suffix(suffixCount)
       return "\(prefix)\(ellipsis)\(suffix)"
+    }
+
+    private func forceReinstall(in window: NSWindow) {
+      titlebarBackgroundView.removeFromSuperview()
+      titlebarControlsStack.removeFromSuperview()
+      subtitleLabel.removeFromSuperview()
+      paneLabelLabel.removeFromSuperview()
+      installTitlebarBackground(in: window)
+      installTitlebarControls(in: window)
+      keepTitlebarViewsOrdered(in: window)
     }
 
     private func installTitlebarBackground(in window: NSWindow) {
@@ -392,6 +407,13 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
         NSWindow.didResignKeyNotification,
         NSWindow.didBecomeMainNotification,
         NSWindow.didResignMainNotification,
+        // Fullscreen enter/exit rebuilds the titlebar host hierarchy, detaching
+        // our custom titlebar views. Re-run the appearance path so they re-attach
+        // (installTitlebarBackground/Controls re-add when superview !== host).
+        NSWindow.willEnterFullScreenNotification,
+        NSWindow.didEnterFullScreenNotification,
+        NSWindow.willExitFullScreenNotification,
+        NSWindow.didExitFullScreenNotification,
       ]
       for name in notifications {
         let observer = NotificationCenter.default.addObserver(
@@ -402,6 +424,19 @@ struct WorkspaceTitlebarView: NSViewRepresentable {
           DispatchQueue.main.async {
             guard let self, let window else { return }
             self.updateWindowAppearance(window)
+            // Fullscreen exit leaves the titlebar container in a transient
+            // position, so the content's centerY constraint (anchored to the
+            // close button) resolves off-screen (frame.minY < 0). Force a
+            // remove + re-add to rebuild the constraints against the restored
+            // close-button position — immediately, then once more a beat later
+            // in case the titlebar was still mid-restore.
+            if name == NSWindow.didExitFullScreenNotification {
+              self.forceReinstall(in: window)
+              DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self, weak window] in
+                guard let self, let window else { return }
+                self.forceReinstall(in: window)
+              }
+            }
           }
         }
         notificationObservers.append(observer)

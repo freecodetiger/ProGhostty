@@ -86,6 +86,10 @@ struct RootView: View {
       )
       .frame(width: 0, height: 0)
     )
+    .background(
+      TerminalWindowBindingHost { window in model.bindWindow(window) }
+        .frame(width: 0, height: 0)
+    )
     .onAppear {
       model.activateMainWindowAndFocusTerminal()
     }
@@ -238,6 +242,28 @@ private struct TerminalWindowResizeGuard: NSViewRepresentable {
         width: max(frameSize.width, frameMinimum.width),
         height: max(frameSize.height, frameMinimum.height)
       )
+    }
+  }
+}
+
+private struct TerminalWindowBindingHost: NSViewRepresentable {
+  let onWindow: (NSWindow?) -> Void
+
+  func makeNSView(context: Context) -> WindowView {
+    let view = WindowView()
+    view.onWindow = onWindow
+    return view
+  }
+
+  func updateNSView(_ view: WindowView, context: Context) {
+    view.onWindow = onWindow
+  }
+
+  final class WindowView: NSView {
+    var onWindow: ((NSWindow?) -> Void)?
+    override func viewDidMoveToWindow() {
+      super.viewDidMoveToWindow()
+      onWindow?(window)
     }
   }
 }

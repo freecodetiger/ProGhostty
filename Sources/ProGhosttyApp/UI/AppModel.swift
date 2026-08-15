@@ -6,10 +6,6 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
-  /// Weak back-link so the NSApplicationDelegate can reach running sessions when
-  /// ⌘Q / terminate needs a confirmation check.
-  static weak var shared: AppModel?
-
   struct WorkspaceRuntime: Identifiable, Equatable {
     var layout: WorkspaceLayout
     var workspace: Workspace?
@@ -54,16 +50,11 @@ final class AppModel: ObservableObject {
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
   @Published var commandLine = ""
   @Published var sideInputStore = TerminalSideInputStore.empty
-  @Published var workspaces: [Workspace] = []
-  @Published var settings: AppSettings {
-    didSet {
-      applyTerminalAppearance()
-      persistSettings()
-    }
+  var workspaces: [Workspace] { composition.workspaces }
+  var settings: AppSettings {
+    get { composition.settings }
+    set { composition.settings = newValue }
   }
-  @Published var isCheckingForUpdates = false
-  @Published var updateCheckResult: UpdateCheckResult?
-  @Published var systemNotificationsAuthorized = true
 
   /// Notification presentation state lives in NotificationPresenter (debt
   /// spec 3-7); objectWillChange is chained in init so these forwarders keep
@@ -76,50 +67,23 @@ final class AppModel: ObservableObject {
     get { notifications.statusLine }
     set { notifications.statusLine = newValue }
   }
-  /// Install/uninstall gate for the notifications toggle lives in
-  /// AgentNotifyGateController (debt spec 3-9); objectWillChange is chained in
-  /// init and these forwarders keep the SettingsView reads/bindings working.
-  private(set) lazy var agentNotifyGate = AgentNotifyGateController(
-    hookManager: agentNotificationHookManager,
-    setNotificationsEnabledSetting: { [weak self] enabled in
-      self?.settings.notificationsEnabled = enabled
-    },
-    didEnableNotifications: { [weak self] in
-      self?.requestNotificationAuthorizationOnEnable()
-    }
-  )
-
-  var agentNotifyHooksStatus: AgentNotifyHookStatus { agentNotifyGate.hooksStatus }
-  var agentNotifyHookError: String? { agentNotifyGate.hookError }
-  var isInstallingAgentNotifyHooks: Bool { agentNotifyGate.isInstalling }
-  var showAgentNotifyInstallSheet: Bool {
-    get { agentNotifyGate.showInstallSheet }
-    set { agentNotifyGate.showInstallSheet = newValue }
-  }
-  var showAgentNotifyUninstallSheet: Bool {
-    get { agentNotifyGate.showUninstallSheet }
-    set { agentNotifyGate.showUninstallSheet = newValue }
-  }
-
+  let composition: AppComposition
+  /// The terminal window this model drives; bound from the view layer.
+  weak var window: NSWindow?
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
-  private let terminalNotificationCenter: TerminalNotificationCenter
-  private let terminalNotificationSoundPlayer: TerminalNotificationSoundPlaying
-  private let agentNotificationHookManager: AgentNotificationHookManager
   private let paneWorkspaceController: PaneWorkspaceController
-  private let updateChecker = AppUpdateChecker()
   private let focusStore = TerminalFocusStore()
   private let projectInfoPopover = ProjectInfoPopover()
-  private let workspaceStore: WorkspaceStore?
-  private let settingsStore: SettingsStore
-  private let terminalActionDispatcher = TerminalActionDispatcher()
-  private let utilityWindows = UtilityWindowController()
   /// The live settings window, if open — used by the window-close guard to
   /// leave utility windows unguarded.
-  var settingsWindow: NSWindow? { utilityWindows.settingsWindow }
-  private lazy var windowSizing = TerminalWindowSizingController { [weak self] window in
-    window === self?.utilityWindows.settingsWindow
-  }
+  var settingsWindow: NSWindow? { composition.utilityWindows.settingsWindow }
+  private lazy var windowSizing = TerminalWindowSizingController(
+    isExcludedWindow: { [weak self] window in
+      window === self?.composition.utilityWindows.settingsWindow
+    },
+    windowProvider: { [weak self] in self?.window }
+  )
   private var savedLayoutSnapshots: [UUID: WorkspaceLayout] = [:]
   private var cancellables: Set<AnyCancellable> = []
   private let paneSplitAvailabilityController = PaneSplitAvailabilityController()
@@ -128,6 +92,7 @@ final class AppModel: ObservableObject {
   private var bareTokenExistenceCache: [String: (exists: Bool, timestamp: CFTimeInterval)] = [:]
   private static let bareTokenExistenceTTL: CFTimeInterval = 2.0
   private static let bareTokenExistenceCacheLimit = 2048
+  private static let sideInputHintKey = "hasUsedSideInput"
 
   struct TitlebarToast: Equatable, Sendable {
     // Unique per presentation so re-showing the *same* message/style is still a
@@ -155,23 +120,9 @@ final class AppModel: ObservableObject {
     var source: TerminalDesktopNotification.Source
   }
 
-  init(
-    terminalNotificationCenter: TerminalNotificationCenter = TerminalNotificationCenter(),
-    terminalNotificationSoundPlayer: TerminalNotificationSoundPlaying = TerminalNotificationSoundPlayer(),
-    agentNotificationHookManager: AgentNotificationHookManager = AgentNotificationHookManager()
-  ) {
-    self.terminalNotificationCenter = terminalNotificationCenter
-    self.terminalNotificationSoundPlayer = terminalNotificationSoundPlayer
-    self.agentNotificationHookManager = agentNotificationHookManager
+  init(composition: AppComposition) {
+    self.composition = composition
     DebugLog.write("AppModel init")
-    settingsStore = SettingsStore()
-    let loadedSettings = settingsStore.load()
-    settings = loadedSettings
-    if let database = Self.openDatabase() {
-      workspaceStore = WorkspaceStore(database: database)
-    } else {
-      workspaceStore = nil
-    }
     let surfaceRegistry = PTYTerminalSurfaceRegistry()
     let sessionManager = PTYTerminalSessionManager(surfaceRegistry: surfaceRegistry)
     self.surfaceRegistry = surfaceRegistry
@@ -200,77 +151,42 @@ final class AppModel: ObservableObject {
     surfaceRegistry.setFileInfoProvider { [weak self] sourceSession, target in
       self?.terminalFileInfo(target, from: sourceSession)
     }
-    AppModel.shared = self
+    composition.registerWindow(self)
     // Forwarded presenter/controller state must keep publishing through AppModel.
     notifications.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
-    agentNotifyGate.objectWillChange
+    composition.objectWillChange
       .sink { [weak self] _ in self?.objectWillChange.send() }
       .store(in: &cancellables)
     applyTerminalAppearance()
 
     Task { await consumeEvents() }
     refreshWorkspaces()
-    restorePersistedWorkspacesOrCreateDefault()
-    Task { await checkForUpdates(manual: false) }
-    refreshNotificationAuthorization()
-    refreshAgentNotifyHookStatus()
-  }
-
-  /// Refreshes whether the system has granted notification permission, so
-  /// Settings can show a low-key hint when it hasn't.
-  func refreshNotificationAuthorization() {
-    terminalNotificationCenter.refreshAuthorizationStatus { [weak self] granted in
-      self?.systemNotificationsAuthorized = granted
+    if composition.claimInitialWindow() {
+      restorePersistedWorkspacesOrCreateDefault()
+      showSideInputHintIfNeeded()
+    } else {
+      createAndActivateWorkspace(workspace: nil)
     }
   }
 
-  /// Opens the macOS System Settings notifications pane for this app.
-  func openSystemNotificationSettings() {
-    guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") else { return }
-    NSWorkspace.shared.open(url)
-  }
-
-  // MARK: Agent notify hooks (Settings gate) — thin forwarders → AgentNotifyGateController
-
-  func refreshAgentNotifyHookStatus() {
-    agentNotifyGate.refreshStatus()
-  }
-
-  func setNotificationsEnabled(_ enabled: Bool) {
-    agentNotifyGate.setNotificationsEnabled(enabled)
-  }
-
-  func confirmInstallAgentNotifyHooks() {
-    agentNotifyGate.confirmInstall()
-  }
-
-  func cancelInstallAgentNotifyHooks() {
-    agentNotifyGate.cancelInstall()
-  }
-
-  func confirmUninstallAgentNotifyHooks(removeHooks: Bool) {
-    agentNotifyGate.confirmUninstall(removeHooks: removeHooks)
-  }
-
-  func cancelUninstallAgentNotifyHooks() {
-    agentNotifyGate.cancelUninstall()
-  }
-
-  func repairAgentNotifyHooks() {
-    agentNotifyGate.repair()
-  }
-
-  private func requestNotificationAuthorizationOnEnable() {
-    terminalNotificationCenter.requestAuthorizationForEnable()
-    refreshNotificationAuthorization()
+  /// One-line onboarding hint for the side input, shown on launch until the
+  /// user first opens it. Deliberately minimal — just the shortcut, no pitch.
+  private func showSideInputHintIfNeeded() {
+    guard !UserDefaults.standard.bool(forKey: Self.sideInputHintKey) else { return }
+    let shortcut = settings.keyboardShortcuts.shortcut(for: .sideInput).displayString
+    showTitlebarToast("\(appText.sideInput) \(shortcut)", style: .info, lifetime: .transient(4.0))
   }
 
   func createAndActivateWorkspace(workspace: Workspace? = nil) {
     let cwd = AppSettings.terminalWorkingDirectory(
       workspaceRootPath: workspace?.rootPath,
       defaultWorkingDirectory: settings.defaultWorkingDirectory
+    )
+    let grid = Self.initialGridSize(
+      fontFamily: settings.fontFamily,
+      fontSize: CGFloat(settings.fontSize)
     )
 
     do {
@@ -280,7 +196,9 @@ final class AppModel: ObservableObject {
           workspace: workspace,
           layoutSnapshot: workspace.layoutSnapshot,
           fallbackShell: settings.defaultShell,
-          defaultWorkingDirectory: cwd
+          defaultWorkingDirectory: cwd,
+          rows: grid.rows,
+          cols: grid.cols
         )
       } else {
         let opened = try paneWorkspaceController.openTerminal(
@@ -342,19 +260,11 @@ final class AppModel: ObservableObject {
     workspace.layoutSnapshot = layout
     workspace.updatedAt = Date()
     do {
-      try workspaceStore?.save(workspace)
+      try composition.workspaceStore?.save(workspace)
       workspaceRuntimes[index].workspace = workspace
-      updateWorkspaceCache(workspace)
+      composition.upsertWorkspace(workspace)
     } catch {
       shellIntegrationState = "workspace save unavailable: \(error.localizedDescription)"
-    }
-  }
-
-  private func updateWorkspaceCache(_ workspace: Workspace) {
-    if let index = workspaces.firstIndex(where: { $0.id == workspace.id }) {
-      workspaces[index] = workspace
-    } else {
-      workspaces.append(workspace)
     }
   }
 
@@ -380,6 +290,7 @@ final class AppModel: ObservableObject {
 
   func openSideInput() {
     guard let selectedPaneID, let selectedSessionID else { return }
+    UserDefaults.standard.set(true, forKey: Self.sideInputHintKey)
     sideInputStore.open(paneID: selectedPaneID, sessionID: selectedSessionID)
   }
 
@@ -614,31 +525,22 @@ final class AppModel: ObservableObject {
     return cwd
   }
 
-  var appText: AppText {
-    AppText(language: settings.appLanguage)
-  }
-
-  /// Live appearance derivation: settings + the current system light/dark
-  /// state, everything else computed by AppearanceViewModel (debt spec 3-6).
-  var appearance: AppearanceViewModel {
-    let match = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])
-    return AppearanceViewModel(settings: settings, systemIsLight: match == .aqua)
-  }
-
-  var appColorScheme: ColorScheme? { appearance.appColorScheme }
-  var terminalPalette: TerminalSurfacePalette { appearance.terminalPalette }
-  var usesDarkAppearance: Bool { appearance.usesDarkAppearance }
-  var terminalBackgroundColor: NSColor { appearance.terminalBackgroundColor }
-  var configurationColorScheme: ColorScheme { appearance.configurationColorScheme }
-  var settingsThemePalette: ProGhosttySettingsThemeColors { appearance.settingsThemePalette }
-  var configurationWindowBackgroundColor: NSColor { appearance.configurationWindowBackgroundColor }
-  var configurationBarBackgroundColor: NSColor { appearance.configurationBarBackgroundColor }
-  var configurationSectionBackgroundColor: NSColor { appearance.configurationSectionBackgroundColor }
-  var configurationTextBackgroundColor: NSColor { appearance.configurationTextBackgroundColor }
-  var configurationSeparatorColor: NSColor { appearance.configurationSeparatorColor }
-  var configurationPrimaryTextColor: NSColor { appearance.configurationPrimaryTextColor }
-  var configurationSecondaryTextColor: NSColor { appearance.configurationSecondaryTextColor }
-  var configurationTertiaryTextColor: NSColor { appearance.configurationTertiaryTextColor }
+  var appText: AppText { composition.appText }
+  var appearance: AppearanceViewModel { composition.appearance }
+  var appColorScheme: ColorScheme? { composition.appColorScheme }
+  var terminalPalette: TerminalSurfacePalette { composition.terminalPalette }
+  var usesDarkAppearance: Bool { composition.usesDarkAppearance }
+  var terminalBackgroundColor: NSColor { composition.terminalBackgroundColor }
+  var configurationColorScheme: ColorScheme { composition.configurationColorScheme }
+  var settingsThemePalette: ProGhosttySettingsThemeColors { composition.settingsThemePalette }
+  var configurationWindowBackgroundColor: NSColor { composition.configurationWindowBackgroundColor }
+  var configurationBarBackgroundColor: NSColor { composition.configurationBarBackgroundColor }
+  var configurationSectionBackgroundColor: NSColor { composition.configurationSectionBackgroundColor }
+  var configurationTextBackgroundColor: NSColor { composition.configurationTextBackgroundColor }
+  var configurationSeparatorColor: NSColor { composition.configurationSeparatorColor }
+  var configurationPrimaryTextColor: NSColor { composition.configurationPrimaryTextColor }
+  var configurationSecondaryTextColor: NSColor { composition.configurationSecondaryTextColor }
+  var configurationTertiaryTextColor: NSColor { composition.configurationTertiaryTextColor }
 
   var selectedSessionID: TerminalSessionID? {
     activeWorkspace?.selectedSessionID(focusStore: focusStore)
@@ -987,7 +889,7 @@ final class AppModel: ObservableObject {
 
   func createWorkspace(name: String, rootPath: String?) {
     let workspace = Workspace(name: name.isEmpty ? "Workspace" : name, rootPath: rootPath)
-    try? workspaceStore?.save(workspace)
+    try? composition.workspaceStore?.save(workspace)
     refreshWorkspaces()
   }
 
@@ -997,7 +899,7 @@ final class AppModel: ObservableObject {
       defaultWorkingDirectory: settings.defaultWorkingDirectory
     )
     let workspace = Workspace(name: TitleFormatting.normalizedWorkspaceName(name), rootPath: resolvedRootPath)
-    try? workspaceStore?.save(workspace)
+    try? composition.workspaceStore?.save(workspace)
     refreshWorkspaces()
     createAndActivateWorkspace(workspace: workspace)
   }
@@ -1012,7 +914,7 @@ final class AppModel: ObservableObject {
     if let runtime {
       closeWorkspaceRuntime(id: runtime.id)
     }
-    try? workspaceStore?.delete(id: workspace.id)
+    try? composition.workspaceStore?.delete(id: workspace.id)
     refreshWorkspaces()
   }
 
@@ -1030,7 +932,7 @@ final class AppModel: ObservableObject {
     if let runtime {
       closeWorkspaceRuntime(id: runtime.id)
     }
-    try? workspaceStore?.delete(id: workspace.id)
+    try? composition.workspaceStore?.delete(id: workspace.id)
     refreshWorkspaces()
   }
 
@@ -1076,17 +978,8 @@ final class AppModel: ObservableObject {
       layout.workspaceId = workspace.id
       workspace.layoutSnapshot = layout
     }
-    try? workspaceStore?.save(workspace)
+    try? composition.workspaceStore?.save(workspace)
     refreshWorkspaces()
-  }
-
-  func saveSettings() {
-    persistSettings()
-    showTitlebarToast(appText.settingsSavedToast, style: .success, lifetime: .settingsSaved)
-  }
-
-  private func persistSettings() {
-    try? settingsStore.save(settings)
   }
 
   private func rememberActiveWorkspaceContentSize() {
@@ -1104,42 +997,6 @@ final class AppModel: ObservableObject {
 
   private func terminalWindowMaximumContentSize() -> NSSize? {
     windowSizing.maximumContentSize()
-  }
-
-  func checkForUpdates(manual: Bool) async {
-    if manual {
-      isCheckingForUpdates = true
-      updateCheckResult = nil
-    }
-    defer {
-      if manual {
-        isCheckingForUpdates = false
-      }
-    }
-
-    do {
-      let availability = try await updateChecker.check(currentVersion: appShortVersionString())
-      switch availability {
-      case .upToDate:
-        if manual {
-          updateCheckResult = .upToDate
-        }
-      case .available(let update):
-        if manual {
-          updateCheckResult = .available(update)
-        } else {
-          showTitlebarToast(
-            "\(appText.updateAvailableToast) \(update.version)",
-            style: .update(update.releaseURL),
-            lifetime: .persistent
-          )
-        }
-      }
-    } catch {
-      if manual {
-        updateCheckResult = .failed
-      }
-    }
   }
 
   func openTitlebarToastAction() {
@@ -1160,46 +1017,16 @@ final class AppModel: ObservableObject {
     restoreTerminalKeyboardFocus()
   }
 
-  func resetSettings() {
-    settings = .defaults
-    saveSettings()
-  }
-
-  func closeSettingsWindow(_ window: NSWindow? = nil) {
-    utilityWindows.closeSettings(window)
-  }
-
-  func appVersionString() -> String {
-    appShortVersionString()
-  }
-
-  private func appShortVersionString() -> String {
-    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
-  }
-
   func openSettingsWindow() {
-    utilityWindows.openSettings(
-      makeContent: {
-        NSHostingController(
-          rootView: SettingsView()
-            .environmentObject(self)
-            .preferredColorScheme(configurationColorScheme)
-        )
-      },
-      applyChrome: { [weak self] window in
-        self?.applyConfigurationWindowAppearance(to: window)
-      }
-    )
+    composition.openSettingsWindow()
   }
 
-  /// Sidebar / split layout can briefly restore the system "Settings" title; cheap re-hide.
-  func reassertSettingsWindowChrome() {
-    utilityWindows.reassertSettingsChrome { [weak self] window in
-      self?.applyConfigurationWindowAppearance(to: window)
-    }
-  }
-
-  private func applyTerminalAppearance() {
+  func applyTerminalAppearance() {
+    // Only push palette/font/renderer into this window's surfaces. Window chrome
+    // is applied by TerminalChromeSyncView / WorkspaceTitlebarView (which target
+    // the owning view.window after setup). Applying chrome here ran during
+    // per-window AppModel.init, before SwiftUI finished building the titlebar,
+    // which corrupted the theme frame and hid the traffic lights.
     surfaceRegistry.applyPalette(terminalPalette)
     surfaceRegistry.applyFont(
       family: settings.fontFamily,
@@ -1209,27 +1036,6 @@ final class AppModel: ObservableObject {
     surfaceRegistry.applyRendererOptions(settings.terminalRendererOptions)
     surfaceRegistry.applySemanticLinkText(appText.semanticLinkText)
     applyFocusedTerminalSurface()
-    for window in NSApp.windows
-      where window !== utilityWindows.settingsWindow
-    {
-      ProGhosttyWindowAppearance.applyTerminalChrome(
-        to: window,
-        backgroundColor: terminalBackgroundColor,
-        usesDarkAppearance: usesDarkAppearance
-      )
-    }
-    if let window = utilityWindows.settingsWindow {
-      applyConfigurationWindowAppearance(to: window)
-    }
-  }
-
-  private func applyConfigurationWindowAppearance(to window: NSWindow) {
-    let background = settingsThemePalette.windowBackground
-    ProGhosttyWindowAppearance.applyConfigurationChrome(
-      to: window,
-      backgroundColor: background,
-      usesDarkAppearance: usesDarkAppearance
-    )
   }
 
   private func applyFocusedTerminalSurface() {
@@ -1243,12 +1049,32 @@ final class AppModel: ObservableObject {
     }
   }
 
+  private var windowCloseObserver: AnyCancellable?
+
+  func bindWindow(_ window: NSWindow?) {
+    self.window = window
+    windowCloseObserver?.cancel()
+    windowCloseObserver = nil
+    guard let window else { return }
+    windowCloseObserver = NotificationCenter.default
+      .publisher(for: NSWindow.willCloseNotification, object: window)
+      .sink { [weak self] _ in self?.handleWindowClosed() }
+  }
+
+  private func handleWindowClosed() {
+    let runtimes = workspaceRuntimes
+    for runtime in runtimes {
+      _ = paneWorkspaceController.closeWorkspace(workspaceID: runtime.id)
+    }
+    workspaceRuntimes.removeAll()
+    composition.unregisterWindow(self)
+  }
+
   func activateMainWindowAndFocusTerminal() {
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
-    NSApp.windows.first { window in
-      window.title == "ProGhostty" || window.contentViewController != nil
-    }?.makeKeyAndOrderFront(nil)
+    let target = window ?? NSApp.windows.first { $0.title == "ProGhostty" || $0.contentViewController != nil }
+    target?.makeKeyAndOrderFront(nil)
     restoreTerminalKeyboardFocus()
   }
 
@@ -1258,6 +1084,12 @@ final class AppModel: ObservableObject {
     lifetime: ProGhosttyTitlebarToastLifetime = .transient(1.8)
   ) {
     notifications.showTitlebarToast(message, style: style, lifetime: lifetime)
+  }
+
+  /// Broadcast entry point for app-global toasts (update available, settings
+  /// saved) so AppComposition can surface them in each window's titlebar.
+  func presentTitlebarToast(_ message: String, style: TitlebarToast.Style, lifetime: ProGhosttyTitlebarToastLifetime) {
+    showTitlebarToast(message, style: style, lifetime: lifetime)
   }
 
   private var effectiveThemeName: String {
@@ -1534,7 +1366,7 @@ final class AppModel: ObservableObject {
   }
 
   private func refreshWorkspaces() {
-    workspaces = (try? workspaceStore?.all()) ?? []
+    composition.refreshWorkspaces()
     syncWorkspaceSwitcherState()
   }
 
@@ -1568,13 +1400,34 @@ final class AppModel: ObservableObject {
   }
 
   private func sessionConfig(workspace: Workspace?, workingDirectory: String?) -> TerminalSessionConfig {
-    TerminalSessionConfig(
+    let grid = Self.initialGridSize(
+      fontFamily: settings.fontFamily,
+      fontSize: CGFloat(settings.fontSize)
+    )
+    return TerminalSessionConfig(
       shellPath: workspace?.defaultShell ?? settings.defaultShell,
       workingDirectory: workingDirectory,
       environment: [:],
-      rows: 24,
-      cols: 80,
+      rows: grid.rows,
+      cols: grid.cols,
       workspaceId: workspace?.id
+    )
+  }
+
+  /// Initial PTY grid size derived from the default window content size and the
+  /// configured font, so the shell's `$COLUMNS`/`$LINES` are correct from the
+  /// first prompt instead of the old hardcoded 24×80.
+  private static func initialGridSize(fontFamily: String, fontSize: CGFloat) -> TerminalGridSize {
+    let surfaceSize = CGSize(
+      width: ProGhosttyWindowSizing.defaultContentWidth,
+      height: ProGhosttyWindowSizing.defaultContentHeight
+    )
+    let scale = NSScreen.main?.backingScaleFactor ?? 2
+    return TerminalGridSizer.initialGridSize(
+      surfaceSize: surfaceSize,
+      fontFamily: fontFamily,
+      fontSize: fontSize,
+      scale: scale
     )
   }
 
@@ -1683,7 +1536,7 @@ final class AppModel: ObservableObject {
 
   private func closeTerminalWindowIfNoWorkspace() {
     guard workspaceRuntimes.isEmpty else { return }
-    guard let window = NSApp.windows.first(where: { !($0 is NSPanel) && $0 !== settingsWindow }) else { return }
+    guard let window else { return }
     window.performClose(nil)
   }
 
@@ -1693,9 +1546,9 @@ final class AppModel: ObservableObject {
       case .inApp(let notification):
         showInAppNotification(notification, session: session)
       case .sound:
-        terminalNotificationSoundPlayer.playNotificationSound()
+        composition.terminalNotificationSoundPlayer.playNotificationSound()
       case .desktop(let notification):
-        terminalNotificationCenter.showDesktopNotification(notification, session: session)
+        composition.terminalNotificationCenter.showDesktopNotification(notification, session: session)
       }
     }
   }
@@ -1757,22 +1610,7 @@ final class AppModel: ObservableObject {
     ) else {
       return
     }
-    terminalActionDispatcher.dispatch(message, in: self)
+    composition.terminalActionDispatcher.dispatch(message, in: self)
   }
 
-  private static func openDatabase() -> AppDatabase? {
-    let appSupport = FileManager.default.urls(
-      for: .applicationSupportDirectory, in: .userDomainMask
-    ).first!
-    .appendingPathComponent("ProGhostty", isDirectory: true)
-    try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-
-    do {
-      return try AppDatabase(path: appSupport.appendingPathComponent("proghostty.sqlite").path)
-    } catch {
-      let fallback = FileManager.default.temporaryDirectory
-        .appendingPathComponent("proghostty-\(UUID().uuidString).sqlite")
-      return try? AppDatabase(path: fallback.path)
-    }
-  }
 }

@@ -3,7 +3,7 @@ import ProGhosttyCore
 import SwiftUI
 
 struct SettingsView: View {
-  @EnvironmentObject private var model: AppModel
+  @EnvironmentObject private var model: AppComposition
   @State private var shortcutRecorderState = ShortcutRecorderState(settings: .defaults)
   @State private var fontSearchText = ""
   @State private var showsAllFonts = false
@@ -911,7 +911,7 @@ private extension NSView {
 }
 
 private struct ShortcutSettingsRow: View {
-  @EnvironmentObject private var model: AppModel
+  @EnvironmentObject private var model: AppComposition
   let title: String
   let binding: KeyboardShortcutBinding
   let isRecording: Bool
@@ -1050,7 +1050,7 @@ private extension NSEvent {
 }
 
 private struct FontPreview: View {
-  @EnvironmentObject private var model: AppModel
+  @EnvironmentObject private var model: AppComposition
   let title: String
   let sample: String
   let detail: String
@@ -1089,7 +1089,7 @@ private struct FontPreview: View {
 }
 
 private struct SettingsSection<Content: View>: View {
-  @EnvironmentObject private var model: AppModel
+  @EnvironmentObject private var model: AppComposition
   let title: String
   @ViewBuilder var content: Content
 
@@ -1119,7 +1119,7 @@ private struct SettingsSection<Content: View>: View {
 }
 
 private struct SettingsRow<Content: View>: View {
-  @EnvironmentObject private var model: AppModel
+  @EnvironmentObject private var model: AppComposition
   let title: String
   @ViewBuilder var content: Content
 

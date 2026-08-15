@@ -5,90 +5,141 @@ import SwiftUI
 @main
 struct ProGhosttyApp: App {
   @NSApplicationDelegateAdaptor(ProGhosttyAppDelegate.self) private var appDelegate
-  @StateObject private var model = AppModel()
+  @StateObject private var composition = AppComposition()
 
   var body: some Scene {
-    Window("ProGhostty", id: "main") {
-      RootView()
-        .environmentObject(model)
-        .frame(
-          minWidth: ProGhosttyWindowSizing.minimumContentWidth,
-          minHeight: ProGhosttyWindowSizing.minimumContentHeight
-        )
+    WindowGroup(id: "main") {
+      TerminalWindowRoot(composition: composition)
     }
     .defaultSize(
       width: ProGhosttyWindowSizing.defaultContentWidth,
       height: ProGhosttyWindowSizing.defaultContentHeight
     )
     .commands {
-      CommandGroup(replacing: .newItem) {
-        if ProGhosttyWindowPolicy.supportsMultipleTerminalWindows {
-          Button("New Window") {}
-        }
-      }
-
-      CommandGroup(replacing: .appSettings) {
-        Button(model.appText.settings + "...") {
-          model.openSettingsWindow()
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .openSettings).swiftUIShortcut)
-      }
-
-      CommandMenu("Workspace") {
-        Button("Switch Workspace...") {
-          model.openWorkspaceSwitcher()
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .openWorkspaceSwitcher).swiftUIShortcut)
-      }
-
-      CommandMenu("Pane") {
-        Button("Split Right") {
-          model.splitSelectedTerminal(axis: .horizontal)
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .splitRight).swiftUIShortcut)
-
-        Button("Split Down") {
-          model.splitSelectedTerminal(axis: .vertical)
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .splitDown).swiftUIShortcut)
-
-        Divider()
-
-        Button("Close Pane") {
-          model.closeSelectedPane()
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .closePane).swiftUIShortcut)
-
-        Divider()
-
-        Button("Rename Pane") {
-          model.startRenamePane()
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .renamePane).swiftUIShortcut)
-
-        Divider()
-
-        Button("Focus Previous Pane") {
-          model.focusNeighbor(offset: -1)
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .focusPreviousPane).swiftUIShortcut)
-
-        Button("Focus Next Pane") {
-          model.focusNeighbor(offset: 1)
-        }
-        .keyboardShortcut(model.settings.keyboardShortcuts.shortcut(for: .focusNextPane).swiftUIShortcut)
-      }
-
+      ProGhosttyCommands(composition: composition)
     }
+
     Settings {
       SettingsView()
-        .environmentObject(model)
-        .preferredColorScheme(model.appColorScheme)
+        .environmentObject(composition)
+        .preferredColorScheme(composition.appColorScheme)
+    }
+  }
+}
+
+/// Per-window root: owns the window's `AppModel` (terminal session stack +
+/// workspace runtime) and publishes it as the focused scene value so menu
+/// commands route to the key window.
+@MainActor
+private struct TerminalWindowRoot: View {
+  @StateObject private var model: AppModel
+  @Environment(\.openWindow) private var openWindow
+
+  init(composition: AppComposition) {
+    _model = StateObject(wrappedValue: AppModel(composition: composition))
+  }
+
+  var body: some View {
+    RootView()
+      .environmentObject(model)
+      .frame(
+        minWidth: ProGhosttyWindowSizing.minimumContentWidth,
+        minHeight: ProGhosttyWindowSizing.minimumContentHeight
+      )
+      .focusedSceneValue(\.terminalWindowModel, model)
+      .onAppear {
+        ProGhosttyAppDelegate.openNewWindow = { openWindow(id: "main") }
+      }
+  }
+}
+
+private struct TerminalWindowModelKey: FocusedValueKey {
+  typealias Value = AppModel
+}
+
+extension FocusedValues {
+  var terminalWindowModel: AppModel? {
+    get { self[TerminalWindowModelKey.self] }
+    set { self[TerminalWindowModelKey.self] = newValue }
+  }
+}
+
+private struct ProGhosttyCommands: Commands {
+  @FocusedValue(\.terminalWindowModel) private var focusedModel
+  @Environment(\.openWindow) private var openWindow
+  let composition: AppComposition
+
+  var body: some Commands {
+    CommandGroup(replacing: .newItem) {
+      Button("New Window") {
+        openWindow(id: "main")
+      }
+      .keyboardShortcut("n", modifiers: .command)
+    }
+
+    CommandGroup(replacing: .appSettings) {
+      Button(composition.appText.settings + "...") {
+        composition.openSettingsWindow()
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .openSettings).swiftUIShortcut)
+    }
+
+    CommandMenu("Workspace") {
+      Button("Switch Workspace...") {
+        focusedModel?.openWorkspaceSwitcher()
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .openWorkspaceSwitcher).swiftUIShortcut)
+    }
+
+    CommandMenu("Pane") {
+      Button(composition.appText.sideInput) {
+        focusedModel?.openSideInput()
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .sideInput).swiftUIShortcut)
+
+      Button("Split Right") {
+        focusedModel?.splitSelectedTerminal(axis: .horizontal)
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .splitRight).swiftUIShortcut)
+
+      Button("Split Down") {
+        focusedModel?.splitSelectedTerminal(axis: .vertical)
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .splitDown).swiftUIShortcut)
+
+      Divider()
+
+      Button("Close Pane") {
+        focusedModel?.closeSelectedPane()
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .closePane).swiftUIShortcut)
+
+      Divider()
+
+      Button("Rename Pane") {
+        focusedModel?.startRenamePane()
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .renamePane).swiftUIShortcut)
+
+      Divider()
+
+      Button("Focus Previous Pane") {
+        focusedModel?.focusNeighbor(offset: -1)
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .focusPreviousPane).swiftUIShortcut)
+
+      Button("Focus Next Pane") {
+        focusedModel?.focusNeighbor(offset: 1)
+      }
+      .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .focusNextPane).swiftUIShortcut)
     }
   }
 }
 
 final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
+  /// Bridges SwiftUI's `openWindow` to AppKit (Dock menu). Set once from
+  /// `TerminalWindowRoot.onAppear`. Main-thread only.
+  nonisolated(unsafe) static var openNewWindow: (() -> Void)?
   private var windowCloseGuard: TerminalWindowCloseGuard?
   /// True while the quit confirmation modal is up: duplicate terminate/close
   /// requests (the modal pumps the run loop) are dropped instead of stacking
@@ -111,15 +162,27 @@ final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
     // last window terminates the app, so this is the quit confirmation moved
     // ahead of the close instead of after it.
     windowCloseGuard = TerminalWindowCloseGuard { [weak self] _ in
-      guard let self, let model = AppModel.shared else { return true }
-      guard model.hasAnyForegroundSession() else { return true }
+      guard let self, let composition = AppComposition.shared else { return true }
+      guard composition.hasAnyForegroundSession() else { return true }
       if self.isConfirmingQuit { return false }
       self.isConfirmingQuit = true
       defer { self.isConfirmingQuit = false }
-      guard model.confirmQuitWithForegroundProcess() else { return false }
+      guard composition.confirmQuitWithForegroundProcess() else { return false }
       self.quitApprovedByWindowClose = true
       return true
     }
+  }
+
+  func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+    let menu = NSMenu()
+    let newWindow = NSMenuItem(title: "New Window", action: #selector(newWindowAction), keyEquivalent: "")
+    newWindow.target = self
+    menu.addItem(newWindow)
+    return menu
+  }
+
+  @objc private func newWindowAction() {
+    Self.openNewWindow?()
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -127,13 +190,13 @@ final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    guard let model = AppModel.shared else { return .terminateNow }
+    guard let composition = AppComposition.shared else { return .terminateNow }
     // Already confirmed in the window-close guard — don't ask twice.
     if quitApprovedByWindowClose {
       quitApprovedByWindowClose = false
       return .terminateNow
     }
-    guard model.hasAnyForegroundSession() else { return .terminateNow }
+    guard composition.hasAnyForegroundSession() else { return .terminateNow }
     // A confirmation modal is already up (it pumps the run loop, so repeated
     // terminate requests can arrive re-entrantly) — refuse instead of
     // stacking another dialog.
@@ -142,7 +205,7 @@ final class ProGhosttyAppDelegate: NSObject, NSApplicationDelegate {
     defer { isConfirmingQuit = false }
     // The confirmation dialog blocks the main run-loop until answered, so we
     // can return a synchronous reply.
-    if model.confirmQuitWithForegroundProcess() {
+    if composition.confirmQuitWithForegroundProcess() {
       return .terminateNow
     }
     return .terminateCancel
