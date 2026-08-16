@@ -1538,6 +1538,11 @@ final class AppModel: ObservableObject {
         ? AutoTitleSanitizer.sanitize(title)
         : nil
       updateReportedTitle(sanitized, for: session)
+    case .clipboardWrite(_, let content):
+      // OSC 52 clipboard write from a remote program (tmux/SSH). Land it in the
+      // system clipboard so a remote copy becomes a local paste.
+      NSPasteboard.general.clearContents()
+      NSPasteboard.general.setString(content, forType: .string)
     case .osc(let session, let sequence):
       shellIntegrationState = "available"
       handleProGhosttyControlOsc(session: session, sequence: sequence)

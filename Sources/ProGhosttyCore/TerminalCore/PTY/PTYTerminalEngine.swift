@@ -663,6 +663,9 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
       if let title = TitleTracker.title(from: sequence) {
         continuation.yield(.titleChanged(session: id, title: title))
       }
+      if let clipboard = ClipboardTracker.content(from: sequence) {
+        continuation.yield(.clipboardWrite(session: id, content: clipboard))
+      }
     }
 
     outputBatchCoordinator.receive(data, session: id, delivery: delivery)

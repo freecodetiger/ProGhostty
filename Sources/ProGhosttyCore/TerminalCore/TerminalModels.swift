@@ -49,6 +49,7 @@ public enum TerminalEvent: Sendable {
   case desktopNotification(session: TerminalSessionID, notification: TerminalDesktopNotification)
   case cwdChanged(session: TerminalSessionID, cwd: String)
   case titleChanged(session: TerminalSessionID, title: String)
+  case clipboardWrite(session: TerminalSessionID, content: String)
   case error(session: TerminalSessionID, message: String)
 }
 
