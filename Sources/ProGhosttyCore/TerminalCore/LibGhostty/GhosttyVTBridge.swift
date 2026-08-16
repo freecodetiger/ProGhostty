@@ -324,6 +324,12 @@ public final class GhosttyVTBridge {
   private var handle: OpaquePointer?
   private let lock = NSLock()
 
+  /// Query responses the terminal generated (DSR, device attributes, mode
+  /// reports, …) that must be written back to the pty. Set by the PTY layer.
+  public var writePtyHandler: (@Sendable (Data) -> Void)?
+  /// Fired when the terminal receives BEL (0x07). Set by the PTY layer.
+  public var bellHandler: (@Sendable () -> Void)?
+
   public init(cols: Int = 80, rows: Int = 24, maxScrollback: Int = 10_000) throws {
     var handle: OpaquePointer?
     let result = proghostty_vt_new(UInt16(cols), UInt16(rows), maxScrollback, &handle)
@@ -331,6 +337,35 @@ public final class GhosttyVTBridge {
       throw BridgeError.createFailed(result)
     }
     self.handle = handle
+    proghostty_vt_set_write_pty_callback(
+      handle,
+      { userdata, data, len in
+        guard let userdata, let data, len > 0 else { return }
+        let bridge = Unmanaged<GhosttyVTBridge>.fromOpaque(userdata).takeUnretainedValue()
+        bridge.handleWritePty(data, len)
+      },
+      Unmanaged.passUnretained(self).toOpaque()
+    )
+    proghostty_vt_set_bell_callback(
+      handle,
+      { userdata in
+        guard let userdata else { return }
+        let bridge = Unmanaged<GhosttyVTBridge>.fromOpaque(userdata).takeUnretainedValue()
+        bridge.handleBell()
+      },
+      Unmanaged.passUnretained(self).toOpaque()
+    )
+  }
+
+  /// Called on the VT queue, synchronously during `write`. Must not take the
+  /// lock (the caller already holds it). Forwards the response bytes to the
+  /// PTY layer.
+  private func handleWritePty(_ data: UnsafePointer<UInt8>, _ len: Int) {
+    writePtyHandler?(Data(bytes: data, count: len))
+  }
+
+  private func handleBell() {
+    bellHandler?()
   }
 
   deinit {

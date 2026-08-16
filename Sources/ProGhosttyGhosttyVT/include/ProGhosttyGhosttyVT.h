@@ -132,6 +132,14 @@ typedef struct {
 int proghostty_vt_new(uint16_t cols, uint16_t rows, size_t max_scrollback, ProGhosttyVT **out);
 void proghostty_vt_free(ProGhosttyVT *vt);
 void proghostty_vt_write(ProGhosttyVT *vt, const uint8_t *data, size_t len);
+void proghostty_vt_set_write_pty_callback(
+  ProGhosttyVT *vt,
+  void (*callback)(void *userdata, const uint8_t *data, size_t len),
+  void *userdata);
+void proghostty_vt_set_bell_callback(
+  ProGhosttyVT *vt,
+  void (*callback)(void *userdata),
+  void *userdata);
 int proghostty_vt_resize(ProGhosttyVT *vt, uint16_t cols, uint16_t rows);
 void proghostty_vt_scroll_viewport(ProGhosttyVT *vt, intptr_t delta_rows);
 int proghostty_vt_scrollbar(ProGhosttyVT *vt, ProGhosttyVTScrollbar *out);
