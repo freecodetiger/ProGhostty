@@ -66,6 +66,33 @@ struct GhosttyVTBridgeTests {
     #expect(bridge.isFocusReportingActive())
   }
 
+  @Test func cursorPositionQueryWritesResponse() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    let capture = HandlerCapture()
+    bridge.writePtyHandler = { capture.responses.append($0) }
+    bridge.write(Data("\u{1B}[6n".utf8))
+    #expect(capture.responses.count == 1)
+    let text = String(decoding: capture.responses[0], as: UTF8.self)
+    #expect(text.hasPrefix("\u{1B}["))
+    #expect(text.hasSuffix("R"))
+  }
+
+  @Test func deviceStatusQueryWritesResponse() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    let capture = HandlerCapture()
+    bridge.writePtyHandler = { capture.responses.append($0) }
+    bridge.write(Data("\u{1B}[5n".utf8))
+    #expect(capture.responses.count == 1)
+  }
+
+  @Test func bellFiresHandler() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    let capture = HandlerCapture()
+    bridge.bellHandler = { capture.bellCount += 1 }
+    bridge.write(Data([0x07]))
+    #expect(capture.bellCount == 1)
+  }
+
   @Test func encodedPasteUsesBracketedPasteModeWhenTerminalRequestsIt() throws {
     let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
     bridge.write(Data("\u{1B}[?2004h".utf8))
@@ -582,4 +609,10 @@ private extension GhosttyTerminalCellRow {
   func text(cols: Int) -> String {
     cells.prefix(cols).map { String($0.scalar) }.joined()
   }
+}
+
+/// Thread-safe capture for the bridge's @Sendable effect handlers.
+private final class HandlerCapture: @unchecked Sendable {
+  var responses: [Data] = []
+  var bellCount = 0
 }

@@ -411,6 +411,18 @@ public final class PTYTerminalSessionManager: TerminalSessionManager {
     let result = try PTYLaunch.spawn(config: launchConfig)
     surfaceRegistry.createSurface(session: id)
     let vtBridge = try GhosttyVTBridge(cols: launchConfig.cols, rows: launchConfig.rows)
+    // Terminal query responses (DSR, device attributes, mode reports, …) are
+    // written straight back to the pty fd; BEL rings the system beep.
+    let writeFD = result.fileDescriptor
+    vtBridge.writePtyHandler = { data in
+      data.withUnsafeBytes { bytes in
+        guard let base = bytes.baseAddress else { return }
+        _ = Darwin.write(writeFD, base, bytes.count)
+      }
+    }
+    vtBridge.bellHandler = {
+      DispatchQueue.main.async { NSSound.beep() }
+    }
     let readSource = makeReadSource(session: id, fileDescriptor: result.fileDescriptor)
     let waitTimer = makeWaitTimer(session: id, pid: result.pid)
     sessions[id] = SessionState(
@@ -1915,21 +1927,16 @@ public class PTYGridView: NSView {
     if isComposingMarkedText {
       return
     }
+    // Only reached for IME-committed text commands (newline/backspace/tab while
+    // composing). Modifier-bearing variants of these keys are already routed
+    // through the key encoder in keyDown, so send the bare control bytes here.
     switch selector {
     case #selector(insertNewline(_:)):
-      if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
-        inputHandler?(Data([0x0A]))
-      } else {
-        inputHandler?(Data([0x0D]))
-      }
+      inputHandler?(Data([0x0D]))
     case #selector(deleteBackward(_:)):
       inputHandler?(Data([0x7F]))
     case #selector(insertTab(_:)):
-      if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
-        inputHandler?(Data("\u{1B}[Z".utf8))
-      } else {
-        inputHandler?(Data([0x09]))
-      }
+      inputHandler?(Data([0x09]))
     default:
       super.doCommand(by: selector)
     }

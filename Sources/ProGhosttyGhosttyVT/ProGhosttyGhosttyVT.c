@@ -15,7 +15,36 @@ struct ProGhosttyVT {
   GhosttyTerminal terminal;
   GhosttyRenderState render_state;
   GhosttyKeyEncoder key_encoder;
+  // Swift-set callbacks for terminal effects. write_pty delivers query
+  // responses (DSR, device attributes, mode reports, …) that the embedder must
+  // write back to the pty; bell fires on BEL (0x07).
+  void (*write_pty_fn)(void *userdata, const uint8_t *data, size_t len);
+  void *write_pty_userdata;
+  void (*bell_fn)(void *userdata);
+  void *bell_userdata;
 };
+
+// WRITE_PTY effect: the terminal produced bytes to write back to the pty (query
+// responses). Forwards to the Swift-set callback.
+static void write_pty_effect(GhosttyTerminal terminal, void *userdata,
+                             const uint8_t *data, size_t len) {
+  (void)terminal;
+  ProGhosttyVT *vt = userdata;
+  if (vt == NULL || vt->write_pty_fn == NULL || data == NULL || len == 0) {
+    return;
+  }
+  vt->write_pty_fn(vt->write_pty_userdata, data, len);
+}
+
+// BELL effect: the terminal received a BEL (0x07). Forwards to Swift.
+static void bell_effect(GhosttyTerminal terminal, void *userdata) {
+  (void)terminal;
+  ProGhosttyVT *vt = userdata;
+  if (vt == NULL || vt->bell_fn == NULL) {
+    return;
+  }
+  vt->bell_fn(vt->bell_userdata);
+}
 
 int proghostty_vt_new(uint16_t cols, uint16_t rows, size_t max_scrollback, ProGhosttyVT **out) {
   if (out == NULL || cols == 0 || rows == 0) {
@@ -38,6 +67,13 @@ int proghostty_vt_new(uint16_t cols, uint16_t rows, size_t max_scrollback, ProGh
     free(vt);
     return result;
   }
+
+  // Route terminal effects (query responses, bell) through the Swift-set
+  // callbacks. Query responses use libghostty-vt's built-in defaults for
+  // device attributes / XTVERSION when those specific callbacks aren't set.
+  ghostty_terminal_set(vt->terminal, GHOSTTY_TERMINAL_OPT_USERDATA, vt);
+  ghostty_terminal_set(vt->terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY, (const void *)write_pty_effect);
+  ghostty_terminal_set(vt->terminal, GHOSTTY_TERMINAL_OPT_BELL, (const void *)bell_effect);
 
   result = ghostty_render_state_new(NULL, &vt->render_state);
   if (result != GHOSTTY_SUCCESS) {
@@ -73,6 +109,28 @@ void proghostty_vt_write(ProGhosttyVT *vt, const uint8_t *data, size_t len) {
     return;
   }
   ghostty_terminal_vt_write(vt->terminal, data, len);
+}
+
+void proghostty_vt_set_write_pty_callback(
+  ProGhosttyVT *vt,
+  void (*callback)(void *userdata, const uint8_t *data, size_t len),
+  void *userdata) {
+  if (vt == NULL) {
+    return;
+  }
+  vt->write_pty_fn = callback;
+  vt->write_pty_userdata = userdata;
+}
+
+void proghostty_vt_set_bell_callback(
+  ProGhosttyVT *vt,
+  void (*callback)(void *userdata),
+  void *userdata) {
+  if (vt == NULL) {
+    return;
+  }
+  vt->bell_fn = callback;
+  vt->bell_userdata = userdata;
 }
 
 int proghostty_vt_resize(ProGhosttyVT *vt, uint16_t cols, uint16_t rows) {
