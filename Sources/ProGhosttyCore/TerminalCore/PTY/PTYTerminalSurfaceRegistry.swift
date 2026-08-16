@@ -105,6 +105,15 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     textBackend.setActivationHandler { [weak self] in
       self?.activationHandler?(id)
     }
+    textBackend.setKeyEncodeHandler { [weak self] event in
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return nil }
+      do {
+        return try bridge.encodedKey(event)
+      } catch {
+        PTYRenderDebugLog.write("key-encode-error session=\(id) error=\(error)")
+        return nil
+      }
+    }
     let textView = textBackend.textView
     let scrollView = textBackend.scrollView
 
@@ -225,6 +234,15 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
         return try bridge.encodedAlternateScroll(wheelUp: wheelUp, count: count)
       } catch {
         PTYRenderDebugLog.write("alternate-scroll-encode-error session=\(id) error=\(error)")
+        return nil
+      }
+    }
+    gridView.terminalKeyEncodeHandler = { [weak self] event in
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return nil }
+      do {
+        return try bridge.encodedKey(event)
+      } catch {
+        PTYRenderDebugLog.write("key-encode-error session=\(id) error=\(error)")
         return nil
       }
     }

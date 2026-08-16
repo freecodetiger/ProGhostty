@@ -90,6 +90,12 @@ typedef enum {
   PROGHOSTTY_VT_MOUSE_ACTION_MOTION = 2,
 } ProGhosttyVTMouseAction;
 
+// Key events are encoded by libghostty-vt's key encoder, mirroring Ghostty's
+// macOS input path: the caller passes the raw macOS virtual keycode
+// (`NSEvent.keyCode`), a full GhosttyMods bitmask, and the generated text. The
+// shim maps the keycode to a physical Ghostty key (Chromium's Mac table) and
+// sets the event's utf8/unshifted-codepoint before encoding.
+
 typedef enum {
   PROGHOSTTY_VT_MOUSE_BUTTON_NONE = 0,
   PROGHOSTTY_VT_MOUSE_BUTTON_LEFT = 1,
@@ -158,6 +164,15 @@ int proghostty_vt_encode_alternate_scroll(
   ProGhosttyVT *vt,
   bool wheel_up,
   size_t count,
+  uint8_t **out,
+  size_t *out_len);
+int proghostty_vt_encode_key(
+  ProGhosttyVT *vt,
+  uint16_t native_keycode,
+  uint16_t mods,
+  const uint8_t *utf8,
+  size_t utf8_len,
+  uint32_t unshifted_codepoint,
   uint8_t **out,
   size_t *out_len);
 void proghostty_vt_free_bytes(uint8_t *ptr, size_t len);

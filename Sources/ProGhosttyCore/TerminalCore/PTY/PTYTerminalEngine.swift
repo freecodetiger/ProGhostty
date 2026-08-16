@@ -15,56 +15,71 @@ enum TerminalScrollAnchor {
   }
 }
 
-func terminalControlInputData(for event: NSEvent) -> Data? {
-  if event.modifierFlags.contains(.command) {
-    return nil
-  }
+/// Builds a full key event for libghostty-vt's key encoder, mirroring Ghostty's
+/// macOS input path: raw virtual keycode, full modifier bitmask, the generated
+/// text (control/PUA-stripped), and the unshifted codepoint.
+func terminalKeyEvent(for event: NSEvent) -> TerminalKeyEvent {
+  TerminalKeyEvent(
+    keyCode: event.keyCode,
+    modifiers: terminalKeyModifiers(from: event.modifierFlags),
+    text: terminalKeyText(for: event),
+    unshiftedCodepoint: terminalUnshiftedCodepoint(for: event)
+  )
+}
 
-  // Tab key — keyCode 48 is always the physical Tab key.
-  // macOS maps Shift+Tab to \u{19}, not \t, so keyCode is the only reliable way
-  // to identify Tab regardless of modifiers.
-  if event.keyCode == 48 {
-    return event.modifierFlags.contains(.shift)
-      ? Data("\u{1B}[Z".utf8) : Data([0x09])
-  }
+/// Maps NSEvent modifier flags to libghostty-vt's GhosttyMods bitmask.
+func terminalKeyModifiers(from flags: NSEvent.ModifierFlags) -> TerminalKeyModifiers {
+  var mods: TerminalKeyModifiers = []
+  if flags.contains(.shift) { mods.insert(.shift) }
+  if flags.contains(.control) { mods.insert(.control) }
+  if flags.contains(.option) { mods.insert(.alt) }
+  if flags.contains(.command) { mods.insert(.superKey) }
+  if flags.contains(.capsLock) { mods.insert(.capsLock) }
+  // Right-side modifiers (only meaningful when the corresponding modifier is set).
+  let raw = flags.rawValue
+  if raw & UInt(NX_DEVICERSHIFTKEYMASK) != 0 { mods.insert(.shiftRight) }
+  if raw & UInt(NX_DEVICERCTLKEYMASK) != 0 { mods.insert(.controlRight) }
+  if raw & UInt(NX_DEVICERALTKEYMASK) != 0 { mods.insert(.altRight) }
+  if raw & UInt(NX_DEVICERCMDKEYMASK) != 0 { mods.insert(.superRight) }
+  return mods
+}
 
-  if event.modifierFlags.contains(.control),
-    let characters = event.characters,
-    characters.count == 1,
-    let scalar = characters.unicodeScalars.first,
-    scalar.value <= 0x1F || scalar.value == 0x7F
-  {
-    return Data([UInt8(scalar.value)])
-  }
-
-  guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else {
-    return nil
-  }
-
+/// The text to feed the key encoder. Control characters and the macOS PUA
+/// function-key range are stripped: the encoder derives those from the physical
+/// key + mods rather than from the raw bytes.
+func terminalKeyText(for event: NSEvent) -> String? {
+  guard let characters = event.characters else { return nil }
   if characters.count == 1, let scalar = characters.unicodeScalars.first {
-    switch scalar.value {
-    case UInt32(NSUpArrowFunctionKey):
-      return Data("\u{1B}[A".utf8)
-    case UInt32(NSDownArrowFunctionKey):
-      return Data("\u{1B}[B".utf8)
-    case UInt32(NSRightArrowFunctionKey):
-      return Data("\u{1B}[C".utf8)
-    case UInt32(NSLeftArrowFunctionKey):
-      return Data("\u{1B}[D".utf8)
-    case UInt32(NSDeleteCharacter):
-      return Data([0x7F])
-    case UInt32(NSEnterCharacter), UInt32(NSCarriageReturnCharacter):
-      return event.modifierFlags.contains(.shift) ? Data([0x0A]) : Data([0x0D])
-    case UInt32(NSBackspaceCharacter):
-      return Data([0x7F])
-    case 0x1B:
-      return Data([0x1B])
-    default:
-      break
+    if scalar.value < 0x20 {
+      return event.characters(byApplyingModifiers: event.modifierFlags.subtracting(.control))
+    }
+    if scalar.value >= 0xF700, scalar.value <= 0xF8FF {
+      return nil
     }
   }
+  return characters
+}
 
-  return nil
+/// The codepoint with no modifiers applied, used for Ctrl mapping.
+func terminalUnshiftedCodepoint(for event: NSEvent) -> UInt32 {
+  guard let chars = event.characters(byApplyingModifiers: []),
+        let scalar = chars.unicodeScalars.first else {
+    return 0
+  }
+  return scalar.value
+}
+
+/// Whether a key should be routed through the key encoder rather than
+/// `interpretKeyEvents`. Special keys (nil text or control-char text) and
+/// control-modified keys go through the encoder; plain printable text stays on
+/// the AppKit text-input path so dead keys and IME composition keep working.
+func shouldEncodeKey(_ event: TerminalKeyEvent) -> Bool {
+  if event.modifiers.contains(.superKey) { return false }
+  if event.modifiers.contains(.control) { return true }
+  guard let text = event.text, text.unicodeScalars.count == 1, let scalar = text.unicodeScalars.first else {
+    return true
+  }
+  return scalar.value < 0x20 || scalar.value == 0x7F
 }
 
 enum TerminalAttributedDiff {
@@ -970,6 +985,7 @@ public class PTYGridView: NSView {
   public var terminalScrollOwnershipHandler: (() -> TerminalScrollOwnership?)?
   public var terminalMouseEncodeHandler: ((TerminalMouseInputEvent, TerminalMouseGeometry) -> Data?)?
   public var terminalAlternateScrollEncodeHandler: ((_ wheelUp: Bool, _ count: Int) -> Data?)?
+  public var terminalKeyEncodeHandler: ((TerminalKeyEvent) -> Data?)?
   /// Localized popover labels, pushed from the App layer (which owns the language
   /// setting). Defaults to English so Core works standalone.
   public var semanticLinkText = SemanticLinkText()
@@ -1883,9 +1899,10 @@ public class PTYGridView: NSView {
       interpretKeyEvents([event])
       return
     }
-    if let data = terminalControlInputData(for: event) {
+    let keyEvent = terminalKeyEvent(for: event)
+    if shouldEncodeKey(keyEvent), let encoded = terminalKeyEncodeHandler?(keyEvent), !encoded.isEmpty {
       applyInputPresentation(inputStateMachine.handle(.unmarkText))
-      inputHandler?(data)
+      inputHandler?(encoded)
       return
     }
     applyInputPresentation(inputStateMachine.handle(.keyDown(isCompositionMethod: false)))
@@ -4129,6 +4146,7 @@ final class PTYTextView: NSTextView {
   var pasteHandler: ((String) -> Void)?
   var activationHandler: (() -> Void)?
   var scrollToBottomHandler: (() -> Void)?
+  var terminalKeyEncodeHandler: ((TerminalKeyEvent) -> Data?)?
   var pasteboard = NSPasteboard.general
   private var isHandlingTextSelection = false
   private var backgroundDragSelectionAnchor: Int?
@@ -4183,9 +4201,10 @@ final class PTYTextView: NSTextView {
 
   override func keyDown(with event: NSEvent) {
     activationHandler?()
-    if let data = terminalControlInputData(for: event) {
+    let keyEvent = terminalKeyEvent(for: event)
+    if shouldEncodeKey(keyEvent), let encoded = terminalKeyEncodeHandler?(keyEvent), !encoded.isEmpty {
       scrollToBottomHandler?()
-      inputHandler?(data)
+      inputHandler?(encoded)
     } else {
       interpretKeyEvents([event])
     }
