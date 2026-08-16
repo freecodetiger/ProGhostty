@@ -179,6 +179,48 @@ struct TerminalSurfaceTests {
     #expect(gridView.selectedText == nil)
   }
 
+  @MainActor @Test func copySelectionSkipsWideCharacterSpacerCells() throws {
+    let gridView = PTYGridView()
+    func wideCell(_ scalar: UnicodeScalar, _ width: TerminalCellWidth) -> GhosttyTerminalFrame.Cell {
+      GhosttyTerminalFrame.Cell(
+        scalar: scalar,
+        width: width,
+        foreground: GhosttyTerminalFrame.RGB(r: 255, g: 255, b: 255),
+        background: GhosttyTerminalFrame.RGB(r: 0, g: 0, b: 0),
+        bold: false, italic: false, faint: false, underline: false, inverse: false,
+        usesDefaultForeground: true, usesDefaultBackground: true
+      )
+    }
+    // "中文": each CJK glyph is a wide head followed by a spacerTail continuation.
+    let cells: [GhosttyTerminalFrame.Cell] = [
+      wideCell("中", .wide), wideCell(" ", .spacerTail),
+      wideCell("文", .wide), wideCell(" ", .spacerTail),
+      wideCell(" ", .narrow), wideCell(" ", .narrow),
+    ]
+    let frame = GhosttyTerminalFrame(
+      cols: 6, rows: 1,
+      cursorVisible: true, cursorX: 0, cursorY: 0,
+      cursorShape: .bar, cursorBlinking: false, isAlternateScreen: true,
+      cells: cells
+    )
+    let cellSize = gridView.terminalCellSize
+    let inset = gridView.terminalContentInset
+    gridView.frame = NSRect(
+      x: 0, y: 0,
+      width: inset.width * 2 + CGFloat(frame.cols) * cellSize.width,
+      height: inset.height * 2 + CGFloat(frame.rows) * cellSize.height
+    )
+    gridView.render(frame, isFocused: true)
+
+    let start = PTYGridView.textGlyphRect(row: 0, col: 0, cellSize: cellSize, inset: inset)
+    let end = PTYGridView.textGlyphRect(row: 0, col: 5, cellSize: cellSize, inset: inset)
+    gridView.mouseDown(with: try mouseEvent(.leftMouseDown, viewPoint: NSPoint(x: start.midX, y: start.midY), in: gridView))
+    gridView.mouseDragged(with: try mouseEvent(.leftMouseDragged, viewPoint: NSPoint(x: end.midX, y: end.midY), in: gridView))
+    gridView.mouseUp(with: try mouseEvent(.leftMouseUp, viewPoint: NSPoint(x: end.midX, y: end.midY), in: gridView))
+
+    #expect(gridView.selectedText == "中文")
+  }
+
   @MainActor @Test func liveGridCoalescesCapturedMouseMotion() throws {
     let gridView = PTYGridView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
     gridView.terminalScrollOwnershipHandler = { .mouseReporting }

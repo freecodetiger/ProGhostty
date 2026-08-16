@@ -1232,7 +1232,9 @@ public class PTYGridView: NSView {
         let line = (startCol...endCol).compactMap { col -> String? in
           let index = rowStart + col
           guard index < block.cells.count else { return nil }
-          return String(block.cells[index].scalar)
+          let cell = block.cells[index]
+          guard cell.width != .spacerTail, cell.width != .spacerHead else { return nil }
+          return String(cell.scalar)
         }.joined()
         lines.append(line.trimmingCharacters(in: .whitespaces))
       }

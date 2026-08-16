@@ -42,6 +42,7 @@ public final class TerminalAttributedRenderer {
         let index = row * frame.cols + col
         guard index < frame.cells.count else { continue }
         let cell = frame.cells[index]
+        if cell.width == .spacerTail || cell.width == .spacerHead { continue }
         let isCursor = frame.cursorVisible && row == frame.cursorY && col == frame.cursorX
 
         let colors = TerminalColorResolver.resolvedColors(for: cell, palette: palette, isFocused: isFocused)
