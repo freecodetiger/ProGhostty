@@ -7,7 +7,12 @@ import AppKit
 
 @Suite("PTY launch")
 struct PTYLaunchTests {
-  @Test func shiftEnterProducesLineFeed() throws {
+  private func encodedKey(for event: NSEvent) throws -> Data {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    return try bridge.encodedKey(terminalKeyEvent(for: event))
+  }
+
+  @Test func shiftEnterEncodesCsiUSequence() throws {
     let event = try #require(makeKeyEvent(
       keyCode: 36,
       characters: "\r",
@@ -15,7 +20,7 @@ struct PTYLaunchTests {
       modifierFlags: [.shift]
     ))
 
-    #expect(terminalControlInputData(for: event) == Data([0x0A]))
+    #expect(try encodedKey(for: event) == Data("\u{1B}[27;2;13~".utf8))
   }
 
   @Test func plainEnterProducesCarriageReturn() throws {
@@ -26,7 +31,7 @@ struct PTYLaunchTests {
       modifierFlags: []
     ))
 
-    #expect(terminalControlInputData(for: event) == Data([0x0D]))
+    #expect(try encodedKey(for: event) == Data([0x0D]))
   }
 
   @Test func shiftTabProducesBackTabSequence() throws {
@@ -37,7 +42,7 @@ struct PTYLaunchTests {
       modifierFlags: [.shift]
     ))
 
-    #expect(terminalControlInputData(for: event) == Data("\u{1B}[Z".utf8))
+    #expect(try encodedKey(for: event) == Data("\u{1B}[Z".utf8))
   }
 
   @Test func shiftTabWithRealMacOSCharactersProducesBackTabSequence() throws {
@@ -51,7 +56,7 @@ struct PTYLaunchTests {
       modifierFlags: [.shift]
     ))
 
-    #expect(terminalControlInputData(for: event) == Data("\u{1B}[Z".utf8))
+    #expect(try encodedKey(for: event) == Data("\u{1B}[Z".utf8))
   }
 
   @Test func shellArgumentsUseShellBasename() {

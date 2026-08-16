@@ -1765,8 +1765,10 @@ struct TerminalSurfaceTests {
 
   @MainActor @Test func ptyGridControlCWritesInterruptByte() throws {
     var written: Data?
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
     let gridView = PTYGridView()
     gridView.inputHandler = { written = $0 }
+    gridView.terminalKeyEncodeHandler = { try? bridge.encodedKey($0) }
     let event = try #require(NSEvent.keyEvent(
       with: .keyDown,
       location: .zero,
@@ -1787,8 +1789,10 @@ struct TerminalSurfaceTests {
 
   @MainActor @Test func ptyGridEscapeWritesEscapeByte() throws {
     var written: Data?
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
     let gridView = PTYGridView()
     gridView.inputHandler = { written = $0 }
+    gridView.terminalKeyEncodeHandler = { try? bridge.encodedKey($0) }
     let event = try #require(NSEvent.keyEvent(
       with: .keyDown,
       location: .zero,
@@ -1809,8 +1813,10 @@ struct TerminalSurfaceTests {
 
   @MainActor @Test func ptyTextControlCWritesInterruptByte() throws {
     var written: Data?
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
     let textView = PTYTextView()
     textView.inputHandler = { written = $0 }
+    textView.terminalKeyEncodeHandler = { try? bridge.encodedKey($0) }
     let event = try #require(NSEvent.keyEvent(
       with: .keyDown,
       location: .zero,

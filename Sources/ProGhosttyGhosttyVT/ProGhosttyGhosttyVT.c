@@ -14,6 +14,7 @@
 struct ProGhosttyVT {
   GhosttyTerminal terminal;
   GhosttyRenderState render_state;
+  GhosttyKeyEncoder key_encoder;
 };
 
 int proghostty_vt_new(uint16_t cols, uint16_t rows, size_t max_scrollback, ProGhosttyVT **out) {
@@ -45,6 +46,14 @@ int proghostty_vt_new(uint16_t cols, uint16_t rows, size_t max_scrollback, ProGh
     return result;
   }
 
+  result = ghostty_key_encoder_new(NULL, &vt->key_encoder);
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_render_state_free(vt->render_state);
+    ghostty_terminal_free(vt->terminal);
+    free(vt);
+    return result;
+  }
+
   *out = vt;
   return GHOSTTY_SUCCESS;
 }
@@ -53,6 +62,7 @@ void proghostty_vt_free(ProGhosttyVT *vt) {
   if (vt == NULL) {
     return;
   }
+  ghostty_key_encoder_free(vt->key_encoder);
   ghostty_render_state_free(vt->render_state);
   ghostty_terminal_free(vt->terminal);
   free(vt);
@@ -425,6 +435,207 @@ int proghostty_vt_encode_alternate_scroll(
   }
   *out = buffer;
   *out_len = length;
+  return GHOSTTY_SUCCESS;
+}
+
+// Maps a macOS virtual keycode (NSEvent.keyCode) to a physical Ghostty key,
+// using Chromium's Mac keycode table (the same table Ghostty ships). Unmapped
+// keycodes return GHOSTTY_KEY_UNIDENTIFIED and are dropped by the caller.
+static GhosttyKey proghostty_key_from_keycode(uint16_t keycode) {
+  switch (keycode) {
+    // Letters
+    case 0x00: return GHOSTTY_KEY_A;
+    case 0x0B: return GHOSTTY_KEY_B;
+    case 0x08: return GHOSTTY_KEY_C;
+    case 0x02: return GHOSTTY_KEY_D;
+    case 0x0E: return GHOSTTY_KEY_E;
+    case 0x03: return GHOSTTY_KEY_F;
+    case 0x05: return GHOSTTY_KEY_G;
+    case 0x04: return GHOSTTY_KEY_H;
+    case 0x22: return GHOSTTY_KEY_I;
+    case 0x26: return GHOSTTY_KEY_J;
+    case 0x28: return GHOSTTY_KEY_K;
+    case 0x25: return GHOSTTY_KEY_L;
+    case 0x2E: return GHOSTTY_KEY_M;
+    case 0x2D: return GHOSTTY_KEY_N;
+    case 0x1F: return GHOSTTY_KEY_O;
+    case 0x23: return GHOSTTY_KEY_P;
+    case 0x0C: return GHOSTTY_KEY_Q;
+    case 0x0F: return GHOSTTY_KEY_R;
+    case 0x01: return GHOSTTY_KEY_S;
+    case 0x11: return GHOSTTY_KEY_T;
+    case 0x20: return GHOSTTY_KEY_U;
+    case 0x09: return GHOSTTY_KEY_V;
+    case 0x0D: return GHOSTTY_KEY_W;
+    case 0x07: return GHOSTTY_KEY_X;
+    case 0x10: return GHOSTTY_KEY_Y;
+    case 0x06: return GHOSTTY_KEY_Z;
+    // Digits
+    case 0x12: return GHOSTTY_KEY_DIGIT_1;
+    case 0x13: return GHOSTTY_KEY_DIGIT_2;
+    case 0x14: return GHOSTTY_KEY_DIGIT_3;
+    case 0x15: return GHOSTTY_KEY_DIGIT_4;
+    case 0x17: return GHOSTTY_KEY_DIGIT_5;
+    case 0x16: return GHOSTTY_KEY_DIGIT_6;
+    case 0x1A: return GHOSTTY_KEY_DIGIT_7;
+    case 0x1C: return GHOSTTY_KEY_DIGIT_8;
+    case 0x19: return GHOSTTY_KEY_DIGIT_9;
+    case 0x1D: return GHOSTTY_KEY_DIGIT_0;
+    // Punctuation / whitespace
+    case 0x24: return GHOSTTY_KEY_ENTER;
+    case 0x35: return GHOSTTY_KEY_ESCAPE;
+    case 0x33: return GHOSTTY_KEY_BACKSPACE;
+    case 0x30: return GHOSTTY_KEY_TAB;
+    case 0x31: return GHOSTTY_KEY_SPACE;
+    case 0x1B: return GHOSTTY_KEY_MINUS;
+    case 0x18: return GHOSTTY_KEY_EQUAL;
+    case 0x21: return GHOSTTY_KEY_BRACKET_LEFT;
+    case 0x1E: return GHOSTTY_KEY_BRACKET_RIGHT;
+    case 0x2A: return GHOSTTY_KEY_BACKSLASH;
+    case 0x29: return GHOSTTY_KEY_SEMICOLON;
+    case 0x27: return GHOSTTY_KEY_QUOTE;
+    case 0x32: return GHOSTTY_KEY_BACKQUOTE;
+    case 0x2B: return GHOSTTY_KEY_COMMA;
+    case 0x2F: return GHOSTTY_KEY_PERIOD;
+    case 0x2C: return GHOSTTY_KEY_SLASH;
+    case 0x39: return GHOSTTY_KEY_CAPS_LOCK;
+    // Function keys
+    case 0x7A: return GHOSTTY_KEY_F1;
+    case 0x78: return GHOSTTY_KEY_F2;
+    case 0x63: return GHOSTTY_KEY_F3;
+    case 0x76: return GHOSTTY_KEY_F4;
+    case 0x60: return GHOSTTY_KEY_F5;
+    case 0x61: return GHOSTTY_KEY_F6;
+    case 0x62: return GHOSTTY_KEY_F7;
+    case 0x64: return GHOSTTY_KEY_F8;
+    case 0x65: return GHOSTTY_KEY_F9;
+    case 0x6D: return GHOSTTY_KEY_F10;
+    case 0x67: return GHOSTTY_KEY_F11;
+    case 0x6F: return GHOSTTY_KEY_F12;
+    case 0x69: return GHOSTTY_KEY_F13;
+    case 0x6B: return GHOSTTY_KEY_F14;
+    case 0x71: return GHOSTTY_KEY_F15;
+    case 0x6A: return GHOSTTY_KEY_F16;
+    case 0x40: return GHOSTTY_KEY_F17;
+    case 0x4F: return GHOSTTY_KEY_F18;
+    case 0x50: return GHOSTTY_KEY_F19;
+    case 0x5A: return GHOSTTY_KEY_F20;
+    // Navigation / editing
+    case 0x72: return GHOSTTY_KEY_INSERT;
+    case 0x73: return GHOSTTY_KEY_HOME;
+    case 0x74: return GHOSTTY_KEY_PAGE_UP;
+    case 0x75: return GHOSTTY_KEY_DELETE;
+    case 0x77: return GHOSTTY_KEY_END;
+    case 0x79: return GHOSTTY_KEY_PAGE_DOWN;
+    // Arrows
+    case 0x7C: return GHOSTTY_KEY_ARROW_RIGHT;
+    case 0x7B: return GHOSTTY_KEY_ARROW_LEFT;
+    case 0x7D: return GHOSTTY_KEY_ARROW_DOWN;
+    case 0x7E: return GHOSTTY_KEY_ARROW_UP;
+    // Numpad
+    case 0x47: return GHOSTTY_KEY_NUM_LOCK;
+    case 0x4B: return GHOSTTY_KEY_NUMPAD_DIVIDE;
+    case 0x43: return GHOSTTY_KEY_NUMPAD_MULTIPLY;
+    case 0x4E: return GHOSTTY_KEY_NUMPAD_SUBTRACT;
+    case 0x45: return GHOSTTY_KEY_NUMPAD_ADD;
+    case 0x4C: return GHOSTTY_KEY_NUMPAD_ENTER;
+    case 0x53: return GHOSTTY_KEY_NUMPAD_1;
+    case 0x54: return GHOSTTY_KEY_NUMPAD_2;
+    case 0x55: return GHOSTTY_KEY_NUMPAD_3;
+    case 0x56: return GHOSTTY_KEY_NUMPAD_4;
+    case 0x57: return GHOSTTY_KEY_NUMPAD_5;
+    case 0x58: return GHOSTTY_KEY_NUMPAD_6;
+    case 0x59: return GHOSTTY_KEY_NUMPAD_7;
+    case 0x5B: return GHOSTTY_KEY_NUMPAD_8;
+    case 0x5C: return GHOSTTY_KEY_NUMPAD_9;
+    case 0x52: return GHOSTTY_KEY_NUMPAD_0;
+    case 0x41: return GHOSTTY_KEY_NUMPAD_DECIMAL;
+    case 0x51: return GHOSTTY_KEY_NUMPAD_EQUAL;
+    case 0x5F: return GHOSTTY_KEY_NUMPAD_COMMA;
+    // Modifiers
+    case 0x6E: return GHOSTTY_KEY_CONTEXT_MENU;
+    case 0x3B: return GHOSTTY_KEY_CONTROL_LEFT;
+    case 0x38: return GHOSTTY_KEY_SHIFT_LEFT;
+    case 0x3A: return GHOSTTY_KEY_ALT_LEFT;
+    case 0x37: return GHOSTTY_KEY_META_LEFT;
+    case 0x3E: return GHOSTTY_KEY_CONTROL_RIGHT;
+    case 0x3C: return GHOSTTY_KEY_SHIFT_RIGHT;
+    case 0x3D: return GHOSTTY_KEY_ALT_RIGHT;
+    case 0x36: return GHOSTTY_KEY_META_RIGHT;
+    default: return GHOSTTY_KEY_UNIDENTIFIED;
+  }
+}
+
+int proghostty_vt_encode_key(
+  ProGhosttyVT *vt,
+  uint16_t native_keycode,
+  uint16_t mods,
+  const uint8_t *utf8,
+  size_t utf8_len,
+  uint32_t unshifted_codepoint,
+  uint8_t **out,
+  size_t *out_len
+) {
+  if (out == NULL || out_len == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+  *out = NULL;
+  *out_len = 0;
+  if (vt == NULL || vt->terminal == NULL || vt->key_encoder == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+
+  GhosttyKey ghostty_key = proghostty_key_from_keycode(native_keycode);
+  if (ghostty_key == GHOSTTY_KEY_UNIDENTIFIED) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+
+  GhosttyKeyEvent event = NULL;
+  GhosttyResult result = ghostty_key_event_new(NULL, &event);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+
+  ghostty_key_event_set_action(event, GHOSTTY_KEY_ACTION_PRESS);
+  ghostty_key_event_set_key(event, ghostty_key);
+  ghostty_key_event_set_mods(event, (GhosttyMods)mods);
+  if (utf8 != NULL && utf8_len > 0) {
+    ghostty_key_event_set_utf8(event, (const char *)utf8, utf8_len);
+  }
+  if (unshifted_codepoint != 0) {
+    ghostty_key_event_set_unshifted_codepoint(event, unshifted_codepoint);
+  }
+
+  // Sync encoder options from the terminal's current modes (application cursor,
+  // modifyOtherKeys, Kitty flags, etc.).
+  ghostty_key_encoder_setopt_from_terminal(vt->key_encoder, vt->terminal);
+
+  size_t required = 0;
+  result = ghostty_key_encoder_encode(vt->key_encoder, event, NULL, 0, &required);
+  if (result != GHOSTTY_OUT_OF_SPACE && result != GHOSTTY_SUCCESS) {
+    ghostty_key_event_free(event);
+    return result;
+  }
+  if (required == 0) {
+    ghostty_key_event_free(event);
+    return GHOSTTY_SUCCESS;
+  }
+
+  uint8_t *buffer = ghostty_alloc(NULL, required);
+  if (buffer == NULL) {
+    ghostty_key_event_free(event);
+    return GHOSTTY_OUT_OF_MEMORY;
+  }
+  size_t written = 0;
+  result = ghostty_key_encoder_encode(vt->key_encoder, event, (char *)buffer, required, &written);
+  ghostty_key_event_free(event);
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_free(NULL, buffer, required);
+    return result;
+  }
+
+  *out = buffer;
+  *out_len = written;
   return GHOSTTY_SUCCESS;
 }
 

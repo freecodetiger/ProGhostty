@@ -15,6 +15,48 @@ struct GhosttyVTBridgeTests {
     #expect(!text.contains("\u{1B}[1m"))
   }
 
+  @Test func specialKeysAllProduceNonEmptySequences() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    // macOS virtual keycodes: arrows, navigation/editing, F1–F12.
+    let keyCodes: [UInt16] = [
+      0x7E, 0x7D, 0x7B, 0x7C,                          // up down left right
+      0x73, 0x77, 0x74, 0x79, 0x72, 0x75,              // home end pgup pgdn ins del
+      0x7A, 0x78, 0x63, 0x76, 0x60, 0x61,              // F1..F6
+      0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F,              // F7..F12
+    ]
+    for code in keyCodes {
+      #expect(!(try bridge.encodedKey(TerminalKeyEvent(keyCode: code, modifiers: [], text: nil, unshiftedCodepoint: 0)).isEmpty))
+    }
+  }
+
+  @Test func arrowKeysRespectCursorApplicationMode() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    let up = TerminalKeyEvent(keyCode: 0x7E, modifiers: [], text: nil, unshiftedCodepoint: 0)
+    // Normal mode emits CSI A; DECCKM (application cursor keys) emits SS3 A.
+    #expect(try bridge.encodedKey(up) == Data("\u{1B}[A".utf8))
+    bridge.write(Data("\u{1B}[?1h".utf8))
+    #expect(try bridge.encodedKey(up) == Data("\u{1B}OA".utf8))
+  }
+
+  @Test func controlModifierEncodesModifiedArrow() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    let ctrlLeft = TerminalKeyEvent(keyCode: 0x7B, modifiers: .control, text: nil, unshiftedCodepoint: 0)
+    #expect(try bridge.encodedKey(ctrlLeft) == Data("\u{1B}[1;5D".utf8))
+  }
+
+  @Test func controlPlusLetterEncodesControlByte() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    // Ctrl+A: keycode A + control mod + unshifted "a" → 0x01.
+    let ctrlA = TerminalKeyEvent(keyCode: 0x00, modifiers: .control, text: "a", unshiftedCodepoint: 0x61)
+    #expect(try bridge.encodedKey(ctrlA) == Data([0x01]))
+  }
+
+  @Test func optionModifiedArrowEncodesAltModifier() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    let altUp = TerminalKeyEvent(keyCode: 0x7E, modifiers: .alt, text: nil, unshiftedCodepoint: 0)
+    #expect(try bridge.encodedKey(altUp) == Data("\u{1B}[1;3A".utf8))
+  }
+
   @Test func encodedPasteUsesBracketedPasteModeWhenTerminalRequestsIt() throws {
     let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
     bridge.write(Data("\u{1B}[?2004h".utf8))
