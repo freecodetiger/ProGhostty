@@ -246,6 +246,19 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
         return nil
       }
     }
+    gridView.focusReportingActiveHandler = { [weak self] in
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return false }
+      return bridge.isFocusReportingActive()
+    }
+    gridView.focusEncodeHandler = { [weak self] gained in
+      guard let self, let bridge = self.surfaces[id]?.bridge else { return nil }
+      do {
+        return try bridge.encodedFocus(gained: gained)
+      } catch {
+        PTYRenderDebugLog.write("focus-encode-error session=\(id) error=\(error)")
+        return nil
+      }
+    }
     gridView.semanticLinkText = semanticLinkText
     gridView.pasteboard = .general
     gridView.applyPalette(palette)

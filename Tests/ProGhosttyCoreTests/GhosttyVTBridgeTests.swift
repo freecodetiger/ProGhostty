@@ -57,6 +57,15 @@ struct GhosttyVTBridgeTests {
     #expect(try bridge.encodedKey(altUp) == Data("\u{1B}[1;3A".utf8))
   }
 
+  @Test func focusReportingDefaultsOffAndEncodesInOut() throws {
+    let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
+    #expect(!bridge.isFocusReportingActive())
+    #expect(try bridge.encodedFocus(gained: true) == Data("\u{1B}[I".utf8))
+    #expect(try bridge.encodedFocus(gained: false) == Data("\u{1B}[O".utf8))
+    bridge.write(Data("\u{1B}[?1004h".utf8))
+    #expect(bridge.isFocusReportingActive())
+  }
+
   @Test func encodedPasteUsesBracketedPasteModeWhenTerminalRequestsIt() throws {
     let bridge = try GhosttyVTBridge(cols: 40, rows: 5)
     bridge.write(Data("\u{1B}[?2004h".utf8))
