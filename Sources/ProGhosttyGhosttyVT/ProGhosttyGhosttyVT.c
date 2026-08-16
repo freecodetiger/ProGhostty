@@ -639,6 +639,54 @@ int proghostty_vt_encode_key(
   return GHOSTTY_SUCCESS;
 }
 
+int proghostty_vt_focus_reporting_active(ProGhosttyVT *vt, bool *out) {
+  if (vt == NULL || vt->terminal == NULL || out == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+  bool enabled = false;
+  GhosttyResult result = ghostty_terminal_mode_get(
+    vt->terminal, GHOSTTY_MODE_FOCUS_EVENT, &enabled);
+  if (result != GHOSTTY_SUCCESS) {
+    return result;
+  }
+  *out = enabled;
+  return GHOSTTY_SUCCESS;
+}
+
+int proghostty_vt_encode_focus(bool gained, uint8_t **out, size_t *out_len) {
+  if (out == NULL || out_len == NULL) {
+    return GHOSTTY_INVALID_VALUE;
+  }
+  *out = NULL;
+  *out_len = 0;
+
+  GhosttyFocusEvent event = gained ? GHOSTTY_FOCUS_GAINED : GHOSTTY_FOCUS_LOST;
+
+  size_t required = 0;
+  GhosttyResult result = ghostty_focus_encode(event, NULL, 0, &required);
+  if (result != GHOSTTY_OUT_OF_SPACE) {
+    return result;
+  }
+  if (required == 0) {
+    return GHOSTTY_SUCCESS;
+  }
+
+  uint8_t *buffer = ghostty_alloc(NULL, required);
+  if (buffer == NULL) {
+    return GHOSTTY_OUT_OF_MEMORY;
+  }
+  size_t written = 0;
+  result = ghostty_focus_encode(event, (char *)buffer, required, &written);
+  if (result != GHOSTTY_SUCCESS) {
+    ghostty_free(NULL, buffer, required);
+    return result;
+  }
+
+  *out = buffer;
+  *out_len = written;
+  return GHOSTTY_SUCCESS;
+}
+
 static ProGhosttyVTCell blank_cell(GhosttyRenderStateColors *colors) {
   ProGhosttyVTCell cell;
   cell.codepoint = ' ';

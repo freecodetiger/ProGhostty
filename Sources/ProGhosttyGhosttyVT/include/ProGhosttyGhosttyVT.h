@@ -175,6 +175,8 @@ int proghostty_vt_encode_key(
   uint32_t unshifted_codepoint,
   uint8_t **out,
   size_t *out_len);
+int proghostty_vt_focus_reporting_active(ProGhosttyVT *vt, bool *out);
+int proghostty_vt_encode_focus(bool gained, uint8_t **out, size_t *out_len);
 void proghostty_vt_free_bytes(uint8_t *ptr, size_t len);
 
 #endif

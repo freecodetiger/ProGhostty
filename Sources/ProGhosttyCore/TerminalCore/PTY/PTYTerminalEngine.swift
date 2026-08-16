@@ -986,6 +986,8 @@ public class PTYGridView: NSView {
   public var terminalMouseEncodeHandler: ((TerminalMouseInputEvent, TerminalMouseGeometry) -> Data?)?
   public var terminalAlternateScrollEncodeHandler: ((_ wheelUp: Bool, _ count: Int) -> Data?)?
   public var terminalKeyEncodeHandler: ((TerminalKeyEvent) -> Data?)?
+  public var focusReportingActiveHandler: (() -> Bool)?
+  public var focusEncodeHandler: ((_ gained: Bool) -> Data?)?
   /// Localized popover labels, pushed from the App layer (which owns the language
   /// setting). Defaults to English so Core works standalone.
   public var semanticLinkText = SemanticLinkText()
@@ -2511,24 +2513,33 @@ public class PTYGridView: NSView {
   // MARK: - Shared helpers
 
   private func emitArrowSequences(count: Int) {
-    let arrow: Data
-    let n: Int
-    if count > 0 {
-      arrow = Data("\u{1B}[C".utf8)
-      n = count
-    } else {
-      arrow = Data("\u{1B}[D".utf8)
-      n = -count
-    }
-    var sequences = Data(capacity: arrow.count * n)
+    // Route the synthesized cursor-move arrows through the key encoder so they
+    // respect DECCKM (application cursor keys → SS3 instead of CSI).
+    let keyEvent = TerminalKeyEvent(
+      keyCode: count > 0 ? 0x7C : 0x7B, // right / left arrow
+      modifiers: [],
+      text: nil,
+      unshiftedCodepoint: 0
+    )
+    guard let encoded = terminalKeyEncodeHandler?(keyEvent), !encoded.isEmpty else { return }
+    let n = abs(count)
+    var sequences = Data(capacity: encoded.count * n)
     for _ in 0..<n {
-      sequences.append(arrow)
+      sequences.append(encoded)
     }
     inputHandler?(sequences)
   }
 
   public override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    // Observe the window's key status to drive focus reporting mode (DECSET 1004).
+    let center = NotificationCenter.default
+    center.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: nil)
+    center.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
+    if let window {
+      center.addObserver(self, selector: #selector(terminalWindowKeyChanged(_:)), name: NSWindow.didBecomeKeyNotification, object: window)
+      center.addObserver(self, selector: #selector(terminalWindowKeyChanged(_:)), name: NSWindow.didResignKeyNotification, object: window)
+    }
     if window == nil {
       isDraggingSelectionStorage = false
       selectionDragPoint = nil
@@ -2590,6 +2601,16 @@ public class PTYGridView: NSView {
     setCommandLinkMode(isBareCommand)
     updateLinkHover(at: convert(event.locationInWindow, from: nil))
     super.flagsChanged(with: event)
+  }
+
+  /// Focus reporting (DECSET 1004): the window became key / resigned key. Only the
+  /// selected pane reports; sibling panes share the window and stay silent.
+  @objc private func terminalWindowKeyChanged(_ note: Notification) {
+    let gained = note.name == NSWindow.didBecomeKeyNotification
+    guard isFocusedTerminalStorage,
+          focusReportingActiveHandler?() == true,
+          let data = focusEncodeHandler?(gained) else { return }
+    inputHandler?(data)
   }
 
   /// Focus left us (e.g. ⌘P moved focus into the side-input box, or a ⌘-shortcut

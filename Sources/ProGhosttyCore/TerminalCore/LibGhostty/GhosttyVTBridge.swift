@@ -397,6 +397,30 @@ public final class GhosttyVTBridge {
     }
   }
 
+  /// Whether focus reporting mode (DECSET 1004) is currently enabled.
+  public func isFocusReportingActive() -> Bool {
+    locked {
+      guard let handle else { return false }
+      var active = false
+      return proghostty_vt_focus_reporting_active(handle, &active) == 0 && active
+    }
+  }
+
+  /// Encodes a focus in/out event (`CSI I` / `CSI O`) for focus reporting mode.
+  public func encodedFocus(gained: Bool) throws -> Data {
+    try locked {
+      var pointer: UnsafeMutablePointer<UInt8>?
+      var length = 0
+      let result = proghostty_vt_encode_focus(gained, &pointer, &length)
+      guard result == 0 else {
+        throw BridgeError.inputEncodeFailed(result)
+      }
+      guard let pointer else { return Data() }
+      defer { proghostty_vt_free_bytes(pointer, length) }
+      return Data(bytes: pointer, count: length)
+    }
+  }
+
   public func scrollOwnership() throws -> TerminalScrollOwnership {
     try locked {
       guard let handle else { return .localScrollback }
