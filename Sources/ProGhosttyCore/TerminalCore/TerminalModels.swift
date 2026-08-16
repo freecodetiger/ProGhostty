@@ -81,4 +81,8 @@ public enum TerminalEvent: Sendable {
   func setPathExistenceProvider(_ provider: (@MainActor (TerminalSessionID, String) -> Bool)?)
   func setFileInfoProvider(_ provider: (@MainActor (TerminalSessionID, TerminalFilePathTarget) -> TerminalFileFacts?)?)
   func applySemanticLinkText(_ text: SemanticLinkText)
+  func search(query: String, caseSensitive: Bool, in id: TerminalSessionID) async -> SearchResult?
+  func applySearchHighlights(_ matches: [SearchMatch], total: UInt64, to id: TerminalSessionID)
+  func revealSearchMatch(_ match: SearchMatch, in id: TerminalSessionID)
+  func clearSearchHighlights(for id: TerminalSessionID)
 }

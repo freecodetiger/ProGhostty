@@ -6,6 +6,8 @@ public enum MetalOverlayKind: Sendable {
   case selection
   case linkHover
   case markedText
+  /// Background highlight behind a search match, beneath glyphs.
+  case searchMatch
   /// Feathered, borderless Semantic Halo behind a hovered link (spec §4.2).
   /// Rendered by a dedicated SDF pipeline, not the flat-rect overlay path.
   case semanticHalo
@@ -222,6 +224,65 @@ public enum MetalOverlayBuffer {
           color: palette.cursorBackground.withAlphaComponent(0.18).metalRGBA
         )
       )
+    }
+
+    // Search-match highlights are already in expanded-frame row space (the
+    // registry bakes the overscan offset in). Beneath glyphs so text stays
+    // legible above the tint.
+    for (row, ranges) in renderFrame.highlightedCells {
+      guard row >= 0, row < frame.rows else { continue }
+      for range in ranges {
+        let clampedLower = min(max(0, range.lowerBound), max(0, frame.cols))
+        let clampedUpper = min(max(clampedLower, range.upperBound), max(0, frame.cols))
+        guard clampedLower < clampedUpper else { continue }
+        overlays.append(
+          MetalOverlayPrimitive(
+            kind: .searchMatch,
+            phase: .beneathGlyphs,
+            rect: cellRangeRect(
+              row: row,
+              cols: clampedLower..<clampedUpper,
+              cellSize: cellSize,
+              inset: inset,
+              translationY: translationY
+            ),
+            color: palette.cursorBackground.withAlphaComponent(0.28).metalRGBA
+          )
+        )
+      }
+    }
+
+    // Current match: a crisp accent border ring around the match cells, drawn
+    // above glyphs so the active match is unmistakable without a loud fill. The
+    // shared gray tint (above) already marks it as a match; the ring marks it as
+    // the *current* one.
+    let ringStroke = max(1.0, pixelScale)
+    for (row, ranges) in renderFrame.currentHighlightCells {
+      guard row >= 0, row < frame.rows else { continue }
+      for range in ranges {
+        let clampedLower = min(max(0, range.lowerBound), max(0, frame.cols))
+        let clampedUpper = min(max(clampedLower, range.upperBound), max(0, frame.cols))
+        guard clampedLower < clampedUpper else { continue }
+        let rect = cellRangeRect(
+          row: row,
+          cols: clampedLower..<clampedUpper,
+          cellSize: cellSize,
+          inset: inset,
+          translationY: translationY
+        )
+        let ringColor = palette.accent.metalRGBA
+        let edges = [
+          CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: ringStroke),
+          CGRect(x: rect.minX, y: rect.maxY - ringStroke, width: rect.width, height: ringStroke),
+          CGRect(x: rect.minX, y: rect.minY, width: ringStroke, height: rect.height),
+          CGRect(x: rect.maxX - ringStroke, y: rect.minY, width: ringStroke, height: rect.height),
+        ]
+        for edge in edges {
+          overlays.append(
+            MetalOverlayPrimitive(kind: .searchMatch, phase: .aboveGlyphs, rect: edge, color: ringColor)
+          )
+        }
+      }
     }
 
     let resolvedLinkHoverRanges = linkHoverCellRanges.isEmpty

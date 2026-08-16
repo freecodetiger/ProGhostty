@@ -153,6 +153,16 @@ public final class MockTerminalEngine: TerminalSessionManager, TerminalSurfaceRe
   public func setFileInfoProvider(_ provider: (@MainActor (TerminalSessionID, TerminalFilePathTarget) -> TerminalFileFacts?)?) {}
   public func applySemanticLinkText(_ text: SemanticLinkText) {}
 
+  public func search(query: String, caseSensitive: Bool, in id: TerminalSessionID) async -> SearchResult? {
+    nil
+  }
+
+  public func applySearchHighlights(_ matches: [SearchMatch], total: UInt64, to id: TerminalSessionID) {}
+
+  public func revealSearchMatch(_ match: SearchMatch, in id: TerminalSessionID) {}
+
+  public func clearSearchHighlights(for id: TerminalSessionID) {}
+
   private func run(command: String, session id: TerminalSessionID) {
     guard let state = sessions[id] else { return }
     let cwd = state.config.workingDirectory ?? FileManager.default.currentDirectoryPath

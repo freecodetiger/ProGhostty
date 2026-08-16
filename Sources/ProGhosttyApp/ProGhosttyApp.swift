@@ -84,6 +84,23 @@ private struct ProGhosttyCommands: Commands {
       .keyboardShortcut(composition.settings.keyboardShortcuts.shortcut(for: .openSettings).swiftUIShortcut)
     }
 
+    CommandGroup(after: .textEditing) {
+      Button("Find...") {
+        focusedModel?.toggleFindBar()
+      }
+      .keyboardShortcut("f", modifiers: .command)
+
+      Button("Find Next") {
+        focusedModel?.nextSearchMatch()
+      }
+      .keyboardShortcut("g", modifiers: .command)
+
+      Button("Find Previous") {
+        focusedModel?.previousSearchMatch()
+      }
+      .keyboardShortcut("g", modifiers: [.command, .shift])
+    }
+
     CommandMenu("Workspace") {
       Button("Switch Workspace...") {
         focusedModel?.openWorkspaceSwitcher()

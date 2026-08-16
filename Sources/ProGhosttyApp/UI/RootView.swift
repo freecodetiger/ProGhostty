@@ -21,8 +21,17 @@ struct RootView: View {
       TerminalNotificationOverlay(
         notification: model.inAppNotification,
         usesDarkAppearance: model.usesDarkAppearance,
+        accentColor: Color(nsColor: model.terminalPalette.accent),
         action: { model.openInAppNotificationAction() }
       )
+
+      if model.isFindBarPresented {
+        TerminalFindBar()
+          .environmentObject(model)
+          .padding(.top, 42)
+          .padding(.trailing, 14)
+          .transition(.move(edge: .top).combined(with: .opacity))
+      }
 
     }
     .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
@@ -114,6 +123,7 @@ struct RootView: View {
 private struct TerminalNotificationOverlay: View {
   let notification: AppModel.InAppNotification?
   let usesDarkAppearance: Bool
+  let accentColor: Color
   let action: () -> Void
 
   var body: some View {
@@ -178,12 +188,6 @@ private struct TerminalNotificationOverlay: View {
 
   private var secondaryTextColor: Color {
     usesDarkAppearance ? Color.white.opacity(0.68) : Color.black.opacity(0.62)
-  }
-
-  private var accentColor: Color {
-    usesDarkAppearance
-      ? Color(red: 0.64, green: 0.86, blue: 0.82)
-      : Color(red: 0.05, green: 0.42, blue: 0.48)
   }
 }
 

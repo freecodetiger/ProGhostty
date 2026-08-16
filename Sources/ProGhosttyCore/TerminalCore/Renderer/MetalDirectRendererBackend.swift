@@ -543,10 +543,16 @@ public final class MetalDirectRendererBackend: TerminalLiveRendererBackend {
     guard renderFrame.generation != generation else {
       return renderFrame
     }
+    var normalized: TerminalRenderFrame
     if let scrollFrame = renderFrame.scrollFrame {
-      return TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: renderFrame.isFocused, generation: generation)
+      normalized = TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: renderFrame.isFocused, generation: generation)
+    } else {
+      normalized = TerminalRenderFrame(frame: renderFrame.frame, isFocused: renderFrame.isFocused, generation: generation)
     }
-    return TerminalRenderFrame(frame: renderFrame.frame, isFocused: renderFrame.isFocused, generation: generation)
+    // Rebuilding for a new generation must not drop the search highlight set.
+    normalized.highlightedCells = renderFrame.highlightedCells
+    normalized.currentHighlightCells = renderFrame.currentHighlightCells
+    return normalized
   }
 
   private func presentViewportChange() {

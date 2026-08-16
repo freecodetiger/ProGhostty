@@ -7,6 +7,7 @@ public struct TerminalSurfacePalette: Equatable, Sendable {
   public var cursorBackground: NSColor
   public var cursorForeground: NSColor
   public var selectionForeground: NSColor
+  public var accent: NSColor
   public var inactiveForegroundBlend: CGFloat
   public var splitDivider: NSColor
 
@@ -17,6 +18,7 @@ public struct TerminalSurfacePalette: Equatable, Sendable {
     cursorBackground: NSColor,
     cursorForeground: NSColor,
     selectionForeground: NSColor,
+    accent: NSColor,
     inactiveForegroundBlend: CGFloat,
     splitDivider: NSColor
   ) {
@@ -26,6 +28,7 @@ public struct TerminalSurfacePalette: Equatable, Sendable {
     self.cursorBackground = cursorBackground
     self.cursorForeground = cursorForeground
     self.selectionForeground = selectionForeground
+    self.accent = accent
     self.inactiveForegroundBlend = inactiveForegroundBlend
     self.splitDivider = splitDivider
   }
@@ -37,6 +40,7 @@ public struct TerminalSurfacePalette: Equatable, Sendable {
     cursorBackground: NSColor(calibratedWhite: 0.86, alpha: 1),
     cursorForeground: NSColor(calibratedWhite: 0.045, alpha: 1),
     selectionForeground: NSColor(calibratedWhite: 0.88, alpha: 1),
+    accent: NSColor(calibratedRed: 0.91, green: 0.72, blue: 0.29, alpha: 1), // #E8B84A gold
     inactiveForegroundBlend: 0.28,
     splitDivider: NSColor(calibratedWhite: 1, alpha: 0.10)
   )
@@ -48,6 +52,7 @@ public struct TerminalSurfacePalette: Equatable, Sendable {
     cursorBackground: NSColor(calibratedWhite: 0.16, alpha: 1),
     cursorForeground: NSColor(calibratedWhite: 0.98, alpha: 1),
     selectionForeground: NSColor(calibratedWhite: 0.12, alpha: 1),
+    accent: NSColor(calibratedRed: 0.69, green: 0.49, blue: 0.10, alpha: 1), // #B07D1A dark gold
     inactiveForegroundBlend: 0.32,
     splitDivider: NSColor(calibratedWhite: 0, alpha: 0.09)
   )
@@ -60,6 +65,7 @@ public struct TerminalSurfacePalette: Equatable, Sendable {
     cursorBackground: NSColor(calibratedWhite: 1.0, alpha: 1),
     cursorForeground: NSColor(calibratedRed: 0.137, green: 0.153, blue: 0.180, alpha: 1),
     selectionForeground: NSColor(calibratedWhite: 1.0, alpha: 1),
+    accent: NSColor(calibratedRed: 0.91, green: 0.72, blue: 0.29, alpha: 1), // #E8B84A gold
     inactiveForegroundBlend: 0.28,
     splitDivider: NSColor(calibratedWhite: 1.0, alpha: 0.12)
   )
@@ -72,6 +78,7 @@ public struct TerminalSurfacePalette: Equatable, Sendable {
     cursorBackground: NSColor(calibratedWhite: 0.0, alpha: 1),
     cursorForeground: NSColor(calibratedRed: 0.992, green: 0.965, blue: 0.890, alpha: 1),
     selectionForeground: NSColor(calibratedWhite: 0.0, alpha: 1),
+    accent: NSColor(calibratedRed: 0.69, green: 0.49, blue: 0.10, alpha: 1), // #B07D1A dark gold
     inactiveForegroundBlend: 0.28,
     splitDivider: NSColor(calibratedRed: 0.345, green: 0.431, blue: 0.459, alpha: 0.22)
   )

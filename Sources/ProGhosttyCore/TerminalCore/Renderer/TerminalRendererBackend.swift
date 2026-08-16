@@ -40,6 +40,13 @@ public struct TerminalRenderFrame: Sendable, Equatable {
   public let isFocused: Bool
   public let presentation: TerminalRenderFramePresentation
   public let generation: Int
+  /// Search-match cells to highlight, keyed by expanded-frame row index (the
+  /// row space of `expandedFrame`: overscan-top rows first, then the viewport),
+  /// each value a list of contiguous cell-column ranges. Empty by default.
+  public var highlightedCells: [Int: [Range<Int>]]
+  /// The current (navigated-to) match's cells, in the same space. Drawn with a
+  /// distinct color so the active match stands out from the rest.
+  public var currentHighlightCells: [Int: [Range<Int>]]
 
   public init(frame: GhosttyTerminalFrame, isFocused: Bool = false) {
     self.init(frame: frame, isFocused: isFocused, generation: 0)
@@ -51,6 +58,8 @@ public struct TerminalRenderFrame: Sendable, Equatable {
     self.isFocused = isFocused
     presentation = .frame
     self.generation = generation
+    highlightedCells = [:]
+    currentHighlightCells = [:]
   }
 
   public init(scrollFrame: GhosttyTerminalScrollFrame, isFocused: Bool = false) {
@@ -63,6 +72,8 @@ public struct TerminalRenderFrame: Sendable, Equatable {
     self.isFocused = isFocused
     presentation = .scrollFrame
     self.generation = generation
+    highlightedCells = [:]
+    currentHighlightCells = [:]
   }
 
   /// The frame to draw, with any overscan rows flattened into a single cell

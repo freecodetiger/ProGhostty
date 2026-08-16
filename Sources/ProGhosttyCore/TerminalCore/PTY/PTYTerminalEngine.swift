@@ -311,6 +311,22 @@ public final class PTYTerminalEngine: TerminalSessionManager, TerminalSurfaceReg
   public func applySemanticLinkText(_ text: SemanticLinkText) {
     surfaceRegistry.applySemanticLinkText(text)
   }
+
+  public func search(query: String, caseSensitive: Bool, in id: TerminalSessionID) async -> SearchResult? {
+    await surfaceRegistry.search(query: query, caseSensitive: caseSensitive, in: id)
+  }
+
+  public func applySearchHighlights(_ matches: [SearchMatch], total: UInt64, to id: TerminalSessionID) {
+    surfaceRegistry.applySearchHighlights(matches, total: total, to: id)
+  }
+
+  public func revealSearchMatch(_ match: SearchMatch, in id: TerminalSessionID) {
+    surfaceRegistry.revealSearchMatch(match, in: id)
+  }
+
+  public func clearSearchHighlights(for id: TerminalSessionID) {
+    surfaceRegistry.clearSearchHighlights(for: id)
+  }
 }
 
 @MainActor
@@ -1104,6 +1120,14 @@ public class PTYGridView: NSView {
   /// arrives, instead of freezing the display (pattern-1 behavior) or snapping
   /// to the tail. See `.claude/UNFREEZE_HISTORY_PLAN.md`.
   public var browseTopAbsoluteRow: UInt64? { browseTopRow }
+
+  /// Settle the viewport onto an absolute scrollback row without moving the VT
+  /// viewport. Used by search to jump to a match: sets the persisted browse
+  /// anchor so subsequent output keeps the history view parked.
+  public func parkAtBrowseRow(_ row: UInt64) {
+    viewport = TerminalViewport()
+    browseTopRow = row
+  }
 
   /// True while a pattern-2 display-link browse gesture/inertia is in flight.
   /// During this window the display link re-presents every tick, so the output

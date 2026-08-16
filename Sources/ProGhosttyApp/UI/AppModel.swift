@@ -50,6 +50,8 @@ final class AppModel: ObservableObject {
   @Published var workspaceSwitcherState = WorkspaceSwitcherState(workspaces: [], activeWorkspaceID: nil)
   @Published var commandLine = ""
   @Published var sideInputStore = TerminalSideInputStore.empty
+  @Published var isFindBarPresented = false
+  @Published var searchState = SearchState()
   var workspaces: [Workspace] { composition.workspaces }
   var settings: AppSettings {
     get { composition.settings }
@@ -74,6 +76,7 @@ final class AppModel: ObservableObject {
   private let surfaceRegistry: TerminalSurfaceRegistry
   private let paneWorkspaceController: PaneWorkspaceController
   private let focusStore = TerminalFocusStore()
+  private var searchTask: Task<Void, Never>?
   private let projectInfoPopover = ProjectInfoPopover()
   /// The live settings window, if open — used by the window-close guard to
   /// leave utility windows unguarded.
@@ -292,6 +295,74 @@ final class AppModel: ObservableObject {
     guard let selectedPaneID, let selectedSessionID else { return }
     UserDefaults.standard.set(true, forKey: Self.sideInputHintKey)
     sideInputStore.open(paneID: selectedPaneID, sessionID: selectedSessionID)
+  }
+
+  // MARK: Buffer search (find)
+
+  func toggleFindBar() {
+    isFindBarPresented ? closeFindBar() : openFindBar()
+  }
+
+  func openFindBar() {
+    isFindBarPresented = true
+  }
+
+  func closeFindBar() {
+    isFindBarPresented = false
+    searchTask?.cancel()
+    searchTask = nil
+    searchState = SearchState()
+    if let session = selectedSessionID {
+      surfaceRegistry.clearSearchHighlights(for: session)
+    }
+  }
+
+  func updateSearchQuery(_ query: String) {
+    searchState.query = query
+    searchState.resetMatches()
+    searchTask?.cancel()
+    guard !query.isEmpty, let session = selectedSessionID else {
+      if let session = selectedSessionID {
+        surfaceRegistry.clearSearchHighlights(for: session)
+      }
+      return
+    }
+    let caseSensitive = searchState.caseSensitive
+    searchState.isSearching = true
+    searchTask = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: 150_000_000)
+      guard !Task.isCancelled else { return }
+      guard let self, let result = await self.surfaceRegistry.search(query: query, caseSensitive: caseSensitive, in: session)
+      else { return }
+      guard !Task.isCancelled else { return }
+      self.searchState.matches = result.matches
+      self.searchState.truncated = result.truncated
+      self.searchState.isSearching = false
+      self.searchState.currentIndex = result.matches.isEmpty ? nil : 0
+      self.surfaceRegistry.applySearchHighlights(result.matches, total: result.totalRows, to: session)
+    }
+  }
+
+  func toggleSearchCaseSensitivity() {
+    searchState.caseSensitive.toggle()
+    if !searchState.query.isEmpty {
+      updateSearchQuery(searchState.query)
+    }
+  }
+
+  func nextSearchMatch() {
+    searchState.next()
+    revealCurrentSearchMatch()
+  }
+
+  func previousSearchMatch() {
+    searchState.previous()
+    revealCurrentSearchMatch()
+  }
+
+  private func revealCurrentSearchMatch() {
+    guard let match = searchState.currentMatch, let session = selectedSessionID else { return }
+    surfaceRegistry.revealSearchMatch(match, in: session)
   }
 
   // MARK: Pane rename

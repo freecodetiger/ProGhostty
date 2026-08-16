@@ -18,6 +18,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     var lastCursorFrame: GhosttyTerminalFrame? = nil
     var liveRendererFallbackReason: String? = nil
     var bridgeDiagnostics = BridgeRenderDiagnostics()
+    var activeSearchHighlights: [SearchMatch] = []
+    var activeCurrentMatch: SearchMatch? = nil
+    var activeSearchTotal: UInt64 = 0
   }
 
   private struct BridgeRenderDiagnostics {
@@ -276,6 +279,96 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   public func rendererDiagnostics(for id: TerminalSessionID) -> TerminalRendererDiagnostics? {
     guard let surface = surfaces[id] else { return nil }
     return composedRendererDiagnostics(for: surface)
+  }
+
+  /// Run a buffer search over the session's scrollback off the main actor.
+  /// Returns the accumulated matches (absolute-row addressed) plus the total row
+  /// count used to map them onto the live screen.
+  public func search(query: String, caseSensitive: Bool, in id: TerminalSessionID) async -> SearchResult? {
+    guard let bridge = surfaces[id]?.bridge else { return nil }
+    return await SearchSessionDriver().search(query: query, caseSensitive: caseSensitive) { startRow, count in
+      try bridge.rows(at: startRow, count: count)
+    }
+  }
+
+  /// Store the search matches for a session and re-present its current frame
+  /// (live screen or parked history) with the matches highlighted.
+  public func applySearchHighlights(_ matches: [SearchMatch], total: UInt64, to id: TerminalSessionID) {
+    guard var surface = surfaces[id] else { return }
+    surface.activeSearchHighlights = matches
+    surface.activeCurrentMatch = matches.first
+    surface.activeSearchTotal = total
+    surfaces[id] = surface
+    rePresentWithHighlights(session: id, surface: &surface)
+  }
+
+  /// Park the viewport on a match row without moving the VT viewport (pattern-2
+  /// browse), centering the match in the visible window.
+  public func revealSearchMatch(_ match: SearchMatch, in id: TerminalSessionID) {
+    guard var surface = surfaces[id], let bridge = surface.bridge else { return }
+    surface.bridge = bridge
+    surface.activeCurrentMatch = match
+    surfaces[id] = surface
+    let visibleRows = surface.lastFrame?.rows ?? 0
+    guard visibleRows > 0 else { return }
+    let center = match.absoluteRow > UInt64(visibleRows / 2)
+      ? match.absoluteRow - UInt64(visibleRows / 2)
+      : 0
+    surface.gridView.parkAtBrowseRow(center)
+    presentBrowseWindow(session: id, topAbsoluteRow: center, visibleRows: visibleRows)
+  }
+
+  public func clearSearchHighlights(for id: TerminalSessionID) {
+    guard var surface = surfaces[id] else { return }
+    surface.activeSearchHighlights = []
+    surface.activeCurrentMatch = nil
+    surface.activeSearchTotal = 0
+    if surface.gridView.browseTopAbsoluteRow != nil {
+      surface.gridView.resetPixelScroll(suppressMomentum: true)
+    }
+    surfaces[id] = surface
+    rePresentWithHighlights(session: id, surface: &surface)
+  }
+
+  private func rePresentWithHighlights(session id: TerminalSessionID, surface: inout SurfaceState) {
+    guard let bridge = surface.bridge else { return }
+    if let browseTop = surface.gridView.browseTopAbsoluteRow {
+      let visibleRows = surface.lastFrame?.rows ?? 0
+      surfaces[id] = surface
+      if visibleRows > 0 {
+        presentBrowseWindow(session: id, topAbsoluteRow: browseTop, visibleRows: visibleRows)
+      }
+      return
+    }
+    render(bridge, surface: &surface, session: id)
+  }
+
+  private func applyHighlights(to renderFrame: inout TerminalRenderFrame, surface: SurfaceState) {
+    guard !surface.activeSearchHighlights.isEmpty else {
+      renderFrame.highlightedCells = [:]
+      return
+    }
+    let expanded = renderFrame.expandedFrame
+    let absoluteBaseRow: Int
+    if let scrollFrame = renderFrame.scrollFrame {
+      absoluteBaseRow = RenderedGridGeometry.absoluteBaseRow(for: scrollFrame)
+    } else {
+      absoluteBaseRow = Int(surface.activeSearchTotal) - expanded.rows
+    }
+    renderFrame.highlightedCells = SearchHighlightMapper.expandedCells(
+      matches: surface.activeSearchHighlights,
+      absoluteBaseRow: absoluteBaseRow,
+      frameRows: expanded.rows,
+      cols: expanded.cols
+    )
+    if let current = surface.activeCurrentMatch {
+      renderFrame.currentHighlightCells = SearchHighlightMapper.expandedCells(
+        matches: [current],
+        absoluteBaseRow: absoluteBaseRow,
+        frameRows: expanded.rows,
+        cols: expanded.cols
+      )
+    }
   }
 
   private func composedRendererDiagnostics(for surface: SurfaceState) -> TerminalRendererDiagnostics {
@@ -589,12 +682,13 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
         frame: frame,
         scrollFrame: scrollFrame
       )
-      let renderFrame: TerminalRenderFrame
+      var renderFrame: TerminalRenderFrame
       if let scrollFrame {
         renderFrame = TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: isFocused(id))
       } else {
         renderFrame = TerminalRenderFrame(frame: frame, isFocused: isFocused(id))
       }
+      applyHighlights(to: &renderFrame, surface: surface)
       surface.lastHTMLSnapshot = nil
       surface.lastFrame = frame
       surface.lastCursorFrame = nil
@@ -732,7 +826,8 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       requestedOverscanBottom: overscanBottom.count,
       viewportStartRow: start &+ UInt64(topOverscanCount)
     )
-    let renderFrame = TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: isFocused(id))
+    var renderFrame = TerminalRenderFrame(scrollFrame: scrollFrame, isFocused: isFocused(id))
+    applyHighlights(to: &renderFrame, surface: surface)
     surface.lastRenderFrame = renderFrame
     surfaces[id] = surface
     render(renderFrame, in: surface.liveRenderer)
@@ -743,8 +838,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     let shouldFollowOutput = surface.textBackend.isScrolledToBottom
     let rendererSelection = rendererSelection(for: snapshot.frame)
     if let frame = snapshot.frame, rendererSelection.presentation == .liveCellGrid {
-      let renderFrame = snapshot.scrollFrame.map { TerminalRenderFrame(scrollFrame: $0, isFocused: isFocused(id)) }
+      var renderFrame = snapshot.scrollFrame.map { TerminalRenderFrame(scrollFrame: $0, isFocused: isFocused(id)) }
         ?? TerminalRenderFrame(frame: frame, isFocused: isFocused(id))
+      applyHighlights(to: &renderFrame, surface: surface)
       surface.lastHTMLSnapshot = nil
       surface.lastFrame = frame
       surface.lastCursorFrame = nil
