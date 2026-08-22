@@ -78,9 +78,9 @@ final class AppModel: ObservableObject {
   @Published var isMarkdownPreviewPresented = false
   @Published var markdownPreviewPath: String?
   @Published var markdownPreviewFrame: CGRect?
-  @Published var markdownPreviewHTML: String?
-  /// Base URL for relative image paths — the previewed markdown file's directory.
-  @Published var markdownPreviewBaseURL: URL?
+  /// The `.markdown-body` inner HTML for the current document (local images
+  /// inlined as data URLs). The float injects this into its once-loaded shell.
+  @Published var markdownPreviewBody: String?
   /// Index of the panel the float is docked into, or nil when floating.
   @Published var markdownPreviewDockedPanelIndex: Int?
   private var previewWatcher: DispatchSourceFileSystemObject?
@@ -198,7 +198,8 @@ final class AppModel: ObservableObject {
       self?.terminalFileInfo(target, from: sourceSession)
     }
     surfaceRegistry.setMarkdownPreviewHandler { [weak self] sourceSession, path in
-      self?.openMarkdownPreview(path, from: sourceSession)
+      guard let self else { return false }
+      return self.openMarkdownPreview(path, from: sourceSession)
     }
     composition.registerWindow(self)
     // Forwarded presenter/controller state must keep publishing through AppModel.
@@ -934,16 +935,24 @@ final class AppModel: ObservableObject {
 
   /// Opens the markdown preview float for a clicked `.md` path. Frame is reset
   /// so the float re-derives its initial adaptive position on next layout.
-  func openMarkdownPreview(_ path: String, from sourceSession: TerminalSessionID) {
+  /// Returns false — and the click becomes a normal link interaction — while a
+  /// preview float is already showing: only one float exists, and a second click
+  /// must not summon or replace it.
+  @discardableResult
+  func openMarkdownPreview(_ path: String, from sourceSession: TerminalSessionID) -> Bool {
+    guard !isMarkdownPreviewPresented else {
+      DebugLog.write("markdown-preview skip already-presented path=\(path)")
+      return false
+    }
     DebugLog.write("markdown-preview open path=\(path) session=\(sourceSession)")
     markdownPreviewPath = path
     markdownPreviewFrame = nil
-    markdownPreviewHTML = nil
-    markdownPreviewBaseURL = nil
+    markdownPreviewBody = nil
     markdownPreviewDockedPanelIndex = nil
     isMarkdownPreviewPresented = true
     reloadMarkdownPreview()
     startMarkdownPreviewWatcher(at: path)
+    return true
   }
 
   func dismissMarkdownPreview() {
@@ -955,8 +964,7 @@ final class AppModel: ObservableObject {
     isMarkdownPreviewPresented = false
     markdownPreviewPath = nil
     markdownPreviewFrame = nil
-    markdownPreviewHTML = nil
-    markdownPreviewBaseURL = nil
+    markdownPreviewBody = nil
     markdownPreviewDockedPanelIndex = nil
   }
 
@@ -973,8 +981,8 @@ final class AppModel: ObservableObject {
     markdownPreviewDockedPanelIndex = nil
   }
 
-  /// Reads the previewed file and publishes the GitHub-README HTML document
-  /// (github-markdown-css + highlight.js inlined) for the float's WKWebView.
+  /// Reads the previewed file and publishes the `.markdown-body` inner HTML
+  /// (local images inlined as base64) for the float to inject into its shell.
   private func reloadMarkdownPreview() {
     guard let path = markdownPreviewPath else { return }
     let start = CFAbsoluteTimeGetCurrent()
@@ -985,30 +993,10 @@ final class AppModel: ObservableObject {
       content = "⚠️ 无法读取 \(path)\n\n\(error.localizedDescription)"
     }
     let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
-    let html = MarkdownPreviewRenderer().htmlDocument(
-      for: content,
-      css: Self.markdownPreviewCSS,
-      highlightCSS: Self.markdownPreviewHighlightCSS,
-      highlightJS: Self.markdownPreviewHighlightJS,
-      baseDirectory: directory
-    )
+    let body = MarkdownPreviewRenderer().bodyHTML(for: content, baseDirectory: directory)
     let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
-    DebugLog.write("markdown-preview render path=\(path) bytes=\(content.count) htmlChars=\(html.count) ms=\(ms)")
-    markdownPreviewHTML = html
-    markdownPreviewBaseURL = URL(fileURLWithPath: path).deletingLastPathComponent()
-  }
-
-  /// Bundled github-markdown-css + highlight.js, loaded once.
-  private static let markdownPreviewCSS = AppModel.bundledString(named: "markdown-preview-light", ext: "css") ?? ""
-  private static let markdownPreviewHighlightCSS = AppModel.bundledString(named: "markdown-preview-highlight-theme", ext: "css") ?? ""
-  private static let markdownPreviewHighlightJS = AppModel.bundledString(named: "markdown-preview-highlight", ext: "js") ?? ""
-
-  private static func bundledString(named name: String, ext: String) -> String? {
-    guard let url = Bundle.main.url(forResource: name, withExtension: ext) else {
-      DebugLog.write("markdown-preview missing bundle resource \(name).\(ext)")
-      return nil
-    }
-    return try? String(contentsOf: url, encoding: .utf8)
+    DebugLog.write("markdown-preview render path=\(path) bytes=\(content.count) htmlChars=\(body.count) ms=\(ms)")
+    markdownPreviewBody = body
   }
 
   /// Live-refresh: watch the previewed file for changes (debounced re-render),

@@ -12,9 +12,73 @@ import UniformTypeIdentifiers
 public final class MarkdownPreviewRenderer {
   public init() {}
 
-  /// The `<div class="markdown-body">` inner HTML for a markdown string.
-  public func bodyHTML(for markdown: String) -> String {
-    addHeadingIDs(escapeCodeBlocks(HTMLFormatter.format(markdown)))
+  /// The `<div class="markdown-body">` inner HTML for a markdown string. With a
+  /// `baseDirectory`, local relative images are inlined as base64 data URLs; the
+  /// float's live-render path uses this form and injects it into the shared
+  /// shell. Without one the body is left raw (the renderer tests use this form).
+  public func bodyHTML(for markdown: String, baseDirectory: URL? = nil) -> String {
+    let body = addHeadingIDs(escapeCodeBlocks(HTMLFormatter.format(markdown)))
+    guard let baseDirectory else { return body }
+    return inlineImages(in: body, baseDirectory: baseDirectory)
+  }
+
+  /// Static document shell: github-markdown-css + highlight.js + an empty
+  /// `.markdown-body`. Loaded ONCE into the preview webView; every render after
+  /// that swaps only the `.markdown-body` innerHTML via JS, so the identical
+  /// ~140KB of CSS/JS is never re-parsed per document — the dominant cost of the
+  /// old full-document `loadHTMLString` on every open and file save.
+  public func shellHTML(css: String, highlightCSS: String, highlightJS: String) -> String {
+    """
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <style>\(css)</style>
+    <style>\(highlightCSS)</style>
+    <style>html,body{background:#ffffff}</style>
+    <script>\(highlightJS)</script>
+    </head>
+    <body>
+    <div class="markdown-body"></div>
+    </body>
+    </html>
+    """
+  }
+
+  /// The complete HTML document with github-markdown-css + highlight.js inlined,
+  /// so the WKWebView needs no external file access. Local relative images are
+  /// inlined as base64 data URLs against `baseDirectory` (the markdown file's
+  /// directory) — WebKit refuses file:// subresources from a `loadHTMLString`
+  /// page even with `allowFileAccessFromFileURLs`, so the document is made
+  /// fully self-contained instead. Remote (http/https) and `data:` URLs are
+  /// left as-is. (Kept for the renderer tests; the app renders via `shellHTML` +
+  /// `bodyHTML` and swaps only the body.)
+  public func htmlDocument(
+    for markdown: String,
+    css: String,
+    highlightCSS: String,
+    highlightJS: String,
+    baseDirectory: URL? = nil
+  ) -> String {
+    let body = bodyHTML(for: markdown, baseDirectory: baseDirectory)
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <style>\(css)</style>
+    <style>\(highlightCSS)</style>
+    <style>html,body{background:#ffffff}</style>
+    <script>\(highlightJS)</script>
+    </head>
+    <body>
+    <div class="markdown-body">
+    \(body)
+    </div>
+    <script>if (window.hljs) hljs.highlightAll();</script>
+    </body>
+    </html>
+    """
   }
 
   /// GitHub-style heading slug (`# Build From Source` → `build-from-source`),
@@ -64,42 +128,6 @@ public final class MarkdownPreviewRenderer {
     return result
   }
 
-  /// The complete HTML document with github-markdown-css + highlight.js inlined,
-  /// so the WKWebView needs no external file access. Local relative images are
-  /// inlined as base64 data URLs against `baseDirectory` (the markdown file's
-  /// directory) — WebKit refuses file:// subresources from a `loadHTMLString`
-  /// page even with `allowFileAccessFromFileURLs`, so the document is made
-  /// fully self-contained instead. Remote (http/https) and `data:` URLs are
-  /// left as-is.
-  public func htmlDocument(
-    for markdown: String,
-    css: String,
-    highlightCSS: String,
-    highlightJS: String,
-    baseDirectory: URL? = nil
-  ) -> String {
-    let body = bodyHTML(for: markdown)
-    let inlined = baseDirectory.map { inlineImages(in: body, baseDirectory: $0) } ?? body
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-    <meta charset="utf-8">
-    <style>\(css)</style>
-    <style>\(highlightCSS)</style>
-    <style>html,body{background:#ffffff}</style>
-    <script>\(highlightJS)</script>
-    </head>
-    <body>
-    <div class="markdown-body">
-    \(inlined)
-    </div>
-    <script>if (window.hljs) hljs.highlightAll();</script>
-    </body>
-    </html>
-    """
-  }
-
   /// Replaces each `<img src="relative">` in the body with a base64 `data:` URL
   /// resolved against `baseDirectory`, so local images render without any WebKit
   /// file access. Only `<img>` tags are touched (code blocks stay escaped and
@@ -119,7 +147,12 @@ public final class MarkdownPreviewRenderer {
       // Text between the tag start and the src value is `<img … src="` — keep it.
       result.append(ns.substring(with: NSRange(location: match.range.location, length: srcRange.location - match.range.location)))
       result.append(inlineDataSrc(for: src, baseDirectory: baseDirectory) ?? src)
-      last = srcRange.location + srcRange.length
+      // Defer decode of images below the fold: the page's load event no longer
+      // waits for every base64 image to decode, so a large README paints its top
+      // while the rest load lazily. The char after the src value is its closing
+      // quote; emit it + the lazy attribute and skip the quote.
+      result.append(#"" loading="lazy""#)
+      last = srcRange.location + srcRange.length + 1
     }
     result.append(ns.substring(from: last))
     return result

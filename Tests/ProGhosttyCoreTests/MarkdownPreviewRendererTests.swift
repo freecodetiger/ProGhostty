@@ -162,4 +162,40 @@ struct MarkdownPreviewRendererTests {
     #expect(html.contains(#"<h1 id="hi">Hi</h1>"#))
     #expect(html.contains("hljs.highlightAll()"))
   }
+
+  // MARK: - Shell / body split (the app loads the shell once and swaps only body)
+
+  @Test func shellCarriesAssetsButNoBodyOrHighlight() {
+    let shell = renderer.shellHTML(css: "CSS-BODY", highlightCSS: "HL-CSS", highlightJS: "HL-JS")
+    #expect(shell.contains("CSS-BODY"))
+    #expect(shell.contains("HL-CSS"))
+    #expect(shell.contains("HL-JS"))
+    #expect(shell.contains(#"<div class="markdown-body"></div>"#))
+    // Highlighting happens on the injected body, not the shell.
+    #expect(!shell.contains("highlightAll"))
+  }
+
+  @Test func bodyHTMLWithBaseDirectoryInlinesImagesWithoutDocWrapper() throws {
+    try withTempImageDir { dir in
+      let png = try #require(Data(base64Encoded: "iVBORw0KGgo="))
+      try png.write(to: dir.appendingPathComponent("logo.png"))
+      let body = renderer.bodyHTML(for: "![logo](logo.png)", baseDirectory: dir)
+      #expect(body.contains("data:image/png;base64,iVBORw0KGgo="))
+      #expect(!body.contains("<!DOCTYPE"))
+      #expect(!body.contains("<html"))
+    }
+  }
+
+  @Test func inlinedImagesAreLazyLoaded() throws {
+    try withTempImageDir { dir in
+      let png = try #require(Data(base64Encoded: "iVBORw0KGgo="))
+      try png.write(to: dir.appendingPathComponent("logo.png"))
+      let html = renderer.htmlDocument(
+        for: "![logo](logo.png)",
+        css: "", highlightCSS: "", highlightJS: "",
+        baseDirectory: dir
+      )
+      #expect(html.contains(#"loading="lazy""#))
+    }
+  }
 }

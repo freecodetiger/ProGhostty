@@ -7,8 +7,12 @@ import WebKit
 /// terminal canvas overlay); the inner `MarkdownPreviewFloatView` manages its
 /// own frame (drag / resize / clamp) and reports changes up to AppModel.
 struct MarkdownPreviewFloatRepresentable: NSViewRepresentable {
-  var html: String?
-  var baseURL: URL?
+  /// The `.markdown-body` inner HTML for the current document.
+  var body: String?
+  /// Whether the preview is currently shown. The view stays mounted so the
+  /// WKWebView + loaded shell survive dismiss/reopen; when false it's hidden and
+  /// passes hits through to the terminal.
+  var isPresented: Bool
   var containerSize: CGSize
   var frame: CGRect?
   var paneAnchor: CGRect?
@@ -39,8 +43,8 @@ struct MarkdownPreviewFloatRepresentable: NSViewRepresentable {
     view.onDetach = onDetach
     view.panelFramesProvider = panelFramesProvider
     view.configure(
-      html: html,
-      baseURL: baseURL,
+      body: body,
+      isPresented: isPresented,
       containerSize: containerSize,
       frame: resolved
     )
@@ -61,6 +65,9 @@ final class MarkdownPreviewFloatContainerView: NSView {
   private var containerSize = CGSize.zero
   private var snapTargets: [CGRect] = []
   private var snapHoverRect: CGRect?
+  /// Hidden while the preview is dismissed. When false the container returns nil
+  /// from hitTest so mouse / scroll events reach the terminal underneath.
+  private var isPresented = true
 
   override init(frame frameRect: NSRect) {
     super.init(frame: frameRect)
@@ -84,6 +91,14 @@ final class MarkdownPreviewFloatContainerView: NSView {
 
   required init?(coder: NSCoder) {
     nil
+  }
+
+  /// When the preview is dismissed the float stays mounted (the WKWebView and
+  /// its loaded shell are reused on reopen) — but it must not swallow clicks or
+  /// wheel events meant for the terminal.
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    guard isPresented else { return nil }
+    return super.hitTest(point)
   }
 
   override func viewDidMoveToWindow() {
@@ -137,12 +152,13 @@ final class MarkdownPreviewFloatContainerView: NSView {
   }
 
   func configure(
-    html: String?,
-    baseURL: URL?,
+    body: String?,
+    isPresented: Bool,
     containerSize: CGSize,
     frame: CGRect
   ) {
     self.containerSize = containerSize
+    self.isPresented = isPresented
     let clamped = MarkdownPreviewLayout.clamped(frame, in: containerSize)
     // The workspace re-renders constantly (per-frame model updates), so this
     // runs mid-drag too. During a drag the incoming frame is STALE (the model
@@ -156,9 +172,10 @@ final class MarkdownPreviewFloatContainerView: NSView {
       }
     }
     float.setContainerSize(containerSize)
+    float.setPresented(isPresented)
     float.panelFramesProvider = panelFramesProvider
-    if let html {
-      float.setHTML(html, baseURL: baseURL)
+    if let body {
+      float.setBody(body)
     }
   }
 }
@@ -477,22 +494,109 @@ final class MarkdownPreviewFloatView: NSView, WKNavigationDelegate {
     containerSize = size
   }
 
-  func setHTML(_ html: String, baseURL: URL?) {
-    if html != lastLoadedHTML || baseURL != lastLoadedBaseURL {
-      lastLoadedHTML = html
-      lastLoadedBaseURL = baseURL
-      // New document: hide until its first paint (didFinish fades it in).
-      webView.alphaValue = 0
-      webView.loadHTMLString(html, baseURL: baseURL)
-      if Date().timeIntervalSince(lastLayoutLog) > 1 {
-        lastLayoutLog = Date()
-        DebugLog.write("markdown-preview frames float=\(NSStringFromRect(frame)) web=\(NSStringFromRect(webView.frame))")
+  /// Injects the rendered `.markdown-body` inner HTML into the once-loaded
+  /// shell. The shell (css + highlight.js) loads lazily on the first body; after
+  /// that every open / file-save re-render swaps only the body via JS — no
+  /// re-parsing of the identical ~140KB of assets, so reopen is near-instant.
+  func setBody(_ body: String) {
+    if body == lastBody { return }
+    lastBody = body
+    if Date().timeIntervalSince(lastLayoutLog) > 1 {
+      lastLayoutLog = Date()
+      DebugLog.write("markdown-preview setBody chars=\(body.count) shellReady=\(shellReady)")
+    }
+    if shellReady {
+      injectBody(body)
+    } else {
+      pendingBody = body
+      if !hasLoadedShell {
+        hasLoadedShell = true
+        webView.loadHTMLString(Self.markdownShell, baseURL: nil)
       }
     }
   }
-  private var lastLoadedHTML: String?
-  private var lastLoadedBaseURL: URL?
+
+  /// Swaps the shell's `.markdown-body` innerHTML and re-highlights. Keeps the
+  /// scroll position across re-renders. The FIRST paint of a document fades the
+  /// page in over the white card (the webView sits at alpha 0 so WKWebView's
+  /// pre-commit black rectangle never shows); later re-renders swap in place.
+  private func injectBody(_ body: String) {
+    // JSONEncoder (unlike JSONSerialization) accepts a top-level String; the
+    // quoted literal safely embeds arbitrary HTML in the JS statement.
+    guard
+      let data = try? JSONEncoder().encode(body),
+      let bodyJSON = String(data: data, encoding: .utf8)
+    else {
+      DebugLog.write("markdown-preview body json encode failed")
+      return
+    }
+    let js = "var y=window.scrollY;var el=document.querySelector('.markdown-body');"
+      + "if(el){el.innerHTML=\(bodyJSON);requestAnimationFrame(function(){window.scrollTo(0,y)});}"
+      + "if(window.hljs){hljs.highlightAll();}"
+    webView.evaluateJavaScript(js) { [weak self] _, error in
+      guard let self else { return }
+      if let error {
+        DebugLog.write("markdown-preview body inject error=\(error)")
+      }
+      if !self.hasFadedInBody {
+        self.hasFadedInBody = true
+        self.webView.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { context in
+          context.duration = 0.15
+          context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+          self.webView.animator().alphaValue = 1
+        }
+      }
+      // Report every <img>: resolved src, load state, natural width (0 = failed).
+      let imgJS = "JSON.stringify(Array.from(document.images).map(i => "
+        + "({src:i.getAttribute('src'),base:i.src,complete:i.complete,w:i.naturalWidth})))"
+      self.webView.evaluateJavaScript(imgJS) { result, _ in
+        DebugLog.write("markdown-preview images=\(result ?? "none")")
+      }
+    }
+  }
+
+  /// Tracks presented state. While hidden (dismissed) the float must stop
+  /// following docked panes — no point re-pinning an invisible card every 30Hz.
+  func setPresented(_ presented: Bool) {
+    guard presented != isPresented else { return }
+    isPresented = presented
+    if !presented {
+      stopDockFollowTimer()
+      dockedPanelIndex = nil
+      isDocked = false
+    }
+  }
+
+  private var hasLoadedShell = false
+  private var shellReady = false
+  private var lastBody: String?
+  private var pendingBody: String?
+  private var hasFadedInBody = false
+  private var isPresented = true
   private var lastLayoutLog = Date.distantPast
+
+  /// The static shell document (css + highlight.js + empty body), built once
+  /// from the bundled github-markdown-css + highlight.js resources. Loaded once
+  /// into the webView; every render after injects only the `.markdown-body`.
+  private static let markdownShell: String = {
+    guard
+      let css = MarkdownPreviewFloatView.bundledString(named: "markdown-preview-light", ext: "css"),
+      let highlightCSS = MarkdownPreviewFloatView.bundledString(named: "markdown-preview-highlight-theme", ext: "css"),
+      let highlightJS = MarkdownPreviewFloatView.bundledString(named: "markdown-preview-highlight", ext: "js")
+    else {
+      return ""
+    }
+    return MarkdownPreviewRenderer().shellHTML(css: css, highlightCSS: highlightCSS, highlightJS: highlightJS)
+  }()
+
+  private static func bundledString(named name: String, ext: String) -> String? {
+    guard let url = Bundle.main.url(forResource: name, withExtension: ext) else {
+      DebugLog.write("markdown-preview missing bundle resource \(name).\(ext)")
+      return nil
+    }
+    return try? String(contentsOf: url, encoding: .utf8)
+  }
 
   @objc private func closeClicked() {
     DebugLog.write("markdown-preview close button")
@@ -615,21 +719,14 @@ final class MarkdownPreviewFloatView: NSView, WKNavigationDelegate {
 
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     DebugLog.write("markdown-preview nav finish url=\(webView.url?.absoluteString ?? "nil")")
-    // First paint: fade the rendered page in over the white card. It started at
-    // alpha 0 so WKWebView's pre-commit black rectangle never shows.
-    if webView.alphaValue < 1 {
-      NSAnimationContext.runAnimationGroup { context in
-        context.duration = 0.15
-        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        webView.animator().alphaValue = 1
-      }
-    }
-    // Report every <img> in the page: resolved src, load state, natural width.
-    // A naturalWidth of 0 means the image failed to load.
-    let js = "JSON.stringify(Array.from(document.images).map(i => "
-      + "({src: i.getAttribute('src'), base: i.src, complete: i.complete, w: i.naturalWidth})))"
-    webView.evaluateJavaScript(js) { result, _ in
-      DebugLog.write("markdown-preview images=\(result ?? "none")")
+    // The only loadHTMLString navigation is the empty SHELL (no body yet): mark
+    // it ready and flush any body that arrived while it was loading. The body
+    // inject itself fades the page in once content is in the DOM.
+    guard !shellReady else { return }
+    shellReady = true
+    if let pending = pendingBody {
+      pendingBody = nil
+      injectBody(pending)
     }
   }
 
@@ -647,6 +744,14 @@ final class MarkdownPreviewFloatView: NSView, WKNavigationDelegate {
 
   func webView(_ webView: WKWebView, webContentProcessDidTerminate: WKWebView) {
     DebugLog.write("markdown-preview web-content-process terminated")
+    // The page is gone; reload the shell and re-inject the last body. Reset the
+    // fade so the black pre-commit frame is hidden again during the reload.
+    hasFadedInBody = false
+    webView.alphaValue = 0
+    guard hasLoadedShell else { return }
+    shellReady = false
+    webView.loadHTMLString(Self.markdownShell, baseURL: nil)
+    if let body = lastBody { pendingBody = body }
   }
 
   // MARK: - Drag / resize

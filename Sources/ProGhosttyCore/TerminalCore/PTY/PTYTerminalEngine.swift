@@ -991,9 +991,11 @@ public class PTYGridView: NSView {
   /// raw token.
   public var fileInfoProvider: ((TerminalFilePathTarget) -> TerminalFileFacts?)?
   /// Fired when a single click lands on a `.md`/`.markdown` file path that
-  /// resolves to a real file. Opens the markdown preview float instead of the
-  /// link popover. The absolute path is resolved via `fileInfoProvider`.
-  public var openMarkdownPreviewHandler: ((String) -> Void)?
+  /// resolves to a real file. Returns true when the click was taken over by the
+  /// markdown preview float (no float was already showing); false means the click
+  /// should proceed as a normal link interaction (the popover). The absolute path
+  /// is resolved via `fileInfoProvider`.
+  public var openMarkdownPreviewHandler: ((String) -> Bool)?
   /// Returns true when the running application has enabled mouse reporting
   /// (modes 1000/1002/1003). When active, clicks should be forwarded to the
   /// PTY as mouse reports rather than interpreted as click-to-position.
@@ -2191,12 +2193,14 @@ public class PTYGridView: NSView {
       // Clear the empty anchor-only selection created in mouseDown so it doesn't
       // linger as a zero-width selection under the popover.
       selection.clear()
-      // A `.md`/`.markdown` file path opens the preview float directly instead
-      // of the link popover (spec: 2026-08-18-markdown-preview-float).
+      // A `.md`/`.markdown` path opens the preview float — but only the first
+      // time: while a float is already showing the handler returns false and the
+      // click proceeds as a normal link interaction (spec: markdown-preview-float).
       if case .filePath(let filePath) = pending.hit.target,
-        let previewPath = resolvedMarkdownPreviewPath(for: filePath)
+        let previewPath = resolvedMarkdownPreviewPath(for: filePath),
+        openMarkdownPreviewHandler?(previewPath) == true
       {
-        openMarkdownPreviewHandler?(previewPath)
+        // Preview float opened; nothing else to do here.
       } else {
         presentLinkPopover(for: pending.hit.target, at: pending.origin)
       }

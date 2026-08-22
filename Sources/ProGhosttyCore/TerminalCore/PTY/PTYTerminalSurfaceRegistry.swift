@@ -73,8 +73,9 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
   /// detail lines. Owns cwd resolution + filesystem access (App layer).
   private var fileInfoProvider: (@MainActor (TerminalSessionID, TerminalFilePathTarget) -> TerminalFileFacts?)?
   /// Per-session handler: a clicked `.md`/`.markdown` path → open the preview
-  /// float with its resolved absolute path (instead of the link popover).
-  private var markdownPreviewHandler: (@MainActor (TerminalSessionID, String) -> Void)?
+  /// float with its resolved absolute path. Returns false when a float is already
+  /// showing (the click then proceeds as a normal link interaction).
+  private var markdownPreviewHandler: (@MainActor (TerminalSessionID, String) -> Bool)?
   private var semanticLinkText = SemanticLinkText()
   private var rendererOptions = TerminalRendererOptions()
   private let isMetalDirectAvailable: Bool
@@ -210,7 +211,7 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
       { target in provider(id, target) }
     }
     gridView.openMarkdownPreviewHandler = { [weak self] path in
-      self?.markdownPreviewHandler?(id, path)
+      self?.markdownPreviewHandler?(id, path) ?? false
     }
     gridView.mouseReportingActiveHandler = { [weak self] in
       guard let self, let bridge = self.surfaces[id]?.bridge else { return false }
@@ -544,11 +545,11 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
     }
   }
 
-  public func setMarkdownPreviewHandler(_ handler: (@MainActor (TerminalSessionID, String) -> Void)?) {
+  public func setMarkdownPreviewHandler(_ handler: (@MainActor (TerminalSessionID, String) -> Bool)?) {
     markdownPreviewHandler = handler
     for (id, surface) in surfaces {
       surface.gridView.openMarkdownPreviewHandler = { [weak self] path in
-        self?.markdownPreviewHandler?(id, path)
+        self?.markdownPreviewHandler?(id, path) ?? false
       }
     }
   }

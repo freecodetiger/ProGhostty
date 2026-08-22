@@ -33,22 +33,25 @@ struct RootView: View {
           .transition(.move(edge: .top).combined(with: .opacity))
       }
 
-      if model.isMarkdownPreviewPresented {
-        GeometryReader { geometry in
-          MarkdownPreviewFloatRepresentable(
-            html: model.markdownPreviewHTML,
-            baseURL: model.markdownPreviewBaseURL,
-            containerSize: geometry.size,
-            frame: model.markdownPreviewFrame,
-            paneAnchor: model.markdownPreviewPaneAnchor,
-            panelFramesProvider: { model.markdownPreviewPanelFrames },
-            onFrameChange: { model.markdownPreviewFrame = $0 },
-            onDismiss: { model.dismissMarkdownPreview() },
-            onDock: { model.dockMarkdownPreview(to: $0) },
-            onDetach: { model.detachMarkdownPreview() }
-          )
-        }
+      // Always mounted: the preview's WKWebView + loaded shell survive
+      // dismiss/reopen, so reopening is near-instant. opacity + hit-testing hide
+      // it (and let terminal events through) while not presented.
+      GeometryReader { geometry in
+        MarkdownPreviewFloatRepresentable(
+          body: model.markdownPreviewBody,
+          isPresented: model.isMarkdownPreviewPresented,
+          containerSize: geometry.size,
+          frame: model.markdownPreviewFrame,
+          paneAnchor: model.markdownPreviewPaneAnchor,
+          panelFramesProvider: { model.markdownPreviewPanelFrames },
+          onFrameChange: { model.markdownPreviewFrame = $0 },
+          onDismiss: { model.dismissMarkdownPreview() },
+          onDock: { model.dockMarkdownPreview(to: $0) },
+          onDetach: { model.detachMarkdownPreview() }
+        )
       }
+      .opacity(model.isMarkdownPreviewPresented ? 1 : 0)
+      .allowsHitTesting(model.isMarkdownPreviewPresented)
 
     }
     .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
