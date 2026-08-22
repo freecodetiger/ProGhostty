@@ -990,6 +990,12 @@ public class PTYGridView: NSView {
   /// popover. Nil → popover shows only actions and Copy Path falls back to the
   /// raw token.
   public var fileInfoProvider: ((TerminalFilePathTarget) -> TerminalFileFacts?)?
+  /// Fired when a single click lands on a `.md`/`.markdown` file path that
+  /// resolves to a real file. Returns true when the click was taken over by the
+  /// markdown preview float (no float was already showing); false means the click
+  /// should proceed as a normal link interaction (the popover). The absolute path
+  /// is resolved via `fileInfoProvider`.
+  public var openMarkdownPreviewHandler: ((String) -> Bool)?
   /// Returns true when the running application has enabled mouse reporting
   /// (modes 1000/1002/1003). When active, clicks should be forwarded to the
   /// PTY as mouse reports rather than interpreted as click-to-position.
@@ -2090,6 +2096,15 @@ public class PTYGridView: NSView {
     invalidateSelectionRects(oldDirtyRects)
   }
 
+  /// Resolves a clicked file target to an existing markdown file's absolute
+  /// path, or nil if it isn't a markdown file (fall back to the link popover).
+  private func resolvedMarkdownPreviewPath(for target: TerminalFilePathTarget) -> String? {
+    guard let facts = fileInfoProvider?(target), MarkdownPath.isMarkdown(facts.absolutePath) else {
+      return nil
+    }
+    return facts.absolutePath
+  }
+
   private func presentLinkPopover(for target: TerminalLinkTarget, at point: NSPoint) {
     let items: [SemanticLinkPopover.Item]
     let title: String
@@ -2178,7 +2193,17 @@ public class PTYGridView: NSView {
       // Clear the empty anchor-only selection created in mouseDown so it doesn't
       // linger as a zero-width selection under the popover.
       selection.clear()
-      presentLinkPopover(for: pending.hit.target, at: pending.origin)
+      // A `.md`/`.markdown` path opens the preview float — but only the first
+      // time: while a float is already showing the handler returns false and the
+      // click proceeds as a normal link interaction (spec: markdown-preview-float).
+      if case .filePath(let filePath) = pending.hit.target,
+        let previewPath = resolvedMarkdownPreviewPath(for: filePath),
+        openMarkdownPreviewHandler?(previewPath) == true
+      {
+        // Preview float opened; nothing else to do here.
+      } else {
+        presentLinkPopover(for: pending.hit.target, at: pending.origin)
+      }
       return
     }
     // Click-to-position: if this was a genuine single click (not a drag, not a

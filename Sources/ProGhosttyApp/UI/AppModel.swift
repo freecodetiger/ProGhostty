@@ -72,6 +72,49 @@ final class AppModel: ObservableObject {
   let composition: AppComposition
   /// The terminal window this model drives; bound from the view layer.
   weak var window: NSWindow?
+
+  // MARK: Markdown preview float (spec: 2026-08-18-markdown-preview-float)
+
+  @Published var isMarkdownPreviewPresented = false
+  @Published var markdownPreviewPath: String?
+  @Published var markdownPreviewFrame: CGRect?
+  /// The `.markdown-body` inner HTML for the current document (local images
+  /// inlined as data URLs). The float injects this into its once-loaded shell.
+  @Published var markdownPreviewBody: String?
+  /// Index of the panel the float is docked into, or nil when floating.
+  @Published var markdownPreviewDockedPanelIndex: Int?
+  private var previewWatcher: DispatchSourceFileSystemObject?
+  private var previewReloadWorkItem: DispatchWorkItem?
+
+  /// Frame of the active pane (window contentView coordinates, y-up) used to
+  /// place the float's initial position near where the user clicked. Read when
+  /// the float first appears (frame == nil). The float's container converts
+  /// these into its own space.
+  var markdownPreviewPaneAnchor: CGRect? {
+    guard let sessionID = selectedSessionID,
+      let surface = surfaceRegistry.viewForSession(sessionID),
+      let window = surface.window
+    else {
+      return nil
+    }
+    return surface.convert(surface.bounds, to: window.contentView)
+  }
+
+  /// Frames of every pane in the active workspace, in window contentView
+  /// coordinates (y-up). The float's container converts them into its own
+  /// (flipped) space via `convert(_:from:)`.
+  var markdownPreviewPanelFrames: [CGRect] {
+    guard let runtime = activeWorkspace else { return [] }
+    return PaneTreeReducer.listLeaves(in: runtime.layout.root).compactMap { pane in
+      guard
+        let surface = surfaceRegistry.viewForSession(pane.sessionId),
+        let window = surface.window
+      else {
+        return nil
+      }
+      return surface.convert(surface.bounds, to: window.contentView)
+    }
+  }
   private let sessionManager: TerminalSessionManager
   private let surfaceRegistry: TerminalSurfaceRegistry
   private let paneWorkspaceController: PaneWorkspaceController
@@ -153,6 +196,10 @@ final class AppModel: ObservableObject {
     }
     surfaceRegistry.setFileInfoProvider { [weak self] sourceSession, target in
       self?.terminalFileInfo(target, from: sourceSession)
+    }
+    surfaceRegistry.setMarkdownPreviewHandler { [weak self] sourceSession, path in
+      guard let self else { return false }
+      return self.openMarkdownPreview(path, from: sourceSession)
     }
     composition.registerWindow(self)
     // Forwarded presenter/controller state must keep publishing through AppModel.
@@ -884,6 +931,95 @@ final class AppModel: ObservableObject {
     case .filePath(let filePath):
       revealTerminalFilePath(filePath, from: sourceSession)
     }
+  }
+
+  /// Opens the markdown preview float for a clicked `.md` path. Frame is reset
+  /// so the float re-derives its initial adaptive position on next layout.
+  /// Returns false — and the click becomes a normal link interaction — while a
+  /// preview float is already showing: only one float exists, and a second click
+  /// must not summon or replace it.
+  @discardableResult
+  func openMarkdownPreview(_ path: String, from sourceSession: TerminalSessionID) -> Bool {
+    guard !isMarkdownPreviewPresented else {
+      DebugLog.write("markdown-preview skip already-presented path=\(path)")
+      return false
+    }
+    DebugLog.write("markdown-preview open path=\(path) session=\(sourceSession)")
+    markdownPreviewPath = path
+    markdownPreviewFrame = nil
+    markdownPreviewBody = nil
+    markdownPreviewDockedPanelIndex = nil
+    isMarkdownPreviewPresented = true
+    reloadMarkdownPreview()
+    startMarkdownPreviewWatcher(at: path)
+    return true
+  }
+
+  func dismissMarkdownPreview() {
+    DebugLog.write("markdown-preview dismiss")
+    previewWatcher?.cancel()
+    previewWatcher = nil
+    previewReloadWorkItem?.cancel()
+    previewReloadWorkItem = nil
+    isMarkdownPreviewPresented = false
+    markdownPreviewPath = nil
+    markdownPreviewFrame = nil
+    markdownPreviewBody = nil
+    markdownPreviewDockedPanelIndex = nil
+  }
+
+  /// Docked the float into a panel: record the panel. The float itself keeps
+  /// its docked frame pinned to the pane (it knows the container↔contentView
+  /// coordinate conversion), so no timer here.
+  func dockMarkdownPreview(to index: Int) {
+    DebugLog.write("markdown-preview dock panel=\(index)")
+    markdownPreviewDockedPanelIndex = index
+  }
+
+  func detachMarkdownPreview() {
+    DebugLog.write("markdown-preview detach")
+    markdownPreviewDockedPanelIndex = nil
+  }
+
+  /// Reads the previewed file and publishes the `.markdown-body` inner HTML
+  /// (local images inlined as base64) for the float to inject into its shell.
+  private func reloadMarkdownPreview() {
+    guard let path = markdownPreviewPath else { return }
+    let start = CFAbsoluteTimeGetCurrent()
+    let content: String
+    do {
+      content = try String(contentsOfFile: path, encoding: .utf8)
+    } catch {
+      content = "⚠️ 无法读取 \(path)\n\n\(error.localizedDescription)"
+    }
+    let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
+    let body = MarkdownPreviewRenderer().bodyHTML(for: content, baseDirectory: directory)
+    let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+    DebugLog.write("markdown-preview render path=\(path) bytes=\(content.count) htmlChars=\(body.count) ms=\(ms)")
+    markdownPreviewBody = body
+  }
+
+  /// Live-refresh: watch the previewed file for changes (debounced re-render),
+  /// so editing in vim re-renders the preview as you save.
+  private func startMarkdownPreviewWatcher(at path: String) {
+    previewWatcher?.cancel()
+    previewWatcher = nil
+    let fd = open(path, O_EVTONLY)
+    guard fd >= 0 else { return }
+    let source = DispatchSource.makeFileSystemObjectSource(
+      fileDescriptor: fd,
+      eventMask: [.write, .extend, .delete],
+      queue: .main
+    )
+    source.setEventHandler { [weak self] in
+      self?.previewReloadWorkItem?.cancel()
+      let work = DispatchWorkItem { [weak self] in self?.reloadMarkdownPreview() }
+      self?.previewReloadWorkItem = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+    source.setCancelHandler { close(fd) }
+    source.resume()
+    previewWatcher = source
   }
 
   /// True if a bare token (e.g. `src`, `dist`) exists as a file/dir under the
