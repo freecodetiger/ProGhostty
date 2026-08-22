@@ -570,6 +570,50 @@ final class AppModel: ObservableObject {
     gitBranchCache = ("", nil, false)
   }
 
+  /// One-shot debounce: after the focused session's output goes quiet, if the
+  /// shell is back at a prompt, re-derive the git branch in place.
+  private var gitBranchIdleRefreshTimer: Timer?
+
+  private func scheduleGitBranchIdleRefresh(for session: TerminalSessionID) {
+    guard session == selectedSessionID else { return }
+    gitBranchIdleRefreshTimer?.invalidate()
+    gitBranchIdleRefreshTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self, self.selectedSessionID == session,
+          !self.sessionManager.hasForegroundProcess(in: session)
+        else { return }
+        self.refreshGitBranchInPlace()
+      }
+    }
+  }
+
+  /// Re-run `git rev-parse` for the current cwd WITHOUT clearing the displayed
+  /// branch first: the old name stays visible until the new one arrives, so a
+  /// branch change (git checkout / git switch) updates the titlebar without a
+  /// flicker.
+  private func refreshGitBranchInPlace() {
+    guard let cwd = selectedCwd else { return }
+    // Same-cwd refresh keeps the old branch until the new one arrives. If the
+    // cache holds another directory its branch is wrong here — fall back to the
+    // normal miss path (no branch shown while fetching).
+    if gitBranchCache.cwd != cwd {
+      gitBranchCache = (cwd, nil, false)
+    }
+    guard !gitBranchCache.requested else { return } // a fetch is already in flight
+    gitBranchCache.requested = true
+    let capturedCwd = cwd
+    DispatchQueue.global().async { [weak self] in
+      let branch = Self.runGitBranch(cwd: capturedCwd)
+      Task { @MainActor [weak self] in
+        guard let self, self.gitBranchCache.cwd == capturedCwd else { return }
+        if self.gitBranchCache.branch != branch {
+          self.gitBranchCache.branch = branch
+          self.objectWillChange.send()
+        }
+      }
+    }
+  }
+
   /// Run `git rev-parse --abbrev-ref HEAD` in `cwd`. Returns the branch name,
   /// or the short hash for detached HEAD, or nil on failure / timeout / non-git.
   /// Mirrors the lightweight subprocess pattern from ProjectInfoService.
@@ -1648,8 +1692,11 @@ final class AppModel: ObservableObject {
     switch event {
     case .sessionClosed(let session):
       reconcileClosedSession(session)
-    case .output:
-      break
+    case .output(let session, _):
+      // A command finishing without a cwd change (e.g. `git checkout`) emits no
+      // OSC 7, so the branch cache never invalidates on its own. Debounce
+      // output-idle and, back at a prompt, re-derive the branch in place.
+      scheduleGitBranchIdleRefresh(for: session)
     case .cwdChanged(let session, let cwd):
       shellIntegrationState = "available"
       updateWorkspaceForSession(session, persist: true) { workspace in
