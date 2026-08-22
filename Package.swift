@@ -15,7 +15,11 @@ let package = Package(
     .executable(name: "ProGhostty", targets: ["ProGhosttyApp"]),
     .executable(name: "pg", targets: ["ProGhosttyPG"]),
   ],
-  dependencies: [],
+  dependencies: [
+    // Markdown parsing for the preview float (spec: 2026-08-18-markdown-preview-float).
+    // Reuses Apple's markdown parser instead of hand-writing one.
+    .package(url: "https://github.com/apple/swift-markdown.git", from: "0.4.0"),
+  ],
   targets: [
     .target(
       name: "ProGhosttyGhosttyVT",
@@ -33,7 +37,11 @@ let package = Package(
     ),
     .target(
       name: "ProGhosttyCore",
-      dependencies: ["ProGhosttyGhosttyVT", "ProGhosttyPTY"],
+      dependencies: [
+        "ProGhosttyGhosttyVT",
+        "ProGhosttyPTY",
+        .product(name: "Markdown", package: "swift-markdown"),
+      ],
       linkerSettings: [
         .linkedLibrary("sqlite3")
       ]
@@ -41,7 +49,12 @@ let package = Package(
     .executableTarget(
       name: "ProGhosttyApp",
       dependencies: ["ProGhosttyCore"],
-      resources: [.copy("Resources/notification-piano.mp3")]
+      resources: [
+        .copy("Resources/notification-piano.mp3"),
+        .copy("Resources/markdown-preview-light.css"),
+        .copy("Resources/markdown-preview-highlight-theme.css"),
+        .copy("Resources/markdown-preview-highlight.js"),
+      ]
     ),
     .executableTarget(
       name: "ProGhosttyPG",

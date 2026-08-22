@@ -990,6 +990,10 @@ public class PTYGridView: NSView {
   /// popover. Nil → popover shows only actions and Copy Path falls back to the
   /// raw token.
   public var fileInfoProvider: ((TerminalFilePathTarget) -> TerminalFileFacts?)?
+  /// Fired when a single click lands on a `.md`/`.markdown` file path that
+  /// resolves to a real file. Opens the markdown preview float instead of the
+  /// link popover. The absolute path is resolved via `fileInfoProvider`.
+  public var openMarkdownPreviewHandler: ((String) -> Void)?
   /// Returns true when the running application has enabled mouse reporting
   /// (modes 1000/1002/1003). When active, clicks should be forwarded to the
   /// PTY as mouse reports rather than interpreted as click-to-position.
@@ -2090,6 +2094,15 @@ public class PTYGridView: NSView {
     invalidateSelectionRects(oldDirtyRects)
   }
 
+  /// Resolves a clicked file target to an existing markdown file's absolute
+  /// path, or nil if it isn't a markdown file (fall back to the link popover).
+  private func resolvedMarkdownPreviewPath(for target: TerminalFilePathTarget) -> String? {
+    guard let facts = fileInfoProvider?(target), MarkdownPath.isMarkdown(facts.absolutePath) else {
+      return nil
+    }
+    return facts.absolutePath
+  }
+
   private func presentLinkPopover(for target: TerminalLinkTarget, at point: NSPoint) {
     let items: [SemanticLinkPopover.Item]
     let title: String
@@ -2178,7 +2191,15 @@ public class PTYGridView: NSView {
       // Clear the empty anchor-only selection created in mouseDown so it doesn't
       // linger as a zero-width selection under the popover.
       selection.clear()
-      presentLinkPopover(for: pending.hit.target, at: pending.origin)
+      // A `.md`/`.markdown` file path opens the preview float directly instead
+      // of the link popover (spec: 2026-08-18-markdown-preview-float).
+      if case .filePath(let filePath) = pending.hit.target,
+        let previewPath = resolvedMarkdownPreviewPath(for: filePath)
+      {
+        openMarkdownPreviewHandler?(previewPath)
+      } else {
+        presentLinkPopover(for: pending.hit.target, at: pending.origin)
+      }
       return
     }
     // Click-to-position: if this was a genuine single click (not a drag, not a

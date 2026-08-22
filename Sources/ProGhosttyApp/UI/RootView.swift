@@ -33,6 +33,23 @@ struct RootView: View {
           .transition(.move(edge: .top).combined(with: .opacity))
       }
 
+      if model.isMarkdownPreviewPresented {
+        GeometryReader { geometry in
+          MarkdownPreviewFloatRepresentable(
+            html: model.markdownPreviewHTML,
+            baseURL: model.markdownPreviewBaseURL,
+            containerSize: geometry.size,
+            frame: model.markdownPreviewFrame,
+            paneAnchor: model.markdownPreviewPaneAnchor,
+            panelFramesProvider: { model.markdownPreviewPanelFrames },
+            onFrameChange: { model.markdownPreviewFrame = $0 },
+            onDismiss: { model.dismissMarkdownPreview() },
+            onDock: { model.dockMarkdownPreview(to: $0) },
+            onDetach: { model.detachMarkdownPreview() }
+          )
+        }
+      }
+
     }
     .animation(.easeOut(duration: 0.12), value: model.isWorkspaceSwitcherPresented)
     .animation(.easeOut(duration: 0.14), value: model.titlebarToast)
