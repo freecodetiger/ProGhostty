@@ -1978,7 +1978,7 @@ struct TerminalSurfaceTests {
       "Claude Code",
       "------------",
       "› hello     "
-    ], cols: 12, cursorX: 0, cursorY: 0)
+    ], cols: 12, cursorX: 0, cursorY: 0, cursorVisible: false)
     let promptCursorIndex = 2 * frame.cols + 7
     frame.cells[promptCursorIndex].scalar = " "
     frame.cells[promptCursorIndex].inverse = true
@@ -1999,7 +1999,7 @@ struct TerminalSurfaceTests {
       "› old       ",
       "history     ",
       "› current   "
-    ], cols: 12, cursorX: 0, cursorY: 0)
+    ], cols: 12, cursorX: 0, cursorY: 0, cursorVisible: false)
     let staleCursorIndex = 0 * frame.cols + 2
     frame.cells[staleCursorIndex].scalar = " "
     frame.cells[staleCursorIndex].inverse = true
@@ -2026,7 +2026,7 @@ struct TerminalSurfaceTests {
       "› long input",
       "continues   ",
       "here        "
-    ], cols: 12, cursorX: 0, cursorY: 0)
+    ], cols: 12, cursorX: 0, cursorY: 0, cursorVisible: false)
     let firstLineEndIndex = 0 * frame.cols + 11
     frame.cells[firstLineEndIndex].scalar = " "
     frame.cells[firstLineEndIndex].inverse = true
@@ -2705,7 +2705,7 @@ struct TerminalSurfaceTests {
     return image
   }
 
-  private func frameWithText(rows: [String], cols: Int, cursorX: Int, cursorY: Int) -> GhosttyTerminalFrame {
+  private func frameWithText(rows: [String], cols: Int, cursorX: Int, cursorY: Int, cursorVisible: Bool = true) -> GhosttyTerminalFrame {
     let cells = rows.flatMap { row in
       let padded = row.padding(toLength: cols, withPad: " ", startingAt: 0)
       return padded.unicodeScalars.prefix(cols).map {
@@ -2726,7 +2726,7 @@ struct TerminalSurfaceTests {
     return GhosttyTerminalFrame(
       cols: cols,
       rows: rows.count,
-      cursorVisible: true,
+      cursorVisible: cursorVisible,
       cursorX: cursorX,
       cursorY: cursorY,
       cursorShape: .bar,

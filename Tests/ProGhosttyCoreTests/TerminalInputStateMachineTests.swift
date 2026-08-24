@@ -15,9 +15,25 @@ struct TerminalInputStateMachineTests {
     )
   }
 
+  private func snapshot(
+    generation: Int,
+    cursorRect: NSRect?,
+    cursorIsHomeParked: Bool = false,
+    isFocused: Bool = true,
+    hasMarkedText: Bool = false
+  ) -> TerminalInputRenderSnapshot {
+    TerminalInputRenderSnapshot(
+      generation: generation,
+      cursorRect: cursorRect,
+      cursorIsHomeParked: cursorIsHomeParked,
+      isFocused: isFocused,
+      hasMarkedText: hasMarkedText
+    )
+  }
+
   @Test func compositionStartsFromStableCursor() {
     let machine = TerminalInputStateMachine()
-    machine.ingestRenderSnapshot(.init(generation: 1, cursorRect: cursor(2, 6), isFocused: true, hasMarkedText: false))
+    machine.ingestRenderSnapshot(snapshot(generation: 1, cursorRect: cursor(2, 6)))
 
     let snapshot = machine.handle(.setMarkedText("nihao", selectedRange: .init(location: 5, length: 0)))
 
@@ -27,9 +43,23 @@ struct TerminalInputStateMachineTests {
 
   @Test func transientHomeCursorDoesNotMoveActiveAnchor() {
     let machine = TerminalInputStateMachine()
-    machine.ingestRenderSnapshot(.init(generation: 1, cursorRect: cursor(2, 6), isFocused: true, hasMarkedText: false))
+    machine.ingestRenderSnapshot(snapshot(generation: 1, cursorRect: cursor(2, 6)))
     machine.handle(.keyDown(isCompositionMethod: true))
-    machine.ingestRenderSnapshot(.init(generation: 2, cursorRect: cursor(0, 0), isFocused: true, hasMarkedText: false))
+    machine.ingestRenderSnapshot(snapshot(generation: 2, cursorRect: cursor(0, 0)))
+
+    let snapshot = machine.handle(.setMarkedText("nihao", selectedRange: .init(location: 5, length: 0)))
+
+    #expect(snapshot.compositionAnchorRect == cursor(2, 6))
+  }
+
+  @Test func homeParkedFrameDoesNotClobberStableAnchor() {
+    let machine = TerminalInputStateMachine()
+    machine.ingestRenderSnapshot(snapshot(generation: 1, cursorRect: cursor(2, 6)))
+    // Prompt redraw / TUI presentation parks the cursor at the top-left and the
+    // derived rect degenerates to the home cell: it must not move the anchor.
+    machine.ingestRenderSnapshot(
+      snapshot(generation: 2, cursorRect: cursor(0, 0), cursorIsHomeParked: true)
+    )
 
     let snapshot = machine.handle(.setMarkedText("nihao", selectedRange: .init(location: 5, length: 0)))
 
@@ -38,10 +68,10 @@ struct TerminalInputStateMachineTests {
 
   @Test func nonCompositionKeyClearsPendingAnchor() {
     let machine = TerminalInputStateMachine()
-    machine.ingestRenderSnapshot(.init(generation: 1, cursorRect: cursor(2, 6), isFocused: true, hasMarkedText: false))
+    machine.ingestRenderSnapshot(snapshot(generation: 1, cursorRect: cursor(2, 6)))
     machine.handle(.keyDown(isCompositionMethod: true))
     machine.handle(.keyDown(isCompositionMethod: false))
-    machine.ingestRenderSnapshot(.init(generation: 2, cursorRect: cursor(0, 0), isFocused: true, hasMarkedText: false))
+    machine.ingestRenderSnapshot(snapshot(generation: 2, cursorRect: cursor(0, 0)))
 
     let snapshot = machine.handle(.setMarkedText("nihao", selectedRange: .init(location: 5, length: 0)))
 
@@ -50,7 +80,7 @@ struct TerminalInputStateMachineTests {
 
   @Test func committedTextAdvancesNextCompositionAnchor() {
     let machine = TerminalInputStateMachine()
-    machine.ingestRenderSnapshot(.init(generation: 1, cursorRect: cursor(2, 6), isFocused: true, hasMarkedText: false))
+    machine.ingestRenderSnapshot(snapshot(generation: 1, cursorRect: cursor(2, 6)))
     machine.handle(.setMarkedText("nihao", selectedRange: .init(location: 5, length: 0)))
     machine.handle(.insertText("你好"))
 
