@@ -107,7 +107,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
           BUILD: ${{ github.run_number }}
           SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
-          NOTARY_KEY_PATH: ${{ env.NOTARY_KEY_PATH }}
+          NOTARY_KEY_PATH: ${{ runner.temp }}/asc-api-key.p8
           NOTARY_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
           # Leave the secret unset for an Individual API key — notarytool
           # rejects an issuer it was not given one for.
@@ -120,7 +120,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
           BUILD: ${{ github.run_number }}
           SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
-          NOTARY_KEY_PATH: ${{ env.NOTARY_KEY_PATH }}
+          NOTARY_KEY_PATH: ${{ runner.temp }}/asc-api-key.p8
           NOTARY_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
         run: |
