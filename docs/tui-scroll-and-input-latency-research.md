@@ -63,15 +63,30 @@ Status: `open — localization done, mechanism unidentified`
 
 ---
 
-## 当前领先假设（未验证）
+## 已排除的假设（第二批）
 
-**全屏 TUI 的行级语义与 ProGhostty 的像素级滚动在冲突。**
+| # | 假设 | 排除依据 |
+|---|---|---|
+| 10 | **帧形状翻转**（全屏 TUI 的 scrollback 被打到 0 → overscan 塌缩 → 扩展帧 51 行 ↔ 裸 viewport 27 行来回切） | 加了 `present-shape` 探针后直接否证：pi **形状稳定时**的呈现间隔 p50 = **54.5ms**，形状刚变后也只 65.6ms —— 它本来就慢，翻转只多加 11ms。且两 app 这次都长期稳定在**同一个形状**（29 行）上，pi 仍 54.5ms、codex 16.7ms。**差异与形状无关** |
+| 11 | 滚动到顶导致显示链接被停（`handleScrollDisplayLink` 的 `atTopEdge → stopSmoothScrollBrowsing()`） | browse 位置 dwell 比例：**codex 57% > pi 31%** —— 停着不动的反而是 codex |
+| 12 | 像素平滑滚动开关可关掉做 A/B | **该开关是死代码**：`smoothPixelScrollingEnabled`（`TerminalRendererOptions`）全仓无消费者；`PROGHOSTTY_EXPERIMENTAL_PIXEL_SCROLL=0` 与 `RendererDebug.enableExperimentalPixelScroll` 因此不改变任何行为 |
 
-线索：`overscanTop` 在 pi 的日志里是**双峰**的 —— `24`（137 次）与 `1`（136 次）几乎各占一半；而 codex 是 `1`（697 次）压倒性主导、`24` 只有 125 次。这像是 pi 的呈现**在"带 overscan 的滚动窗口"与"实时帧"两种模式之间来回翻转**，而 codex 稳定停在一种。
+### 顺带发现的两处插桩缺陷
 
-若成立，机制可能是：pi 作为**底部锚定的全屏 TUI** 高频重绘整屏，而 ProGhostty 的 Pattern-2 在像素滚动状态下用 `presentBrowseWindow` 呈现 overscan 窗口；pi 的输出不断把状态推回实时帧 → 两种呈现交替 → 呈现节拍被撕裂到 19Hz。
+- **`pixelSmoothScroll` 诊断字段恒定说谎**：`PTYTerminalEngine.swift:1369-1374` 在 browse 分支与 else 分支**都**写 `.experimental`，除非在备用屏。它无法用来判断平滑滚动是否启用。
+- **`avgDrawMs` / `maxDrawMs` 在生产后端结构性为 0**：只在 `GhosttyVTCellGridRendererBackend.swift:280-281` 赋值，MetalDirect 路径从不设置。
 
-**待验证的预测**：若把 pi 的呈现模式钉在一种（例如禁用像素滚动，或让输出不改变浏览态），呈现节拍应回到 16.7ms、`wheel → present` 应降到接近 0ms。
+## 仍未解释的唯一事实
+
+**在完全相同的稳态下（同 pane、同 `localScrollback` ownership、同帧形状、几乎相同的 app 输出量），pi 的呈现比 codex 慢约 3 倍**（54.5ms vs 16.7ms）。
+
+触发源已按 `browse` / `output` 两类全部归因（151 = 67+84），不存在第三类漏标。**下一层需要插桩 `SmoothScrollEngine` / `CADisplayLink` tick 与 `applyBrowseTick` 的每次决策**（呈现 / 跳过 / clamp），成本较高且不确定性大。
+
+**另一条成本更低的路线**：直接读 **Ghostty 的呈现循环源码**做架构对比 —— 同一个 pi 在 Ghostty 里正常，这是最强的对照，且不需要在 ProGhostty 里继续加探针。
+
+### 一个必须记住的逻辑约束
+
+**打字不经过滚轮路径**（`scrollWheel` → `feedSmoothScroll` 只在滚轮事件时走）。所以"像素滚动是元凶"**解释不了打字延迟**。打字与滚动唯一的共同环节是**呈现管线本身** —— 若两者是同一个根因，它必须在这条共同路径上。
 
 ---
 
