@@ -241,6 +241,23 @@ struct PromptCursorInferrerTests {
     #expect(PromptCursorInferrer.rowIsInPromptInputRegion(2, in: geometry))
   }
 
+  @Test func styledBlankRowStillCountsAsBlank() {
+    // A TUI painting a background band on an empty row must not make it look like
+    // content: `rowIsBlank` reads only the scalars, not the styling. This was the
+    // only thing the deleted Codex "styled blank row start" integration case
+    // pinned, kept here at the pure-function level.
+    let frame = makeFrame(
+      cellsByRow: [
+        makeCells("> res", cols: 12),
+        makeCells("", cols: 12, nonDefaultBackground: Set(0..<12)),
+      ],
+      cols: 12
+    )
+    let geometry = makeGeometry(frame: frame)
+    #expect(PromptCursorInferrer.rowIsBlank(1, in: geometry))
+    #expect(!PromptCursorInferrer.rowIsBlank(0, in: geometry))
+  }
+
   @Test func isolatedInverseCellOnlyCountsAsCaret() {
     var cells = makeCells("> hello ", cols: 20)
     // The app-drawn caret is an isolated inverse cell.
