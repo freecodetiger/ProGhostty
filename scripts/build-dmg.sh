@@ -20,10 +20,21 @@ mkdir -p "${DIST_DIR}"
 rm -f "${DMG_PATH}"
 
 APP_DIR="$(VERSION="${VERSION}" BUILD="${BUILD:-1}" "${ROOT_DIR}/scripts/build-app-bundle.sh" "${CONFIGURATION}")"
-cp -R "${APP_DIR}" "${STAGING_DIR}/${PRODUCT}.app"
+# `ditto`, not `cp -R`: it preserves the extended attributes and resource fork
+# the code signature seals, and a staging copy that drops them invalidates it.
+ditto "${APP_DIR}" "${STAGING_DIR}/${PRODUCT}.app"
 ln -s /Applications "${STAGING_DIR}/Applications"
 
-codesign --force --sign - --deep "${STAGING_DIR}/${PRODUCT}.app" >/dev/null
+# Unset SIGNING_IDENTITY means a local, unsigned build: skip notarization and
+# keep the ad-hoc signature so the artifact is still runnable on this Mac.
+SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
+if [ "${SIGNING_IDENTITY}" != "-" ]; then
+  # Notarize and staple the .app BEFORE it goes into the DMG. Stapling is what
+  # lets Gatekeeper accept it with no network, and the ZIP artifact has no
+  # ticket of its own — the app inside it must carry one.
+  "${ROOT_DIR}/scripts/notarize.sh" "${STAGING_DIR}/${PRODUCT}.app"
+fi
+
 hdiutil create \
   -volname "${PRODUCT} ${VERSION}" \
   -srcfolder "${STAGING_DIR}" \
@@ -31,5 +42,9 @@ hdiutil create \
   -format UDZO \
   "${DMG_PATH}" >/dev/null
 
-codesign --force --sign - "${DMG_PATH}" >/dev/null 2>&1 || true
+if [ "${SIGNING_IDENTITY}" != "-" ]; then
+  codesign --force --sign "${SIGNING_IDENTITY}" --timestamp "${DMG_PATH}" >/dev/null
+  "${ROOT_DIR}/scripts/notarize.sh" "${DMG_PATH}"
+fi
+
 echo "${DMG_PATH}"

@@ -67,5 +67,27 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "${APP_DIR}" >/dev/null
+# Sign inside-out: nested executables first, then the bundle. `--deep` is
+# deprecated for *signing* (it can apply the outer entitlements to nested code)
+# and notarization rejects anything it gets wrong.
+#
+# No entitlements are needed: the app links CoreText/Metal statically and
+# execs shells, none of which hardened runtime restricts. Add an
+# `--entitlements` file here if that ever changes.
+#
+# Unset SIGNING_IDENTITY keeps the local dev flow on ad-hoc signing, which
+# must NOT get `--options runtime` or debuggers and Instruments stop attaching.
+SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
+CODESIGN_ARGS=(--force --sign "${SIGNING_IDENTITY}")
+if [ "${SIGNING_IDENTITY}" != "-" ]; then
+  CODESIGN_ARGS+=(--options runtime --timestamp)
+fi
+
+codesign "${CODESIGN_ARGS[@]}" "${MACOS_DIR}/pg" >/dev/null
+codesign "${CODESIGN_ARGS[@]}" "${APP_DIR}" >/dev/null
+
+if [ "${SIGNING_IDENTITY}" != "-" ]; then
+  codesign --verify --strict --verbose=2 "${APP_DIR}" >&2
+fi
+
 echo "${APP_DIR}"

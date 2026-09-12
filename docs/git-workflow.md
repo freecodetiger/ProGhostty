@@ -126,6 +126,7 @@ scripts/check-architecture.sh   # 动了分层/import 时必跑
 - 版本靠 tag：`v*`（如 `v0.4.0`）触发 `.github/workflows/release.yml`
 - tag 只打在**要发布的 commit**上；消息/notes 写用户可见高光，不写实现流水账
 - CI 已 pin `macos-15` + `libghostty-vt` **ReleaseFast**——改 workflow 时勿破坏这两点
+- 产物需签名 + 公证（否则用户双击被 Gatekeeper 拦）：见 `docs/release-signing.md`
 
 ---
 

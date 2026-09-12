@@ -69,10 +69,49 @@ jobs:
       - name: Test
         run: swift test --no-parallel
 
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euxo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/proghostty-signing.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/developer-id.p12"
+          # The secret holds base64 so the binary .p12 survives a YAML round-trip.
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          # Without the partition list, codesign blocks on a keychain access
+          # prompt and the job hangs until the runner times out.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          rm -f "$CERT_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Write App Store Connect API key
+        env:
+          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/asc-api-key.p8"
+          printf '%s' "$APPSTORE_API_PRIVATE_KEY" > "$KEY_PATH"
+          echo "NOTARY_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
       - name: Build DMG
         env:
           VERSION: ${{ github.ref_name }}
           BUILD: ${{ github.run_number }}
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+          NOTARY_KEY_PATH: ${{ env.NOTARY_KEY_PATH }}
+          NOTARY_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          # Leave the secret unset for an Individual API key — notarytool
+          # rejects an issuer it was not given one for.
+          NOTARY_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
         run: |
           VERSION="${VERSION#v}" BUILD="$BUILD" scripts/build-dmg.sh release
 
@@ -80,8 +119,19 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
           BUILD: ${{ github.run_number }}
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+          NOTARY_KEY_PATH: ${{ env.NOTARY_KEY_PATH }}
+          NOTARY_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
         run: |
           VERSION="${VERSION#v}" BUILD="$BUILD" scripts/build-zip.sh release
+
+      - name: Verify notarization is stapled and Gatekeeper accepts it
+        run: |
+          set -euxo pipefail
+          DMG="$(ls dist/*.dmg)"
+          xcrun stapler validate "$DMG"
+          spctl --assess --type open --context context:primary-signature -v "$DMG"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
