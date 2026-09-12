@@ -114,17 +114,48 @@ spctl --assess --type open --context context:primary-signature -v dist/*.dmg
 ## CI（tag `v*` 自动出包）
 
 `.github/workflows/release.yml` 已经接好：导入证书 → 写 API key → 构建 → 公证 → 校验。
-需要在仓库 Settings → Secrets and variables → Actions 配这些：
+需要先导出 `.p12`（钥匙串访问 → 找到 `Developer ID Application: …` → 右键 → 导出 → 设一个密码）。
+之后在仓库 Settings → Secrets and variables → Actions 配这 7 个：
 
-| Secret | 内容 |
+> ⚠️ **钥匙串里通常有两张证书，必须导 `Developer ID Application` 那张。**
+> 导成 `Apple Development` 不会在本地报任何错 —— 构建过、签名过、`codesign -dv` 也像模像样 ——
+> 直到公证被拒才暴露，而那时一次 CI 发版已经浪费掉了。导出前后都用这条命令确认：
+>
+> ```bash
+> openssl pkcs12 -in 你的.p12 -passin pass:密码 -nokeys -clcerts -legacy \
+>   | openssl x509 -noout -subject
+> # 要看到 CN=Developer ID Application: <名字> (TEAMID)
+> ```
+>
+> 想只留一张证书（`security export -t identities` 会把全部身份都导出，包括开发证书的私钥），
+> 可以让 `security` 自己配对，再**反向验证**一次：
+>
+> ```bash
+> KC=/tmp/clean.keychain-db
+> security create-keychain -p tmp "$KC" && security unlock-keychain -p tmp "$KC"
+> security import 全部身份.p12 -k "$KC" -P <原密码> -A -f pkcs12
+> security delete-identity -c "Apple Development: <名字> (TEAMID)" "$KC"
+> security export -t identities -f pkcs12 -k "$KC" -o clean.p12 -P <新密码>
+> # 反向验证：喂进另一个空钥匙串，必须正好剩 1 个有效身份
+> security create-keychain -p tmp2 /tmp/verify.keychain-db
+> security import clean.p12 -k /tmp/verify.keychain-db -P <新密码> -A -f pkcs12
+> security find-identity -v -p codesigning /tmp/verify.keychain-db
+> ```
+>
+> `find-identity -v` 报 valid 才算数 —— 私钥配错证书时它不会报有效。
+
+| Secret | 生成方式 |
 |---|---|
-| `MACOS_CERTIFICATE` | `.p12` 的 **base64**（`base64 -i DeveloperID.p12 \| pbcopy`） |
-| `MACOS_CERTIFICATE_PASSWORD` | 导出 `.p12` 时设的密码 |
-| `KEYCHAIN_PASSWORD` | 随便一串随机字符，CI 临时钥匙串用，用完即弃 |
-| `SIGNING_IDENTITY` | `Developer ID Application: <名字> (TEAMID)` |
-| `APPSTORE_API_PRIVATE_KEY` | `.p8` 文件的**原文**（不是 base64） |
-| `APPSTORE_API_KEY_ID` | Key ID |
-| `APPSTORE_API_ISSUER_ID` | Issuer ID（Team Key 必填；用 Apple ID 方案则不需要这个 secret） |
+| `MACOS_CERTIFICATE` | `base64 -i DeveloperID.p12 \| pbcopy` |
+| `MACOS_CERTIFICATE_PASSWORD` | 导出 `.p12` 时设的那个密码 |
+| `KEYCHAIN_PASSWORD` | 随便一串随机字符（`LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom \| head -c 40`）。CI 临时钥匙串用，用完即弃 |
+| `SIGNING_IDENTITY` | `security find-identity -v -p codesigning \| grep "Developer ID Application"`，取引号里那串 |
+| `APPSTORE_API_PRIVATE_KEY` | `pbcopy < ~/Downloads/AuthKey_XXXXXXXXXX.p8` —— **原文**，不是 base64 |
+| `APPSTORE_API_KEY_ID` | 建 key 时的 Key ID |
+| `APPSTORE_API_ISSUER_ID` | 页面上那个 UUID（Team Key 必填；用 Apple ID 方案则不需要这个 secret） |
+
+> 含私钥的三项（`MACOS_CERTIFICATE`、`APPSTORE_API_PRIVATE_KEY`、两个密码）**只用剪贴板传递**，
+> 不要贴进任何聊天窗口、issue 或日志里 —— 它们一旦进了文本记录就等于泄露。
 
 发版：
 
