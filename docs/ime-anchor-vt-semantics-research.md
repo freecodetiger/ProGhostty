@@ -204,6 +204,52 @@ liveGridPreservesContinuationCursorWhenCodexTransientMovesToBlankRowStart
 
 ---
 
+## 观察：合成期的锚点稳定性，与 `preservedPromptCursorRectForBlankTransient` 方向条件的意图
+
+一次真实 pi / Codex 会话（`PROGHOSTTY_RENDER_DEBUG=1`，90 个 `inputRender` 帧）的观察结果。
+
+### 合成期间锚点从未移动
+
+**19 个合成帧，锚点变化 0 次。** 三条拼音序列（含退格）全程钉死在同一格：
+
+```
+gen=14..18   "n" → "ni" → "ni" → "ni'h" → "ni'hao"           {{14, 518}}
+gen=26..32   "e" → "e'x" → "e'xi" → "exit" → "e'xi" → "e"     {{24, 386}}   含退格
+gen=80..84   "n" → "ni" → "ni'h" → "ni'ha" → "ni'hao"         {{34, 540}}
+```
+
+**这个保护不是来自 `PromptCursorInferrer`，而是 `TerminalInputStateMachine`**：合成中 / 有 marked text 时它拒绝更新锚点（`TerminalInputStateMachine.swift:155-177`）。启发式只负责"给状态机一个可用的初始锚点"。设计锚点相关改动时要记住这条分层 —— 合成期的稳定性由状态机保证，启发式改动不会影响它。
+
+### 方向条件 `currentCoordinate.row > cursorRow` 是判据，不是 bug
+
+`preservedPromptCursorRectForBlankTransient`（`PTYTerminalEngine.swift:3950-3973`）会保留旧锚点，条件是：
+
+```swift
+currentCoordinate.row > cursorRow        // 旧锚点在 parked 行「下方」
+  && rowIsBlank(cursorRow)               // parked 行是空的
+  && (rowIsInPromptInputRegion(旧锚点行) || 旧锚点 == latestPromptInputCursorRect)
+```
+
+这个不等号编码的是 parked 空行**相对输入行的位置**：
+
+| parked 空行位置 | 含义 | 正确处理 |
+|---|---|---|
+| 在输入行**上方** | TUI 清掉/重写输入行上面的一行 —— 纯重绘残留 | 忽略它，保留旧锚点（原始 Codex 场景：prompt 行 10，parked 行 8，`10 > 8` ✓） |
+| 在输入行**下方** | 可能是**新增的行**（回车后新提示符/新输入行） | 跟着光标走，不能保留 |
+
+**不要以为去掉这个方向条件是在修 bug。** 去掉它之后 `rowIsInPromptInputRegion(旧锚点行)` 对旧提示符行几乎必然为真，于是回车后新提示符出现的那一帧锚点会粘在上一行 —— 一个性质更差的新错。
+
+### 观察到的两次"锚点跟随 parked 光标"是正确行为
+
+```
+gen=8   vis=true vc=(0,1)   {{224,12}} -> {{14,34}}    旧锚点 row 0（shell 提示符），parked row 1
+gen=53  vis=true vc=(0,23)  {{324,496}} -> {{14,518}}  旧锚点 row 22，parked row 23
+```
+
+两次都落在上表第二行（parked 在下方）。gen=8 是 TUI 刚启动、界面被清空 —— shell 那一行已经不存在了，**保留旧锚点反而更错**；跟着光标走、几帧后落到 TUI 真正的输入行（row 23）才是对的。
+
+两次都在 `marked=false`（无合成）时发生，且一两帧内自校正。若要主张它们是 bug，需要一个**组字起手时锚点错位**的可复现 case，而不是"没组字时锚点短暂跳动"。
+
 ## Sources
 
 - `Vendor/ghostty/include/ghostty/vt/terminal.h` / `render.h` / `screen.h` / `point.h` / `grid_ref.h` / `osc.h` / `formatter.h`
