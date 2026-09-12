@@ -8,10 +8,17 @@
 
 ## Decision
 
-Status: `open — localization done, mechanism unidentified`
+Status: `resolved — fixed in perf(render): memoize per-cell color resolution`
 
-**已定位：pi 的呈现管线被限速在 ~19Hz，codex 是 60Hz；滚动响应是 83ms vs 0ms。**
-**未定位：是什么在限速。** 嫌疑已收窄到 `SmoothScrollEngine` 与显示链接那一层。
+**根因：`TerminalColorResolver.resolvedColors` 的 WCAG 最小对比度补偿被逐 cell、逐帧重算。**
+该补偿最多跑 14 轮二分，每轮 `blended` + `contrastRatio`，即约 6 次
+`NSColor.usingColorSpace(.deviceRGB)`（ColorSync 转换）。pattern-2 每帧全量重绘
+~1k 个 cell，于是这一项吃掉了整个帧预算，把呈现节拍从显示器刷新率压到 ~19Hz。
+
+修法见本文末尾「Resolution」。
+
+> ⚠️ **本文下方「架构对照」一节给出的"缺呈现时钟"结论已被测量证伪**，保留它是
+> 作为排查记录 —— 不要据此去写帧时钟。详见「Resolution」。
 
 ---
 
@@ -76,13 +83,85 @@ Status: `open — localization done, mechanism unidentified`
 - **`pixelSmoothScroll` 诊断字段恒定说谎**：`PTYTerminalEngine.swift:1369-1374` 在 browse 分支与 else 分支**都**写 `.experimental`，除非在备用屏。它无法用来判断平滑滚动是否启用。
 - **`avgDrawMs` / `maxDrawMs` 在生产后端结构性为 0**：只在 `GhosttyVTCellGridRendererBackend.swift:280-281` 赋值，MetalDirect 路径从不设置。
 
-## 仍未解释的唯一事实
+## Resolution：逐层劈开呈现路径，落到 `resolvedColors`
+
+工具：`PROGHOSTTY_RENDER_DEBUG=1` 下逐段单调时钟（探针已全部摘除）。每一步都只
+回答"是不是这一层"，前两次判断都错了，所以这里保留完整链条。
+
+| 层 | 读数 | 判定 |
+|---|---|---|
+| `flushPendingFrame` 里的 `directView.present` | p50 **0.36ms** | 不是它 |
+| `updateDiagnostics`（`diag`） | p50 **6.41ms** / p90 **50.28ms** | ← 在这里 |
+| ├ frame encode（plan） | p50 1.98ms | 次要 |
+| ├ glyph atlas 扫描 | p50 0.28ms | 不是 |
+| ├ styleStats / resizeSensitivity | p50 0.14ms | 不是 |
+| └ `engine.render`（CPU 侧顶点构建） | p50 **3.48ms** / p90 **48.22ms** | ← 在这里 |
+| &nbsp;&nbsp;├ bg / ovl / above / slices / bufs | 各 ≤0.4ms，快慢帧**完全一致** | 不是 |
+| &nbsp;&nbsp;└ **`buildGlyphVertices` 的逐 cell 段** | 慢帧 **47.23ms** vs 快帧 1.85ms | ← 在这里 |
+| &nbsp;&nbsp;&nbsp;&nbsp;├ `glyphAtlas.entry` | 0.31ms | 不是 |
+| &nbsp;&nbsp;&nbsp;&nbsp;├ `texture` | 0.07ms | 不是 |
+| &nbsp;&nbsp;&nbsp;&nbsp;├ **`TerminalColorResolver.resolvedColors`** | 慢帧 **44.51ms** / 快帧 0.88ms | **就是它** |
+| &nbsp;&nbsp;&nbsp;&nbsp;└ `append` | 0.96ms | 不是 |
+
+**关键判别**：把帧按 `visited`（非空 cell 数）分组，`colors` 不是线性增长而是断崖 ——
+
+```
+visited~500  → 1.07ms
+visited~750  → 42.93ms   ← 断崖
+```
+
+**说明耗时与 cell 数量无关、与 cell 颜色有关**：只有前景/背景对比度不足 3.0 的 cell
+才进那 14 轮二分。这一条同时解释了全部三个现象：
+
+- **pi 慢**：全屏 TUI 大量用暗色/灰色（dim 边框、灰色提示、spinner）→ 大批 cell 触发
+- **codex 正常**：几乎全是默认前景色 → `guard contrastRatio < 3.0 else { return self }` 早退
+- **Ghostty 正常**：Ghostty 不做这个逐 cell 对比度补偿
+
+### 修复与验证
+
+`ResolvedColorMemo`（`MetalDirectRenderEngine.swift`）按 cell 外观 memo 解析结果；
+键只含解析器实际读取的纯值（构造键不需要任何 NSColor 转换），调色板变更即清空。
+
+同一 pane 实测：
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| `colors` p50 | 44.51ms | **0.33ms** |
+| 顶点构建循环 p50 / p90 / max | 1.82 / 9.18 / **74.07**ms | 2.69 / **3.52** / **5.27**ms |
+| 慢调用（>50µs） | 每帧数百次 | 390 帧共 **3** 次（仅冷启动首次） |
+| **present 间隔 p50** | **53.4ms（≈19Hz）** | **16.7ms（=60Hz）** |
+
+**打字延迟随之消失** —— 它与滚动共用同一条呈现路径，这正是本文早先那条逻辑约束
+（"打字不经过滚轮路径，若两者同根因，必须在共同路径上"）所指的位置。
+
+回归测试 `ResolvedColorMemoTests` 钉住**键的完整性**（这是该缓存唯一会出错的方式：
+漏一个字段，那个 cell 的变体就会静默套用另一套颜色）。已验证：从键里拿掉 `faint`
+后两个测试立刻变红。
+
+### 被证伪的方向（不要重走）
+
+- **缺呈现时钟**：`prefersAsyncPresent` 在滚动期间**确实是 true**，整个 Metal 呈现
+  路径（sem / drawable / encode / wait）p50 仅 **0.14ms**，无一次 drawable 池丢弃。
+  帧时钟与呈现节拍无关。
+- **同步 `waitUntilCompleted` 阻塞主线程**：滚动期 `wait` p50 = 0.02ms（走的是异步路径）。
+  空闲/打字期才同步，也只有 0.96ms。
+
+### 顺带修掉的一个构建阻塞
+
+`MetalDirectRenderEngine.setUniforms` 用 `withUnsafeBytes` 闭包捕获了 encoder，
+Swift 6.3.3 下 **release 构建直接编译失败**（`sending 'encoder' risks causing data
+races`）。后果是 `.build/release/` 长期停留在旧产物 —— 期间任何"release 手测"测的
+都不是当前代码。已改为直接传 `&uniforms`。
+
+## 原先"仍未解释的唯一事实"（已解释）
 
 **在完全相同的稳态下（同 pane、同 `localScrollback` ownership、同帧形状、几乎相同的 app 输出量），pi 的呈现比 codex 慢约 3 倍**（54.5ms vs 16.7ms）。
 
-触发源已按 `browse` / `output` 两类全部归因（151 = 67+84），不存在第三类漏标。**下一层需要插桩 `SmoothScrollEngine` / `CADisplayLink` tick 与 `applyBrowseTick` 的每次决策**（呈现 / 跳过 / clamp），成本较高且不确定性大。
+**已解释**：不是呈现管线的结构性差异，而是**逐 cell 的颜色对比度补偿成本随 cell 颜色变化**——
+pi 的 TUI 充满低对比度的暗色 cell，codex 几乎全走早退。见本文「Resolution」。
 
-**另一条成本更低的路线**：直接读 **Ghostty 的呈现循环源码**做架构对比 —— 同一个 pi 在 Ghostty 里正常，这是最强的对照，且不需要在 ProGhostty 里继续加探针。
+当时提出的两条后续路线（插桩 `SmoothScrollEngine` / 读 Ghostty 呈现循环）**都不必再走**：
+前者方向错了（物理与 tick 成本实测为 0.00ms），后者得出的"缺呈现时钟"结论已被证伪。
 
 ### 一个必须记住的逻辑约束
 
@@ -92,7 +171,7 @@ Status: `open — localization done, mechanism unidentified`
 
 ## 架构对照：Ghostty vs ProGhostty（呈现时钟）
 
-对着 `Vendor/ghostty` 源码读出来的结构性差异。**这是目前唯一能解释"同稳态下 pi 19Hz / codex 60Hz"的机制。**
+对着 `Vendor/ghostty` 源码读出来的结构性差异。当时以为这是**唯一能解释"同稳态下 pi 19Hz / codex 60Hz"的机制** —— ❌ **已被证伪**，真正的机制是颜色成本，与本节的呈现时钟无关。
 
 ### Ghostty：呈现由 vsync 驱动，与输出事件解耦
 
@@ -123,13 +202,26 @@ fn drawFrame(self: *Thread, now: bool) void {
 | 合并 | 无时间去抖，mach port 天然合并 | **两级显式 4ms 去抖**（字节级 + 快照级 = 8ms，`TerminalOutputCoordinator.swift:10-17`） |
 | GPU 帧深度 | `swap_chain_count = 3`（`renderer/Metal.zig:37`） | `maxInFlightDrawables = 2` |
 
-### 结论
+### 结论（❌ 已证伪 —— 保留作为排查记录）
 
-**为什么偏偏是 pi**：pi 是全屏 TUI、输出突发且量大。没有 frame clock 时它的上屏节拍退化成"串行管线能撑住多快"（实测 19Hz）；codex 的输出模式恰好撑得住 ~60Hz。**在 Ghostty 里两者被同一个 60/120Hz 时钟节流，所以 pi 完全正常。**
+> 下面这段推理**是错的**，实测直接否掉了它：滚动期间 `prefersAsyncPresent` 为 true，
+> 呈现路径 p50 仅 0.14ms。**不要据此去写 `MetalFrameScheduler` / 帧时钟。**
 
-**打字延迟的同一根源**：VT 解析、快照、present **全在主线程**上，与键盘事件、输入法往返、IME overlay 抢同一个线程。
+**为什么偏偏是 pi** ~~：pi 是全屏 TUI、输出突发且量大。没有 frame clock 时它的上屏节拍退化成"串行管线能撑住多快"（实测 19Hz）；codex 的输出模式恰好撑得住 ~60Hz。在 Ghostty 里两者被同一个 60/120Hz 时钟节流，所以 pi 完全正常。~~
 
-### 与项目既有规划的关系
+**实际原因**：pi 是**颜色重**的全屏 TUI（大量 dim/灰暗 cell 命中对比度补偿的慢路径），
+codex 是**颜色轻**的（几乎全走早退）。跟"输出突发量"和"呈现时钟"都无关 ——
+两者在本次测量里的 PTY 读取密度几乎一致（4.2 vs 3.8 块/秒）。
+
+**打字延迟的同一根源** ✅：**这一点是对的** —— 打字与滚动共用同一条呈现路径，
+`resolvedColors` 的成本就落在那里。修掉它之后打字也随之变顺。
+
+### 与项目既有规划的关系（⚠️ 此处的"证实"已作废）
+
+> 本次测量**没有**证实那份文档对**本次延迟**的判断 —— 延迟的根因是 `resolvedColors`，
+> 与呈现时钟无关。`gpu-first-renderer-rework.md` 描述的 presentation coordinator 是否
+> 仍值得做，是一个**独立的问题**（它解决的是代际一致性 / 撕裂，而不是本次的慢），
+> 不要把它当成这次修复的后续。
 
 `docs/design/gpu-first-renderer-rework.md` **已经写下过这个诊断**：
 
@@ -137,7 +229,6 @@ fn drawFrame(self: *Thread, now: bool) void {
 > *AppKit-visible grid state and Metal-presented state can diverge;*
 > 修法：*coalesce multiple terminal updates into one display-frame presentation; submit only the newest complete generation; never present generation N after generation N+1; never mix text from one generation with cursor from another.*
 
-本次独立测量**证实了那份文档的判断**，且它连修法要点都写好了 —— 只是那个组件（presentation coordinator）尚未落地。
 
 ## 测量陷阱（下次别再踩）
 
