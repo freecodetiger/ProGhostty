@@ -137,6 +137,59 @@ private enum MetalDirectCommandCompletion {
   }
 }
 
+/// Memoizes `TerminalColorResolver.resolvedColors` per cell appearance.
+///
+/// Resolving one cell runs the WCAG minimum-contrast pass, which can cost 14
+/// rounds of NSColor → deviceRGB conversion. A full-screen TUI draws ~1k cells
+/// per frame that share only a handful of distinct color pairs, so recomputing
+/// per cell dominated the frame budget (~45ms/frame) and pinned the present
+/// cadence at ~19Hz instead of the display refresh rate.
+///
+/// The key holds only the plain values the resolver reads, so a hit costs no
+/// colorspace conversion at all. The cache is cleared when the palette changes
+/// and is otherwise unbounded — bounded in practice by the palette's distinct
+/// (fg, bg, flags) tuples.
+struct ResolvedColorMemo {
+  struct Key: Hashable {
+    let foreground: GhosttyTerminalFrame.RGB
+    let background: GhosttyTerminalFrame.RGB
+    let usesDefaultForeground: Bool
+    let usesDefaultBackground: Bool
+    let faint: Bool
+    let inverse: Bool
+    let isFocused: Bool
+  }
+
+  private var cache: [Key: (foreground: NSColor, background: NSColor)] = [:]
+  private var palette: TerminalSurfacePalette?
+
+  var cachedEntryCount: Int { cache.count }
+
+  mutating func colors(
+    for cell: GhosttyTerminalFrame.Cell,
+    palette: TerminalSurfacePalette,
+    isFocused: Bool
+  ) -> (foreground: NSColor, background: NSColor) {
+    if self.palette != palette {
+      self.palette = palette
+      cache.removeAll(keepingCapacity: true)
+    }
+    let key = Key(
+      foreground: cell.foreground,
+      background: cell.background,
+      usesDefaultForeground: cell.usesDefaultForeground,
+      usesDefaultBackground: cell.usesDefaultBackground,
+      faint: cell.faint,
+      inverse: cell.inverse,
+      isFocused: isFocused
+    )
+    if let cached = cache[key] { return cached }
+    let resolved = TerminalColorResolver.resolvedColors(for: cell, palette: palette, isFocused: isFocused)
+    cache[key] = resolved
+    return resolved
+  }
+}
+
 @MainActor
 final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
   private struct Vertex {
@@ -189,6 +242,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
   private let glyphPipeline: MTLRenderPipelineState
   private let haloPipeline: MTLRenderPipelineState
   private var cachedTextures: [Int: CachedTexture] = [:]
+  private var resolvedColorMemo = ResolvedColorMemo()
   private let completionBox = MetalDirectFrameCompletionBox()
   private var previousTransientOverlayRevision = 0
 
@@ -1043,7 +1097,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
         // explicit background — the dominant per-frame cost under pattern-2's
         // full redraw.
         guard cell.inverse || !cell.usesDefaultBackground else { continue }
-        let colors = TerminalColorResolver.resolvedColors(for: cell, palette: palette, isFocused: isFocused)
+        let colors = resolvedColorMemo.colors(for: cell, palette: palette, isFocused: isFocused)
         let rect = CGRect(
           x: inset.width + CGFloat(col) * cellSize.width,
           y: inset.height + CGFloat(row) * cellSize.height + translationY,
@@ -1085,7 +1139,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
         guard col >= 0, col < frame.cols, index < rowEnd else { continue }
         let cell = frame.cells[index]
         guard cell.scalar != " ", cell.width != .spacerTail, cell.width != .spacerHead else { continue }
-        let colors = TerminalColorResolver.resolvedColors(for: cell, palette: palette, isFocused: isFocused)
+        let colors = resolvedColorMemo.colors(for: cell, palette: palette, isFocused: isFocused)
         let rect = Self.glyphCellRect(
           row: row,
           col: col,
