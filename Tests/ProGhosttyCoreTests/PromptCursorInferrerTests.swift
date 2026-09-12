@@ -77,9 +77,7 @@ struct PromptCursorInferrerTests {
 
   @Test func hiddenLiveCursorOutranksContentHeuristics() {
     // A fullscreen TUI hides the cursor (DEC 25) and paints its own caret, but
-    // reports a live position. That position wins over the content heuristics —
-    // the old code dropped it whenever the app hid the cursor, and the heuristic
-    // then anchored to whichever row happened to look like input.
+    // reports a live position. That position is the anchor.
     var frame = makeFrame(
       rows: ["output", "grill-with-docs, grilling", ""],
       cols: 30,
@@ -92,17 +90,20 @@ struct PromptCursorInferrerTests {
     #expect(PromptCursorInferrer.isLiveHiddenCursor(frame))
   }
 
+  @Test func visibleParkedCursorIsNotALiveCaret() {
+    // A TUI mid-redraw parks a *visible* cursor at column 0 of a content row.
+    // That is not a live caret: following it drags the anchor off the input line
+    // (the Codex cases in TerminalSurfaceTests pin this). The heuristics get to
+    // run instead.
+    let frame = makeFrame(rows: ["output", "zpc@zpc % ls"], cols: 30, cursorX: 0, cursorY: 1)
+    #expect(!PromptCursorInferrer.isLiveHiddenCursor(frame))
+  }
+
   @Test func hiddenCursorParkedAtHomeIsNotALiveCaret() {
-    // A presentation frame parks the hidden cursor at the top-left regardless of
-    // where the input is: that carries no positional meaning, so the content
-    // heuristics still get to run.
-    var frame = makeFrame(
-      rows: ["output", "> hello"],
-      cols: 20,
-      cursorX: 0,
-      cursorY: 0,
-      cursorVisible: false
-    )
+    // A prompt redraw / presentation frame parks the cursor at the top-left
+    // regardless of where the input is: that carries no positional meaning, so
+    // the content heuristics still get to run.
+    var frame = makeFrame(rows: ["output", "> hello"], cols: 20, cursorX: 0, cursorY: 0)
     frame.cursorAppVisible = false
     frame.cursorPositionKnown = true
     #expect(!PromptCursorInferrer.isLiveHiddenCursor(frame))
@@ -111,23 +112,9 @@ struct PromptCursorInferrerTests {
   @Test func hiddenCursorWithUnknownPositionIsNotALiveCaret() {
     // The cursor row is outside the viewport, so the reported coordinates are
     // undefined and must not be trusted.
-    var frame = makeFrame(
-      rows: ["output", "> hello"],
-      cols: 20,
-      cursorX: 0,
-      cursorY: 1,
-      cursorVisible: false
-    )
+    var frame = makeFrame(rows: ["output", "> hello"], cols: 20, cursorX: 0, cursorY: 1)
     frame.cursorAppVisible = false
     frame.cursorPositionKnown = false
-    #expect(!PromptCursorInferrer.isLiveHiddenCursor(frame))
-  }
-
-  @Test func visibleParkedCursorIsNotALiveCaret() {
-    // A shell that redraws its prompt leaves a *visible* cursor parked at column
-    // 0 with the real caret at the end of the typed text — the original reason
-    // the heuristics exist.
-    let frame = makeFrame(rows: ["zpc@zpc % ls"], cols: 30, cursorX: 0, cursorY: 0)
     #expect(!PromptCursorInferrer.isLiveHiddenCursor(frame))
   }
 

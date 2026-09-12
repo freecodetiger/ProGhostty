@@ -3884,7 +3884,10 @@ public class PTYGridView: NSView {
   private func inputCursorRect() -> NSRect? {
     // A cursor the app hid but still tracks outranks every content heuristic:
     // the VT knows where it is, and the heuristics only exist for the states
-    // where the cursor carries no positional meaning.
+    // where the cursor carries no positional meaning. A *visible* cursor parked
+    // at a row start does not qualify — that is a TUI mid-redraw, and following
+    // it drags the anchor off the input line (see the Codex cases in
+    // TerminalSurfaceTests).
     if let frame = frameSnapshot,
       PromptCursorInferrer.isLiveHiddenCursor(frame),
       let rect = renderedCursorRect()

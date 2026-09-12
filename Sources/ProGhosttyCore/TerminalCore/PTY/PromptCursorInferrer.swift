@@ -15,12 +15,15 @@ enum PromptCursorInferrer {
   /// the app turned the cursor off (DEC 25), the viewport still knows where it
   /// is, and it is not parked at home.
   ///
-  /// Fullscreen TUIs hide the cursor and paint their own caret, but keep the VT
-  /// cursor on the real input position. That position is authoritative — the
-  /// heuristics below only exist for the states where the cursor carries no
-  /// meaning, so they must not override it. The home cell is excluded because a
-  /// presentation frame parks it at the top-left regardless of where the input
-  /// actually is.
+  /// Ghostty's own IME point reads the cursor unconditionally, with no such
+  /// condition. ProGhostty cannot: TUIs here transiently park a **visible**
+  /// cursor at the start of a row while redrawing, and following it drags the
+  /// composition anchor off the input line. The cached Codex CLI cases
+  /// (`liveGridPreservesPromptCursorWhenCodexTransientCursorMovesToBlankRowStart`
+  /// and friends) pin that behaviour. So the visibility intent is the
+  /// discriminator: an app that hid the cursor far enough in advance to paint
+  /// its own caret has left the VT cursor on the live caret, whereas a visible
+  /// cursor sitting at a row start is mid-redraw and means nothing.
   static func isLiveHiddenCursor(_ frame: GhosttyTerminalFrame) -> Bool {
     !frame.cursorAppVisible
       && frame.cursorPositionKnown
