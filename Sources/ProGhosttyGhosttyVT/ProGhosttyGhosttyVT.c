@@ -1119,7 +1119,12 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
   ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE, &cursor_visual_style);
   ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE, &cursor_has_value);
   ghostty_terminal_get(vt->terminal, GHOSTTY_TERMINAL_DATA_CURSOR_SEMANTIC_CONTENT, &cursor_semantic_content);
-  if (cursor_visible && cursor_has_value) {
+  // Report the position whenever the viewport knows it. Gating this on
+  // cursor_visible throws away a valid position for every app that hides the
+  // cursor (DEC 25) — fullscreen TUIs — leaving the IME anchor to guess from
+  // painted cells. cursor_visible itself is unchanged below: renderers use it
+  // as the gate for drawing.
+  if (cursor_has_value) {
     ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X, &cursor_x);
     ghostty_render_state_get(vt->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y, &cursor_y);
   }
@@ -1130,6 +1135,8 @@ int proghostty_vt_snapshot(ProGhosttyVT *vt, ProGhosttyVTSnapshot *out) {
   out->cols = cols;
   out->rows = rows;
   out->cursor_visible = cursor_visible && cursor_has_value;
+  out->cursor_app_visible = cursor_visible;
+  out->cursor_position_known = cursor_has_value;
   out->cursor_x = cursor_x;
   out->cursor_y = cursor_y;
   out->cursor_visual_style = (uint8_t)cursor_visual_style;

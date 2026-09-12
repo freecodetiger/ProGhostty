@@ -3403,7 +3403,7 @@ public class PTYGridView: NSView {
       return gridOverlay(anchorRect: cursorRect, width: cellSize.width, frame: frame)
     }
     PTYRenderDebugLog.write(
-      "inputRender gen=\(inputSnapshot.generation) focused=\(inputSnapshot.isFocused) marked=\(inputSnapshot.hasMarkedText) composing=\(isComposingMarkedText) viewportCursor=\(viewportCursor) shape=\(viewportShape) geometryCursor=\(geometryCursor) overscanTop=\(overscanTop) proposedRect=\(Self.debugDescription(for: proposedCursorRect)) beforeRect=\(Self.debugDescription(for: previousPresentation?.cursorRect)) stateRect=\(Self.debugDescription(for: stateSnapshot.cursorRect)) resolvedRect=\(Self.debugDescription(for: resolvedPresentation?.cursorRect)) suppressed=\(resolvedPresentation?.cursorSuppressed ?? false) markedString=\(resolvedPresentation?.markedTextString.map { "\"\(Self.debugLogText($0))\"" } ?? "nil") cursorOverlay=\(Self.debugDescription(for: overlay)) row=\(cursorRow) rowText=\"\(rowText)\""
+      "inputRender gen=\(inputSnapshot.generation) focused=\(inputSnapshot.isFocused) marked=\(inputSnapshot.hasMarkedText) composing=\(isComposingMarkedText) viewportCursor=\(viewportCursor) shape=\(viewportShape) cursorVisible=\(frameSnapshot?.cursorVisible ?? true) geometryCursor=\(geometryCursor) overscanTop=\(overscanTop) proposedRect=\(Self.debugDescription(for: proposedCursorRect)) beforeRect=\(Self.debugDescription(for: previousPresentation?.cursorRect)) stateRect=\(Self.debugDescription(for: stateSnapshot.cursorRect)) resolvedRect=\(Self.debugDescription(for: resolvedPresentation?.cursorRect)) suppressed=\(resolvedPresentation?.cursorSuppressed ?? false) markedString=\(resolvedPresentation?.markedTextString.map { "\"\(Self.debugLogText($0))\"" } ?? "nil") cursorOverlay=\(Self.debugDescription(for: overlay)) row=\(cursorRow) rowText=\"\(rowText)\""
     )
   }
 
@@ -3882,7 +3882,30 @@ public class PTYGridView: NSView {
   }
 
   private func inputCursorRect() -> NSRect? {
-    inferredPromptCursorRect() ?? preservedPromptCursorRectForBlankTransient() ?? renderedCursorRect()
+    // A cursor the app hid but still tracks outranks every content heuristic:
+    // the VT knows where it is, and the heuristics only exist for the states
+    // where the cursor carries no positional meaning.
+    if let frame = frameSnapshot,
+      PromptCursorInferrer.isLiveHiddenCursor(frame),
+      let rect = renderedCursorRect()
+    {
+      PTYRenderDebugLog.write(
+        "inputCursor liveHiddenCursor rect=\(NSStringFromRect(rect)) frameCursor=(\(frame.cursorX),\(frame.cursorY)) appVisible=\(frame.cursorAppVisible) positionKnown=\(frame.cursorPositionKnown)"
+      )
+      return rect
+    }
+    if let inferred = inferredPromptCursorRect() {
+      return inferred
+    }
+    if let preserved = preservedPromptCursorRectForBlankTransient() {
+      return preserved
+    }
+    if PTYRenderDebugLog.isEnabled, let frame = frameSnapshot, frame.cursorX == 0 {
+      PTYRenderDebugLog.write(
+        "inputCursor inference-failed frameCursor=(\(frame.cursorX),\(frame.cursorY)) visible=\(frame.cursorVisible) scrollFrame=\(scrollFrameSnapshot != nil) rendered=\(renderedCursorRect()?.debugDescription ?? "nil")"
+      )
+    }
+    return renderedCursorRect()
   }
 
   private func inferredPromptCursorRect() -> NSRect? {
@@ -3905,8 +3928,18 @@ public class PTYGridView: NSView {
       return currentCursorRect
     }
     let rect = geometry.rectForCell(row: coordinate.row, col: coordinate.col)
+    let regionDump: String = {
+      guard let start = PromptCursorInferrer.inputRegionStart(in: geometry) else { return "" }
+      let end = geometry.frame.rows
+      let rows = (start..<end).compactMap { row -> String? in
+        guard let cells = PromptCursorInferrer.cells(inRow: row, frame: geometry.frame) else { return nil }
+        let text = cells.map { String($0.scalar) }.joined().trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? "[blank]" : "r\(row): \(Self.debugLogText(text))"
+      }
+      return " region=" + rows.joined(separator: " | ")
+    }()
     PTYRenderDebugLog.write(
-      "inputCursor inferredPromptCursor=(\(coordinate.col),\(coordinate.row)) rect=\(NSStringFromRect(rect)) frameCursor=(\(viewportFrame.cursorX),\(viewportFrame.cursorY))"
+      "inputCursor inferredPromptCursor=(\(coordinate.col),\(coordinate.row)) rect=\(NSStringFromRect(rect)) frameCursor=(\(viewportFrame.cursorX),\(viewportFrame.cursorY)) scrollFrame=\(scrollFrameSnapshot != nil) rows=\(geometry.frame.rows) cols=\(geometry.frame.cols) regionStart=\(PromptCursorInferrer.inputRegionStart(in: geometry) ?? -1)\(regionDump)"
     )
     return rect
   }

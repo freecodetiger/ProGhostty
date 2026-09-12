@@ -75,6 +75,62 @@ struct PromptCursorInferrerTests {
     )
   }
 
+  @Test func hiddenLiveCursorOutranksContentHeuristics() {
+    // A fullscreen TUI hides the cursor (DEC 25) and paints its own caret, but
+    // reports a live position. That position wins over the content heuristics —
+    // the old code dropped it whenever the app hid the cursor, and the heuristic
+    // then anchored to whichever row happened to look like input.
+    var frame = makeFrame(
+      rows: ["output", "grill-with-docs, grilling", ""],
+      cols: 30,
+      cursorX: 0,
+      cursorY: 1,
+      cursorVisible: false
+    )
+    frame.cursorAppVisible = false
+    frame.cursorPositionKnown = true
+    #expect(PromptCursorInferrer.isLiveHiddenCursor(frame))
+  }
+
+  @Test func hiddenCursorParkedAtHomeIsNotALiveCaret() {
+    // A presentation frame parks the hidden cursor at the top-left regardless of
+    // where the input is: that carries no positional meaning, so the content
+    // heuristics still get to run.
+    var frame = makeFrame(
+      rows: ["output", "> hello"],
+      cols: 20,
+      cursorX: 0,
+      cursorY: 0,
+      cursorVisible: false
+    )
+    frame.cursorAppVisible = false
+    frame.cursorPositionKnown = true
+    #expect(!PromptCursorInferrer.isLiveHiddenCursor(frame))
+  }
+
+  @Test func hiddenCursorWithUnknownPositionIsNotALiveCaret() {
+    // The cursor row is outside the viewport, so the reported coordinates are
+    // undefined and must not be trusted.
+    var frame = makeFrame(
+      rows: ["output", "> hello"],
+      cols: 20,
+      cursorX: 0,
+      cursorY: 1,
+      cursorVisible: false
+    )
+    frame.cursorAppVisible = false
+    frame.cursorPositionKnown = false
+    #expect(!PromptCursorInferrer.isLiveHiddenCursor(frame))
+  }
+
+  @Test func visibleParkedCursorIsNotALiveCaret() {
+    // A shell that redraws its prompt leaves a *visible* cursor parked at column
+    // 0 with the real caret at the end of the typed text — the original reason
+    // the heuristics exist.
+    let frame = makeFrame(rows: ["zpc@zpc % ls"], cols: 30, cursorX: 0, cursorY: 0)
+    #expect(!PromptCursorInferrer.isLiveHiddenCursor(frame))
+  }
+
   @Test func promptMarkerColumnFindsCommonMarkers() {
     let frame = makeFrame(rows: ["  ❯ echo hi"], cols: 20)
     let cells = PromptCursorInferrer.cells(inRow: 0, frame: frame)!
@@ -139,6 +195,20 @@ struct PromptCursorInferrerTests {
     let coordinate = PromptCursorInferrer.inferredPromptCursorCoordinate(in: makeGeometry(frame: frame))
     // "zpc@zpc % ls" — last text col 11 → caret col 12.
     #expect(coordinate == GridCoordinate(row: 1, col: 12))
+  }
+
+  @Test func hiddenCursorParkedOnLastContentRowFindsTextEnd() {
+    // Fresh-shell variant where the shell hides the cursor: the parked cursor
+    // sits on the only content row (row 0), which is also the last non-blank
+    // row — that row is the input even without a marker or caret cell.
+    let frame = makeFrame(
+      cellsByRow: [makeCells("zpc@zpc proghostty % pi", cols: 40)],
+      cols: 40,
+      cursorX: 0, cursorY: 0,
+      cursorVisible: false
+    )
+    let coordinate = PromptCursorInferrer.inferredPromptCursorCoordinate(in: makeGeometry(frame: frame))
+    #expect(coordinate == GridCoordinate(row: 0, col: 23))
   }
 
   @Test func hiddenCursorTuiPrefersLastPromptMarkerRow() {

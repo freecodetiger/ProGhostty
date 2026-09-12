@@ -11,6 +11,22 @@ import Foundation
 /// styling instead. Stateless: every function reads only the
 /// `RenderedGridGeometry` snapshot passed in.
 enum PromptCursorInferrer {
+  /// Whether the VT cursor is a live caret the app maintains while hiding it:
+  /// the app turned the cursor off (DEC 25), the viewport still knows where it
+  /// is, and it is not parked at home.
+  ///
+  /// Fullscreen TUIs hide the cursor and paint their own caret, but keep the VT
+  /// cursor on the real input position. That position is authoritative — the
+  /// heuristics below only exist for the states where the cursor carries no
+  /// meaning, so they must not override it. The home cell is excluded because a
+  /// presentation frame parks it at the top-left regardless of where the input
+  /// actually is.
+  static func isLiveHiddenCursor(_ frame: GhosttyTerminalFrame) -> Bool {
+    !frame.cursorAppVisible
+      && frame.cursorPositionKnown
+      && !(frame.cursorX == 0 && frame.cursorY == 0)
+  }
+
   /// Whether an input caret can be inferred: the VT cursor must be parked at
   /// column 0 (the redraw/presentation state where the raw cursor rect is
   /// meaningless) and the parked row must not be blank.
@@ -35,23 +51,30 @@ enum PromptCursorInferrer {
   /// The first row of the input region when the VT cursor is parked at column
   /// 0.
   ///
-  /// A *visible* parked cursor sits on the input row (shell prompt redraws put
-  /// the real cursor at the prompt start), so its row starts the region. A
-  /// *hidden* or presentation cursor carries no positional meaning (TUI
-  /// overscan frames park it at the top-left regardless of where the input
-  /// is), so the input is located from content: the last prompt-marker row
-  /// (TUIs keep their input at the bottom), else the last non-blank row — but
-  /// only if that row actually looks like an input row.
+  /// Priority: a *visible* parked cursor sits on the input row (shell prompt
+  /// redraws put the real cursor at the prompt start), so its row starts the
+  /// region. A *hidden* cursor is ambiguous (TUI presentation frames park it at
+  /// the top-left regardless of where the input is), so prompt-marker rows win
+  /// first (TUIs keep their input at the bottom); otherwise a hidden cursor
+  /// parked on the row where the content ends is the input (fresh shell: the
+  /// parked cursor sits at the prompt start on the only content row). Only then
+  /// does the content-based last non-blank row count — and only if it looks
+  /// like an input row.
   static func inputRegionStart(in geometry: RenderedGridGeometry) -> Int? {
     let frame = geometry.frame
     guard frame.rows > 0 else { return nil }
-    if frame.cursorVisible, frame.cursorY >= 0, frame.cursorY < frame.rows {
-      return frame.cursorY
+    let cursorRow = (frame.cursorY >= 0 && frame.cursorY < frame.rows) ? frame.cursorY : nil
+    if frame.cursorVisible, let cursorRow {
+      return cursorRow
     }
     if let markerRow = lastPromptMarkerRow(in: geometry) {
       return markerRow
     }
-    guard let lastRow = lastNonBlankRow(in: geometry) else { return nil }
+    let lastRow = lastNonBlankRow(in: geometry)
+    if let lastRow, let cursorRow, cursorRow == lastRow {
+      return lastRow
+    }
+    guard let lastRow else { return nil }
     return rowLooksLikeInput(lastRow, in: geometry) ? lastRow : nil
   }
 
