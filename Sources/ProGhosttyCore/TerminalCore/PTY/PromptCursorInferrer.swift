@@ -2,80 +2,107 @@ import Foundation
 
 /// Pure prompt-cursor inference over an immutable rendered-frame geometry.
 ///
-/// Extracted from `PTYGridView` (debt spec 4-1). Shells that redraw the prompt
-/// leave the VT cursor parked at column 0; these heuristics locate the visual
-/// input cursor from prompt markers and cell styling instead. Stateless: every
-/// function reads only the `RenderedGridGeometry` snapshot passed in. The view
-/// keeps the orchestration that mixes this with live presentation state
-/// (`inferredPromptCursorRect` and friends).
+/// Extracted from `PTYGridView` (debt spec 4-1). Shells that redraw their
+/// prompt leave the VT cursor parked at column 0, and TUI presentation frames
+/// (main-screen apps rendered with overscan, or apps that hide the cursor)
+/// often carry a meaningless cursor at the top-left. In those states the raw
+/// cursor rect cannot anchor an IME composition; these heuristics locate the
+/// visual input caret from the parked cursor's row, prompt markers, and cell
+/// styling instead. Stateless: every function reads only the
+/// `RenderedGridGeometry` snapshot passed in.
 enum PromptCursorInferrer {
+  /// Whether the VT cursor is a live caret the app maintains while hiding it:
+  /// the app turned the cursor off (DEC 25), the viewport still knows where it
+  /// is, and it is not parked at home.
+  ///
+  /// Ghostty's own IME point reads the cursor unconditionally, with no such
+  /// condition. ProGhostty cannot: TUIs here transiently park a **visible**
+  /// cursor at the start of a row while redrawing, and following it drags the
+  /// composition anchor off the input line. The cached Codex CLI cases
+  /// (`liveGridPreservesPromptCursorWhenCodexTransientCursorMovesToBlankRowStart`
+  /// and friends) pin that behaviour. So the visibility intent is the
+  /// discriminator: an app that hid the cursor far enough in advance to paint
+  /// its own caret has left the VT cursor on the live caret, whereas a visible
+  /// cursor sitting at a row start is mid-redraw and means nothing.
+  static func isLiveHiddenCursor(_ frame: GhosttyTerminalFrame) -> Bool {
+    !frame.cursorAppVisible
+      && frame.cursorPositionKnown
+      && !(frame.cursorX == 0 && frame.cursorY == 0)
+  }
+
+  /// Whether an input caret can be inferred: the VT cursor must be parked at
+  /// column 0 (the redraw/presentation state where the raw cursor rect is
+  /// meaningless) and the parked row must not be blank.
   static func shouldInferPromptCursor(
     for viewportFrame: GhosttyTerminalFrame,
     in geometry: RenderedGridGeometry
   ) -> Bool {
+    guard viewportFrame.cursorX == 0 else { return false }
     if viewportFrame.cursorY == 0 {
       return true
     }
-    let row = geometry.frame.cursorY
-    let rowStart = row * geometry.frame.cols
-    let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
-    guard row >= 0, row < geometry.frame.rows, rowStart < rowEnd else {
-      return false
-    }
-    let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
-    return promptMarkerColumn(in: cells) != nil
+    return !rowIsBlank(viewportFrame.cursorY, in: geometry)
   }
 
-  static func inferredPromptCursorCoordinateOnCursorRow(in geometry: RenderedGridGeometry) -> GridCoordinate? {
-    let row = geometry.frame.cursorY
-    let rowStart = row * geometry.frame.cols
-    let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
-    guard row >= 0, row < geometry.frame.rows, rowStart < rowEnd else {
-      return nil
-    }
-    let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
-    guard let promptCol = promptMarkerColumn(in: cells) else {
-      return nil
-    }
-    let lowerBound = promptCol + 1
-    if let lastTextCol = cells.indices.last(where: { $0 >= lowerBound && cells[$0].scalar != " " }) {
-      return GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
-    }
-    if let cursorCol = cells.indices.last(where: { $0 >= lowerBound && isVisualInputCursorCell(cells[$0]) }) {
-      return GridCoordinate(row: row, col: cursorCol)
-    }
-    return nil
-  }
-
+  /// The inferred input caret when the VT cursor is parked at column 0.
   static func inferredPromptCursorCoordinate(in geometry: RenderedGridGeometry) -> GridCoordinate? {
-    var bestVisualCursor: GridCoordinate?
-    var bestTextFallback: GridCoordinate?
-    var inputRegionIsActive = false
-    for row in 0..<geometry.frame.rows {
+    guard let regionStart = inputRegionStart(in: geometry) else { return nil }
+    let regionEnd = inputRegionEnd(start: regionStart, in: geometry) ?? geometry.frame.rows
+    return caretCoordinate(in: regionStart..<regionEnd, geometry: geometry)
+  }
+
+  /// The first row of the input region when the VT cursor is parked at column
+  /// 0.
+  ///
+  /// Priority: a *visible* parked cursor sits on the input row (shell prompt
+  /// redraws put the real cursor at the prompt start), so its row starts the
+  /// region. A *hidden* cursor is ambiguous (TUI presentation frames park it at
+  /// the top-left regardless of where the input is), so prompt-marker rows win
+  /// first (TUIs keep their input at the bottom); otherwise a hidden cursor
+  /// parked on the row where the content ends is the input (fresh shell: the
+  /// parked cursor sits at the prompt start on the only content row). Only then
+  /// does the content-based last non-blank row count — and only if it looks
+  /// like an input row.
+  static func inputRegionStart(in geometry: RenderedGridGeometry) -> Int? {
+    let frame = geometry.frame
+    guard frame.rows > 0 else { return nil }
+    let cursorRow = (frame.cursorY >= 0 && frame.cursorY < frame.rows) ? frame.cursorY : nil
+    if frame.cursorVisible, let cursorRow {
+      return cursorRow
+    }
+    if let markerRow = lastPromptMarkerRow(in: geometry) {
+      return markerRow
+    }
+    let lastRow = lastNonBlankRow(in: geometry)
+    if let lastRow, let cursorRow, cursorRow == lastRow {
+      return lastRow
+    }
+    guard let lastRow else { return nil }
+    return rowLooksLikeInput(lastRow, in: geometry) ? lastRow : nil
+  }
+
+  /// The caret within an input region: the rightmost isolated inverse cell
+  /// (a caret drawn by the app, e.g. pi's `\x1b[7m` block), else the column
+  /// right after the last text cell of the region's last row. The last row of
+  /// the region wins, so wrapped/continued input lines anchor at the visual
+  /// caret even when the prompt marker sits on the first line.
+  static func caretCoordinate(in region: Range<Int>, geometry: RenderedGridGeometry) -> GridCoordinate? {
+    var bestCaret: GridCoordinate?
+    var bestTextEnd: GridCoordinate?
+    for row in region {
       guard geometry.clipRect.intersects(geometry.rowRect(row)) else { continue }
-      let rowStart = row * geometry.frame.cols
-      let rowEnd = min(rowStart + geometry.frame.cols, geometry.frame.cells.count)
-      guard rowStart < rowEnd else { continue }
-      let cells = Array(geometry.frame.cells[rowStart..<rowEnd])
-      let lowerBound: Int
-      if let promptCol = promptMarkerColumn(in: cells) {
-        inputRegionIsActive = true
-        bestVisualCursor = nil
-        bestTextFallback = nil
-        lowerBound = promptCol + 1
-      } else if inputRegionIsActive {
-        lowerBound = 0
-      } else {
-        continue
-      }
-      if let cursorCol = cells.indices.last(where: { $0 >= lowerBound && isVisualInputCursorCell(cells[$0]) }) {
-        bestVisualCursor = GridCoordinate(row: row, col: cursorCol)
+      guard let cells = cells(inRow: row, frame: geometry.frame), !cells.isEmpty else { continue }
+      // The prompt marker only appears on the region's first row; continuation
+      // rows are full-width text.
+      let lowerBound = row == region.lowerBound ? (promptMarkerColumn(in: cells).map { $0 + 1 } ?? 0) : 0
+      if let caretCol = cells.indices.last(where: { $0 >= lowerBound && isCaretCell(cells, at: $0) }) {
+        bestCaret = GridCoordinate(row: row, col: caretCol)
       }
       if let lastTextCol = cells.indices.last(where: { $0 >= lowerBound && cells[$0].scalar != " " }) {
-        bestTextFallback = GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
+        bestTextEnd = GridCoordinate(row: row, col: min(lastTextCol + 1, geometry.frame.cols - 1))
       }
     }
-    return bestVisualCursor ?? bestTextFallback
+    return bestCaret ?? bestTextEnd
   }
 
   static func rowContainsPromptMarker(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
@@ -126,7 +153,47 @@ enum PromptCursorInferrer {
     }
   }
 
-  static func isVisualInputCursorCell(_ cell: GhosttyTerminalFrame.Cell) -> Bool {
-    cell.scalar == " " && (cell.inverse || !cell.usesDefaultBackground)
+  /// A cell drawn as the app's caret: inverse and isolated from its neighbors,
+  /// so a styled row's right edge or a highlight run is not mistaken for it.
+  static func isCaretCell(_ cells: [GhosttyTerminalFrame.Cell], at index: Int) -> Bool {
+    let cell = cells[index]
+    guard cell.inverse else { return false }
+    if index > 0, cells[index - 1].inverse { return false }
+    if index + 1 < cells.count, cells[index + 1].inverse { return false }
+    return true
+  }
+
+  // MARK: - Private helpers
+
+  /// The last row of the input region: the start row through the last
+  /// contiguous non-blank row (a blank row ends the input; continuation /
+  /// wrapped lines stay in the region).
+  private static func inputRegionEnd(start: Int, in geometry: RenderedGridGeometry) -> Int? {
+    guard start >= 0, start < geometry.frame.rows else { return nil }
+    var end = start
+    while end < geometry.frame.rows, !rowIsBlank(end, in: geometry) {
+      end += 1
+    }
+    return end
+  }
+
+  private static func lastPromptMarkerRow(in geometry: RenderedGridGeometry) -> Int? {
+    (0..<geometry.frame.rows).reversed().first { row in
+      guard geometry.clipRect.intersects(geometry.rowRect(row)) else { return false }
+      return rowContainsPromptMarker(row, in: geometry)
+    }
+  }
+
+  private static func lastNonBlankRow(in geometry: RenderedGridGeometry) -> Int? {
+    (0..<geometry.frame.rows).reversed().first { row in
+      guard geometry.clipRect.intersects(geometry.rowRect(row)) else { return false }
+      return !rowIsBlank(row, in: geometry)
+    }
+  }
+
+  private static func rowLooksLikeInput(_ row: Int, in geometry: RenderedGridGeometry) -> Bool {
+    guard let cells = cells(inRow: row, frame: geometry.frame) else { return false }
+    return promptMarkerColumn(in: cells) != nil
+      || cells.indices.contains { isCaretCell(cells, at: $0) }
   }
 }

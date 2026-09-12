@@ -4,12 +4,24 @@ import Foundation
 public struct TerminalInputRenderSnapshot: Equatable {
   public var generation: Int
   public var cursorRect: NSRect?
+  /// True when the frame's input-cursor rect degenerated to the parked home
+  /// cell (top-left), i.e. no meaningful input position could be derived
+  /// (prompt redraw / TUI presentation). Such frames must not move a
+  /// known-good composition anchor.
+  public var cursorIsHomeParked: Bool
   public var isFocused: Bool
   public var hasMarkedText: Bool
 
-  public init(generation: Int, cursorRect: NSRect?, isFocused: Bool, hasMarkedText: Bool) {
+  public init(
+    generation: Int,
+    cursorRect: NSRect?,
+    cursorIsHomeParked: Bool,
+    isFocused: Bool,
+    hasMarkedText: Bool
+  ) {
     self.generation = generation
     self.cursorRect = cursorRect
+    self.cursorIsHomeParked = cursorIsHomeParked
     self.isFocused = isFocused
     self.hasMarkedText = hasMarkedText
   }
@@ -149,6 +161,14 @@ public final class TerminalInputStateMachine {
     }
 
     guard !phase.isComposing, !snapshot.hasMarkedText, let cursorRect = snapshot.cursorRect else {
+      return
+    }
+
+    // A frame whose input-cursor rect fell back to the parked home cell must
+    // not clobber a known-good anchor: the raw VT cursor parks at the top-left
+    // in exactly the prompt-redraw / TUI-presentation states that produce it,
+    // and absorbing it would pin the next composition to the corner.
+    guard !snapshot.cursorIsHomeParked else {
       return
     }
 

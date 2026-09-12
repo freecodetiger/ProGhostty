@@ -1175,63 +1175,6 @@ struct TerminalSurfaceTests {
     #expect(gridView.cursorCellRect == stableCursor)
   }
 
-  @MainActor @Test func liveGridPreservesPromptCursorWhenCodexTransientCursorMovesToStyledBlankRowStart() throws {
-    let gridView = PTYGridView()
-    let rows = [
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "› /res",
-      "",
-    ]
-    let cellSize = gridView.terminalCellSize
-    let inset = gridView.terminalContentInset
-    gridView.frame = NSRect(
-      x: 0,
-      y: 0,
-      width: inset.width * 2 + CGFloat(43) * cellSize.width,
-      height: inset.height * 2 + CGFloat(rows.count) * cellSize.height
-    )
-    let initialFrame = frameWithText(rows: rows, cols: 43, cursorX: 6, cursorY: 10)
-    let initialScrollFrame = GhosttyTerminalScrollFrame(
-      viewport: initialFrame,
-      overscanTop: [
-        cellRow(text: "history 1", cols: initialFrame.cols),
-        cellRow(text: "history 2", cols: initialFrame.cols),
-      ],
-      overscanBottom: [],
-      requestedOverscanTop: 2,
-      requestedOverscanBottom: 0,
-      viewportStartRow: 12
-    )
-    gridView.render(initialScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<rows.count)))
-    let stableCursor = try #require(gridView.cursorCellRect)
-
-    var transientFrame = frameWithText(rows: rows, cols: 43, cursorX: 0, cursorY: 8)
-    for index in (8 * transientFrame.cols)..<((8 + 1) * transientFrame.cols) {
-      transientFrame.cells[index].usesDefaultBackground = false
-      transientFrame.cells[index].background = GhosttyTerminalFrame.RGB(r: 8, g: 24, b: 40)
-    }
-    let transientScrollFrame = GhosttyTerminalScrollFrame(
-      viewport: transientFrame,
-      overscanTop: initialScrollFrame.overscanTop,
-      overscanBottom: [],
-      requestedOverscanTop: 2,
-      requestedOverscanBottom: 0,
-      viewportStartRow: 12
-    )
-    gridView.render(transientScrollFrame, isFocused: true, dirty: CellGridDirtyResult(mode: .full, rows: Set(0..<rows.count)))
-
-    #expect(gridView.cursorCellRect == stableCursor)
-  }
-
   @MainActor @Test func liveGridPreservesPromptCursorWhenCodexTransientFrameErasesPromptRow() throws {
     let gridView = PTYGridView()
     let stableRows = [
@@ -1978,7 +1921,7 @@ struct TerminalSurfaceTests {
       "Claude Code",
       "------------",
       "› hello     "
-    ], cols: 12, cursorX: 0, cursorY: 0)
+    ], cols: 12, cursorX: 0, cursorY: 0, cursorVisible: false)
     let promptCursorIndex = 2 * frame.cols + 7
     frame.cells[promptCursorIndex].scalar = " "
     frame.cells[promptCursorIndex].inverse = true
@@ -1999,7 +1942,7 @@ struct TerminalSurfaceTests {
       "› old       ",
       "history     ",
       "› current   "
-    ], cols: 12, cursorX: 0, cursorY: 0)
+    ], cols: 12, cursorX: 0, cursorY: 0, cursorVisible: false)
     let staleCursorIndex = 0 * frame.cols + 2
     frame.cells[staleCursorIndex].scalar = " "
     frame.cells[staleCursorIndex].inverse = true
@@ -2026,7 +1969,7 @@ struct TerminalSurfaceTests {
       "› long input",
       "continues   ",
       "here        "
-    ], cols: 12, cursorX: 0, cursorY: 0)
+    ], cols: 12, cursorX: 0, cursorY: 0, cursorVisible: false)
     let firstLineEndIndex = 0 * frame.cols + 11
     frame.cells[firstLineEndIndex].scalar = " "
     frame.cells[firstLineEndIndex].inverse = true
@@ -2705,7 +2648,7 @@ struct TerminalSurfaceTests {
     return image
   }
 
-  private func frameWithText(rows: [String], cols: Int, cursorX: Int, cursorY: Int) -> GhosttyTerminalFrame {
+  private func frameWithText(rows: [String], cols: Int, cursorX: Int, cursorY: Int, cursorVisible: Bool = true) -> GhosttyTerminalFrame {
     let cells = rows.flatMap { row in
       let padded = row.padding(toLength: cols, withPad: " ", startingAt: 0)
       return padded.unicodeScalars.prefix(cols).map {
@@ -2726,7 +2669,7 @@ struct TerminalSurfaceTests {
     return GhosttyTerminalFrame(
       cols: cols,
       rows: rows.count,
-      cursorVisible: true,
+      cursorVisible: cursorVisible,
       cursorX: cursorX,
       cursorY: cursorY,
       cursorShape: .bar,

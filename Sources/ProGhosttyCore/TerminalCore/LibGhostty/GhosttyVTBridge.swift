@@ -88,7 +88,16 @@ public struct GhosttyTerminalFrame: Sendable, Equatable {
 
   public var cols: Int
   public var rows: Int
+  /// Render gate: draw the cursor only when true.
   public var cursorVisible: Bool
+  /// The app's own intent (DEC 25), with no position gate. A TUI that hides the
+  /// cursor still tracks a live caret, so this separates "the app hid it" from
+  /// "the position is unknown" — `cursorVisible` conflates the two.
+  public var cursorAppVisible: Bool = true
+  /// The cursor's row is inside the viewport, so `cursorX`/`cursorY` are valid.
+  /// Independent of `cursorAppVisible`: an app that hides the cursor normally
+  /// still reports a usable position.
+  public var cursorPositionKnown: Bool = true
   public var cursorX: Int
   public var cursorY: Int
   public var cursorShape: TerminalCursorShape = .block
@@ -727,6 +736,8 @@ public final class GhosttyVTBridge {
       cols: Int(snapshot.cols),
       rows: Int(snapshot.rows),
       cursorVisible: snapshot.cursor_visible,
+      cursorAppVisible: snapshot.cursor_app_visible,
+      cursorPositionKnown: snapshot.cursor_position_known,
       cursorX: Int(snapshot.cursor_x),
       cursorY: Int(snapshot.cursor_y),
       cursorShape: TerminalCursorShape(ghosttyRawValue: snapshot.cursor_visual_style),

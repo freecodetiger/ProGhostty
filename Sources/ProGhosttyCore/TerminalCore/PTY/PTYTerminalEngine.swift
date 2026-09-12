@@ -3163,12 +3163,7 @@ public class PTYGridView: NSView {
   private func ingestInputRenderSnapshot() {
     inputRenderGeneration &+= 1
     let proposedCursorRect = inputCursorRect()
-    let inputSnapshot = TerminalInputRenderSnapshot(
-      generation: inputRenderGeneration,
-      cursorRect: proposedCursorRect,
-      isFocused: isFocusedTerminalStorage,
-      hasMarkedText: hasMarkedText()
-    )
+    let inputSnapshot = makeInputRenderSnapshot(cursorRect: proposedCursorRect)
     let previousPresentation = currentInputPresentation
     let stateSnapshot = inputStateMachine.ingestRenderSnapshot(inputSnapshot)
     applyInputPresentation(stateSnapshot)
@@ -3195,17 +3190,33 @@ public class PTYGridView: NSView {
     }
   }
 
+  private func makeInputRenderSnapshot(cursorRect: NSRect?) -> TerminalInputRenderSnapshot {
+    TerminalInputRenderSnapshot(
+      generation: inputRenderGeneration,
+      cursorRect: cursorRect,
+      cursorIsHomeParked: isHomeParkedCursor(cursorRect),
+      isFocused: isFocusedTerminalStorage,
+      hasMarkedText: hasMarkedText()
+    )
+  }
+
+  /// True when the derived input-cursor rect is exactly the parked top-left
+  /// cell while the raw VT cursor sits at home: the frame carries no usable
+  /// input position (prompt redraw or TUI presentation), so it must not move
+  /// the composition anchor.
+  private func isHomeParkedCursor(_ rect: NSRect?) -> Bool {
+    guard let rect, let frame = frameSnapshot else { return false }
+    guard frame.cursorX == 0, frame.cursorY == 0 else { return false }
+    let homeRect = rectForCell(row: 0, col: 0)
+    return PromptCursorInferrer.rect(rect, approximatelyEquals: homeRect)
+  }
+
   private func resolvedInputPresentation() -> TerminalInputPresentationSnapshot {
     if let currentInputPresentation {
       return currentInputPresentation
     }
     let snapshot = inputStateMachine.ingestRenderSnapshot(
-      TerminalInputRenderSnapshot(
-        generation: inputRenderGeneration,
-        cursorRect: inputCursorRect(),
-        isFocused: isFocusedTerminalStorage,
-        hasMarkedText: hasMarkedText()
-      )
+      makeInputRenderSnapshot(cursorRect: inputCursorRect())
     )
     let resolved = resolvedInputPresentation(from: snapshot)
     currentInputPresentation = resolved
@@ -3392,7 +3403,7 @@ public class PTYGridView: NSView {
       return gridOverlay(anchorRect: cursorRect, width: cellSize.width, frame: frame)
     }
     PTYRenderDebugLog.write(
-      "inputRender gen=\(inputSnapshot.generation) focused=\(inputSnapshot.isFocused) marked=\(inputSnapshot.hasMarkedText) composing=\(isComposingMarkedText) viewportCursor=\(viewportCursor) shape=\(viewportShape) geometryCursor=\(geometryCursor) overscanTop=\(overscanTop) proposedRect=\(Self.debugDescription(for: proposedCursorRect)) beforeRect=\(Self.debugDescription(for: previousPresentation?.cursorRect)) stateRect=\(Self.debugDescription(for: stateSnapshot.cursorRect)) resolvedRect=\(Self.debugDescription(for: resolvedPresentation?.cursorRect)) suppressed=\(resolvedPresentation?.cursorSuppressed ?? false) markedString=\(resolvedPresentation?.markedTextString.map { "\"\(Self.debugLogText($0))\"" } ?? "nil") cursorOverlay=\(Self.debugDescription(for: overlay)) row=\(cursorRow) rowText=\"\(rowText)\""
+      "inputRender gen=\(inputSnapshot.generation) focused=\(inputSnapshot.isFocused) marked=\(inputSnapshot.hasMarkedText) composing=\(isComposingMarkedText) viewportCursor=\(viewportCursor) shape=\(viewportShape) cursorVisible=\(frameSnapshot?.cursorVisible ?? true) geometryCursor=\(geometryCursor) overscanTop=\(overscanTop) proposedRect=\(Self.debugDescription(for: proposedCursorRect)) beforeRect=\(Self.debugDescription(for: previousPresentation?.cursorRect)) stateRect=\(Self.debugDescription(for: stateSnapshot.cursorRect)) resolvedRect=\(Self.debugDescription(for: resolvedPresentation?.cursorRect)) suppressed=\(resolvedPresentation?.cursorSuppressed ?? false) markedString=\(resolvedPresentation?.markedTextString.map { "\"\(Self.debugLogText($0))\"" } ?? "nil") cursorOverlay=\(Self.debugDescription(for: overlay)) row=\(cursorRow) rowText=\"\(rowText)\""
     )
   }
 
@@ -3871,7 +3882,33 @@ public class PTYGridView: NSView {
   }
 
   private func inputCursorRect() -> NSRect? {
-    inferredPromptCursorRect() ?? preservedPromptCursorRectForBlankTransient() ?? renderedCursorRect()
+    // A cursor the app hid but still tracks outranks every content heuristic:
+    // the VT knows where it is, and the heuristics only exist for the states
+    // where the cursor carries no positional meaning. A *visible* cursor parked
+    // at a row start does not qualify — that is a TUI mid-redraw, and following
+    // it drags the anchor off the input line (see the Codex cases in
+    // TerminalSurfaceTests).
+    if let frame = frameSnapshot,
+      PromptCursorInferrer.isLiveHiddenCursor(frame),
+      let rect = renderedCursorRect()
+    {
+      PTYRenderDebugLog.write(
+        "inputCursor liveHiddenCursor rect=\(NSStringFromRect(rect)) frameCursor=(\(frame.cursorX),\(frame.cursorY)) appVisible=\(frame.cursorAppVisible) positionKnown=\(frame.cursorPositionKnown)"
+      )
+      return rect
+    }
+    if let inferred = inferredPromptCursorRect() {
+      return inferred
+    }
+    if let preserved = preservedPromptCursorRectForBlankTransient() {
+      return preserved
+    }
+    if PTYRenderDebugLog.isEnabled, let frame = frameSnapshot, frame.cursorX == 0 {
+      PTYRenderDebugLog.write(
+        "inputCursor inference-failed frameCursor=(\(frame.cursorX),\(frame.cursorY)) visible=\(frame.cursorVisible) scrollFrame=\(scrollFrameSnapshot != nil) rendered=\(renderedCursorRect()?.debugDescription ?? "nil")"
+      )
+    }
+    return renderedCursorRect()
   }
 
   private func inferredPromptCursorRect() -> NSRect? {
@@ -3880,8 +3917,7 @@ public class PTYGridView: NSView {
       viewportFrame.cursorX == 0,
       let geometry = renderedGeometry(),
       PromptCursorInferrer.shouldInferPromptCursor(for: viewportFrame, in: geometry),
-      let coordinate = (viewportFrame.cursorY != 0 ? PromptCursorInferrer.inferredPromptCursorCoordinateOnCursorRow(in: geometry) : nil)
-        ?? PromptCursorInferrer.inferredPromptCursorCoordinate(in: geometry)
+      let coordinate = PromptCursorInferrer.inferredPromptCursorCoordinate(in: geometry)
     else {
       return nil
     }
@@ -3895,8 +3931,18 @@ public class PTYGridView: NSView {
       return currentCursorRect
     }
     let rect = geometry.rectForCell(row: coordinate.row, col: coordinate.col)
+    let regionDump: String = {
+      guard let start = PromptCursorInferrer.inputRegionStart(in: geometry) else { return "" }
+      let end = geometry.frame.rows
+      let rows = (start..<end).compactMap { row -> String? in
+        guard let cells = PromptCursorInferrer.cells(inRow: row, frame: geometry.frame) else { return nil }
+        let text = cells.map { String($0.scalar) }.joined().trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? "[blank]" : "r\(row): \(Self.debugLogText(text))"
+      }
+      return " region=" + rows.joined(separator: " | ")
+    }()
     PTYRenderDebugLog.write(
-      "inputCursor inferredPromptCursor=(\(coordinate.col),\(coordinate.row)) rect=\(NSStringFromRect(rect)) frameCursor=(\(viewportFrame.cursorX),\(viewportFrame.cursorY))"
+      "inputCursor inferredPromptCursor=(\(coordinate.col),\(coordinate.row)) rect=\(NSStringFromRect(rect)) frameCursor=(\(viewportFrame.cursorX),\(viewportFrame.cursorY)) scrollFrame=\(scrollFrameSnapshot != nil) rows=\(geometry.frame.rows) cols=\(geometry.frame.cols) regionStart=\(PromptCursorInferrer.inputRegionStart(in: geometry) ?? -1)\(regionDump)"
     )
     return rect
   }
@@ -4122,7 +4168,17 @@ extension PTYGridView: @preconcurrency NSTextInputClient {
 
   public func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
     actualRange?.pointee = selectedRange()
-    guard let window, let rect = markedTextCaretRect(for: range) ?? cursorCellRect else { return .zero }
+    guard let window else { return .zero }
+    // Prefer the marked-text caret while composing; fall back to the live
+    // input cursor, then to the last presentation anchor, then to the grid's
+    // first cell — always converted to screen coordinates. A raw view-space
+    // .zero must never leak out here: macOS would interpret it as the screen
+    // origin instead of the pane's top-left.
+    let rect = markedTextCaretRect(for: range)
+      ?? cursorCellRect
+      ?? currentInputPresentationSnapshot.cursorRect
+      ?? renderedCursorRect()
+      ?? rectForCell(row: 0, col: 0)
     let screenRect = convert(rect, to: nil)
     PTYRenderDebugLog.write(
       "firstRect range=\(NSStringFromRange(range)) actual=\(NSStringFromRange(actualRange?.pointee ?? NSRange(location: NSNotFound, length: 0))) viewRect=\(NSStringFromRect(rect)) screenRect=\(NSStringFromRect(screenRect))"

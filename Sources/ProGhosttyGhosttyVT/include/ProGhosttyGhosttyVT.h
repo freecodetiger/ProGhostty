@@ -31,7 +31,16 @@ typedef struct {
 typedef struct {
   uint16_t cols;
   uint16_t rows;
+  // Render gate: the app wants the cursor shown AND its position is known.
   bool cursor_visible;
+  // The app's own intent (DEC 25), with no position gate. A TUI that hides the
+  // cursor still tracks a live caret, so this is what separates "app hid it"
+  // from "position genuinely unknown" — cursor_visible conflates the two.
+  bool cursor_app_visible;
+  // The cursor's row is inside the viewport, so cursor_x/cursor_y are valid.
+  // Independent of cursor_app_visible: an app that hides the cursor normally
+  // still reports a usable position.
+  bool cursor_position_known;
   uint16_t cursor_x;
   uint16_t cursor_y;
   uint8_t cursor_visual_style;
