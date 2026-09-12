@@ -90,6 +90,55 @@ Status: `open — localization done, mechanism unidentified`
 
 ---
 
+## 架构对照：Ghostty vs ProGhostty（呈现时钟）
+
+对着 `Vendor/ghostty` 源码读出来的结构性差异。**这是目前唯一能解释"同稳态下 pi 19Hz / codex 60Hz"的机制。**
+
+### Ghostty：呈现由 vsync 驱动，与输出事件解耦
+
+```zig
+// src/renderer/Thread.zig:500
+fn drawFrame(self: *Thread, now: bool) void {
+    if (!self.flags.visible) return;
+    if (!now and self.renderer.hasVsync()) return;   // 事件驱动的 draw 直接丢弃
+    ...
+}
+```
+
+- 输出到达只走 `updateFrame`（重建 GPU cell 数据）+ 一次 `renderer_wakeup.notify()`；该 async 在 Darwin 上是 mach port、**队列深度 1**，N 次 notify 天然合并成 ≤1 次回调（libxev `async.zig:277/342-344/787-826`）。
+- **真正上屏只由 CVDisplayLink 驱动**：`generic.zig:986-994` 每 tick 只 `draw_now.notify()`，`Thread.zig:554-570` → `drawFrame(true)` → present。默认 `window-vsync = true`（`config/Config.zig:2013`）。
+- 结果：**上屏节拍 = 显示器刷新率**，与 app 输出密度无关；tick 之间的中间状态被丢弃，只画"那一刻的最新状态"。
+- 上游**曾计划**做渲染 debounce，但已废弃（`Thread.zig:534-549` 的注释留了代码但注释掉了）。
+
+### ProGhostty：没有呈现时钟，呈现由事件驱动
+
+- **`MetalDirectRenderEngine` 里没有 display link**，直接 `commandBuffer.present(drawable)`，`maxInFlightDrawables = 2`。
+- 于是上屏节拍 = 事件管线能跑多快，**没有独立帧时钟**。
+
+### 另外三处叠加放大
+
+| | Ghostty | ProGhostty |
+|---|---|---|
+| VT 解析位置 | 专用 `io-reader` 线程（`termio/Exec.zig:1260`），持 `renderer_state.mutex` | **主线程**：`DispatchSourceRead` → `Task { @MainActor } handleOutput`（`PTYTerminalEngine.swift:586-606`） |
+| 合并 | 无时间去抖，mach port 天然合并 | **两级显式 4ms 去抖**（字节级 + 快照级 = 8ms，`TerminalOutputCoordinator.swift:10-17`） |
+| GPU 帧深度 | `swap_chain_count = 3`（`renderer/Metal.zig:37`） | `maxInFlightDrawables = 2` |
+
+### 结论
+
+**为什么偏偏是 pi**：pi 是全屏 TUI、输出突发且量大。没有 frame clock 时它的上屏节拍退化成"串行管线能撑住多快"（实测 19Hz）；codex 的输出模式恰好撑得住 ~60Hz。**在 Ghostty 里两者被同一个 60/120Hz 时钟节流，所以 pi 完全正常。**
+
+**打字延迟的同一根源**：VT 解析、快照、present **全在主线程**上，与键盘事件、输入法往返、IME overlay 抢同一个线程。
+
+### 与项目既有规划的关系
+
+`docs/design/gpu-first-renderer-rework.md` **已经写下过这个诊断**：
+
+> *display timing follows render submissions rather than a stable presentation clock;*
+> *AppKit-visible grid state and Metal-presented state can diverge;*
+> 修法：*coalesce multiple terminal updates into one display-frame presentation; submit only the newest complete generation; never present generation N after generation N+1; never mix text from one generation with cursor from another.*
+
+本次独立测量**证实了那份文档的判断**，且它连修法要点都写好了 —— 只是那个组件（presentation coordinator）尚未落地。
+
 ## 测量陷阱（下次别再踩）
 
 1. **日志时间戳只有 1 秒粒度**，测不了亚秒延迟 —— 必须在消息体里带单调时钟。
