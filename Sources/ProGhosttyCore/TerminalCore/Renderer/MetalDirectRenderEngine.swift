@@ -537,9 +537,7 @@ final class MetalDirectRenderEngine: MetalDirectRenderingEngine {
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) {
           var uniforms = Uniforms(drawableSize: SIMD2(Float(drawableSize.width), Float(drawableSize.height)))
           func setUniforms() {
-            withUnsafeBytes(of: &uniforms) { bytes in
-              encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
-            }
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
           }
 
           encoder.setRenderPipelineState(backgroundPipeline)
