@@ -38,9 +38,11 @@ It does **not** reinvent your shell. zsh, fish, prompt, tmux, vim, fzf, htop, Co
 
 ## Install
 
-Ship builds on every tagged release. **Start here:**
+Official release builds are signed with an **Apple Developer ID Application** certificate and **notarized by Apple**. **Start here:**
 
 ### [↓ Download the latest DMG](https://github.com/freecodetiger/ProGhostty/releases/latest)
+
+Open the DMG, drag **ProGhostty** into **Applications**, then launch it normally. No **Open Anyway** workaround or quarantine-removal command is needed for the current official release.
 
 ```bash
 # or build from source
@@ -51,7 +53,7 @@ cd ProGhostty
 
 | | |
 |--|--|
-| **Signing** | Ad-hoc (open-source releases). First launch may need **Right-click → Open** or *Privacy & Security → Open Anyway*. |
+| **Signing** | Developer ID signed and Apple-notarized. Release CI validates the stapled notarization ticket and Gatekeeper acceptance before publishing. |
 | **Updates** | In-app check opens the matching GitHub Release when a new `v*` ships. |
 | **Platform** | macOS **14+**, Apple Silicon & Intel via SwiftPM (release DMG tracks CI). |
 
@@ -108,7 +110,7 @@ If you want **macOS-native chrome** on **honest terminal plumbing**, you’re in
 
 ProGhostty **ships continuous `v0.4.x` releases** with scroll stability, themes, notifications, and AI-CLI polish already in the box. Open source means the backlog is public and movable — not that the app is a prototype.
 
-**Coming next (community-shaped):** notarized / wider distribution options, richer theme import, more workspace power tools, contributor-driven fixes.
+**Coming next (community-shaped):** wider distribution options, richer theme import, more workspace power tools, contributor-driven fixes.
 
 Track work and ideas: [Issues](https://github.com/freecodetiger/ProGhostty/issues) · [Releases](https://github.com/freecodetiger/ProGhostty/releases).
 
@@ -163,6 +165,8 @@ scripts/check-architecture.sh
 ./scripts/build-app-bundle.sh release
 open .build/arm64-apple-macosx/release/ProGhostty.app
 ```
+
+Local builds use **ad-hoc signing** by default. To create Developer ID-signed and notarized distribution builds, follow [`docs/release-signing.md`](docs/release-signing.md).
 
 ---
 
