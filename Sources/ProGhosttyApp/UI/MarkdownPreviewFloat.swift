@@ -610,31 +610,34 @@ final class MarkdownPreviewFloatView: NSView, WKNavigationDelegate {
   private func installKeyMonitor() {
     guard keyMonitor == nil else { return }
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-      guard
-        let self,
-        let window = self.window,
-        event.window === window
-      else {
-        return event
-      }
-      let mousePoint = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-      guard self.bounds.contains(mousePoint) else { return event }
-
-      // Esc closes the preview (pointer is over the card).
-      if event.keyCode == 53 {
-        DebugLog.write("markdown-preview Esc dismiss")
-        self.onDismiss?()
-        return nil
-      }
-      // ⌘C copies the WebKit selection when the pointer is over the card.
-      if event.modifierFlags.contains(.command),
-        event.charactersIgnoringModifiers?.lowercased() == "c"
-      {
-        self.copySelectionToPasteboard()
-        return nil
-      }
-      return event
+      guard let self, let window = self.window else { return event }
+      return self.routeHoveredKeyEvent(event, mouseLocationInWindow: window.mouseLocationOutsideOfEventStream)
     }
+  }
+
+  /// Shared by the local monitor and routing tests; pointer coordinates are in
+  /// the event window, independent of the terminal's first responder.
+  func routeHoveredKeyEvent(_ event: NSEvent, mouseLocationInWindow: NSPoint) -> NSEvent? {
+    // SwiftUI keeps this view mounted at opacity zero when dismissed. Local
+    // event monitors bypass hit-testing, so presentation must gate keys too.
+    guard isPresented, let window, event.window === window else { return event }
+    let mousePoint = convert(mouseLocationInWindow, from: nil)
+    guard bounds.contains(mousePoint) else { return event }
+
+    // Esc closes the preview (pointer is over the card).
+    if event.keyCode == 53 {
+      DebugLog.write("markdown-preview Esc dismiss")
+      onDismiss?()
+      return nil
+    }
+    // ⌘C copies the WebKit selection when the pointer is over the card.
+    if event.modifierFlags.contains(.command),
+      event.charactersIgnoringModifiers?.lowercased() == "c"
+    {
+      copySelectionToPasteboard()
+      return nil
+    }
+    return event
   }
 
   override func viewDidMoveToWindow() {
