@@ -13,6 +13,11 @@ import AppKit
 final class TerminalWindowCloseGuard: NSObject {
   /// Retains the proxies (NSWindow.delegate is a weak reference).
   private var proxies: [ObjectIdentifier: WindowDelegateProxy] = [:]
+  /// SwiftUI re-asserts its own `Coordinator` as `NSWindow.delegate` whenever the
+  /// window's state refreshes, evicting our proxy — after which the close button
+  /// goes straight to the coordinator and the guard never runs. Watching the
+  /// property lets us take it back the instant it's swapped.
+  private var delegateObservations: [ObjectIdentifier: NSKeyValueObservation] = [:]
   private let shouldClose: @MainActor (NSWindow) -> Bool
 
   init(shouldClose: @escaping @MainActor (NSWindow) -> Bool) {
@@ -39,8 +44,20 @@ final class TerminalWindowCloseGuard: NSObject {
     guard !(window is NSPanel) else { return }
     if let settings = AppComposition.shared?.utilityWindows.settingsWindow, window === settings { return }
     if window.delegate is WindowDelegateProxy { return }
+    let key = ObjectIdentifier(window)
+    // Register the observation once per window. SwiftUI re-asserts its own
+    // coordinator on window-state updates, so this method runs often; tearing
+    // down and re-creating the KVO registration each time churns the main
+    // thread for no benefit.
+    if delegateObservations[key] == nil {
+      delegateObservations[key] = window.observe(\.delegate, options: [.new]) { [weak self] window, _ in
+        // KVO fires synchronously on the setter, i.e. already on whichever
+        // thread SwiftUI set the delegate from — main, for window state.
+        MainActor.assumeIsolated { self?.installIfNeeded(on: window) }
+      }
+    }
     let proxy = WindowDelegateProxy(base: window.delegate, shouldClose: shouldClose)
-    proxies[ObjectIdentifier(window)] = proxy
+    proxies[key] = proxy
     window.delegate = proxy
   }
 }
