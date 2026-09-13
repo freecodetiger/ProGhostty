@@ -13,29 +13,37 @@ ZIP_PATH="${DIST_DIR}/${ZIP_NAME}"
 mkdir -p "${DIST_DIR}"
 rm -f "${ZIP_PATH}"
 
-# Build the .app (same call as build-dmg.sh)
-APP_DIR="$(VERSION="${VERSION}" BUILD="${BUILD:-1}" "${ROOT_DIR}/scripts/build-app-bundle.sh" "${CONFIGURATION}")"
+if [ -n "${APP_STAGING_DIR:-}" ]; then
+  # The release pipeline already built, notarized and stapled this app for both
+  # artifacts. Archive it in place — copying a stapled bundle risks dropping the
+  # ticket, and a second submission would just be another Apple round-trip.
+  cd "${APP_STAGING_DIR}"
+else
+  # Build the .app (same call as build-dmg.sh)
+  APP_DIR="$(VERSION="${VERSION}" BUILD="${BUILD:-1}" "${ROOT_DIR}/scripts/build-app-bundle.sh" "${CONFIGURATION}")"
 
-# Stage a fresh copy so we don't mutate the build output. `ditto` preserves the
-# extended attributes the code signature seals; `cp -R` can drop them.
-STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/proghostty-zip.XXXXXX")"
-cleanup() {
-  rm -rf "${STAGING_DIR}"
-}
-trap cleanup EXIT
+  # Stage a fresh copy so we don't mutate the build output. `ditto` preserves
+  # the extended attributes the code signature seals; `cp -R` can drop them.
+  STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/proghostty-zip.XXXXXX")"
+  cleanup() {
+    rm -rf "${STAGING_DIR}"
+  }
+  trap cleanup EXIT
 
-ditto "${APP_DIR}" "${STAGING_DIR}/${PRODUCT}.app"
+  ditto "${APP_DIR}" "${STAGING_DIR}/${PRODUCT}.app"
 
-# Unset SIGNING_IDENTITY means a local, unsigned build: the app keeps its
-# ad-hoc signature and we skip notarization.
-SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
-if [ "${SIGNING_IDENTITY}" != "-" ]; then
-  # Notarize BEFORE zipping: a ZIP cannot carry a ticket, so the app has to be
-  # stapled first or a downloaded ZIP is unusable offline.
-  "${ROOT_DIR}/scripts/notarize.sh" "${STAGING_DIR}/${PRODUCT}.app"
+  # Unset SIGNING_IDENTITY means a local, unsigned build: the app keeps its
+  # ad-hoc signature and we skip notarization.
+  SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
+  if [ "${SIGNING_IDENTITY}" != "-" ]; then
+    # Notarize BEFORE zipping: a ZIP cannot carry a ticket, so the app has to be
+    # stapled first or a downloaded ZIP is unusable offline.
+    "${ROOT_DIR}/scripts/notarize.sh" "${STAGING_DIR}/${PRODUCT}.app"
+  fi
+
+  cd "${STAGING_DIR}"
 fi
 
-cd "${STAGING_DIR}"
 ditto -c -k --sequesterRsrc --keepParent "${PRODUCT}.app" "${ZIP_PATH}"
 
 # NOTE: The .zip itself is intentionally NOT signed. Unsigned archives don't

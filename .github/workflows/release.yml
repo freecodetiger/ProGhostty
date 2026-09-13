@@ -21,6 +21,23 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Resolve build cache key
+        id: build-cache-key
+        run: |
+          set -euo pipefail
+          # The VT library's recorded commit and the local patch are the only
+          # inputs that make the Zig caches stale. Zig's cache is content
+          # addressed, so a restored cache is always safe to reuse.
+          echo "vt=$(git ls-tree HEAD Vendor/ghostty | awk '{print $3}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Zig build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache-global
+            Vendor/ghostty/.zig-cache
+          key: zig-${{ runner.os }}-${{ runner.arch }}-${{ steps.build-cache-key.outputs.vt }}-${{ hashFiles('Vendor/ghostty.patch') }}
+
       - name: Show toolchain
         run: |
           set -euxo pipefail
@@ -102,6 +119,32 @@ jobs:
           printf '%s' "$APPSTORE_API_PRIVATE_KEY" > "$KEY_PATH"
           echo "NOTARY_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
+      - name: Build and notarize the app bundle
+        env:
+          VERSION: ${{ github.ref_name }}
+          BUILD: ${{ github.run_number }}
+          SIGNING_IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+          NOTARY_KEY_PATH: ${{ runner.temp }}/asc-api-key.p8
+          NOTARY_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          set -euxo pipefail
+          # Build and notarize the app once for both artifacts. The DMG and ZIP
+          # steps previously each built their own bundle and each submitted it to
+          # Apple, costing a duplicate release build and a duplicate
+          # notarization round-trip (~2 min) per release.
+          APP_DIR="$(VERSION="${VERSION#v}" BUILD="$BUILD" scripts/build-app-bundle.sh release)"
+          rm -rf dist/app
+          mkdir -p dist/app
+          # `ditto`, not `cp -R`: it preserves the extended attributes the code
+          # signature seals. The app is stapled here and never copied again.
+          ditto "$APP_DIR" dist/app/ProGhostty.app
+          ln -s /Applications dist/app/Applications
+          if [ -n "${SIGNING_IDENTITY:-}" ]; then
+            scripts/notarize.sh dist/app/ProGhostty.app
+          fi
+          echo "APP_STAGING_DIR=$PWD/dist/app" >> "$GITHUB_ENV"
+
       - name: Build DMG
         env:
           VERSION: ${{ github.ref_name }}
@@ -124,6 +167,8 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
         run: |
+          # Archives the already-notarized bundle from APP_STAGING_DIR; the
+          # signing/notary variables above only matter for a local fallback run.
           VERSION="${VERSION#v}" BUILD="$BUILD" scripts/build-zip.sh release
 
       - name: Verify notarization is stapled and Gatekeeper accepts it
@@ -132,6 +177,9 @@ jobs:
           DMG="$(ls dist/*.dmg)"
           xcrun stapler validate "$DMG"
           spctl --assess --type open --context context:primary-signature -v "$DMG"
+          # The ZIP carries no ticket of its own, so the shared app bundle both
+          # artifacts were cut from must still be stapled.
+          xcrun stapler validate dist/app/ProGhostty.app
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
