@@ -253,6 +253,11 @@ public final class PTYTerminalSurfaceRegistry: TerminalSurfaceRegistry {
         return nil
       }
     }
+    gridView.focusReportHandler = { [weak self] data in
+      // Like VT query responses, focus reports are protocol traffic, not typing.
+      // Reuse the session-owned PTY writer without resetting the browse viewport.
+      self?.surfaces[id]?.bridge?.writePtyHandler?(data)
+    }
     gridView.focusReportingActiveHandler = { [weak self] in
       guard let self, let bridge = self.surfaces[id]?.bridge else { return false }
       return bridge.isFocusReportingActive()

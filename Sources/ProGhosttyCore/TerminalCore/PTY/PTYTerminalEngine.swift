@@ -1006,6 +1006,8 @@ public class PTYGridView: NSView {
   public var terminalKeyEncodeHandler: ((TerminalKeyEvent) -> Data?)?
   public var focusReportingActiveHandler: (() -> Bool)?
   public var focusEncodeHandler: ((_ gained: Bool) -> Data?)?
+  /// Protocol reports must not take the user-input path that resumes live output.
+  public var focusReportHandler: ((Data) -> Void)?
   /// Localized popover labels, pushed from the App layer (which owns the language
   /// setting). Defaults to English so Core works standalone.
   public var semanticLinkText = SemanticLinkText()
@@ -2642,7 +2644,7 @@ public class PTYGridView: NSView {
     guard isFocusedTerminalStorage,
           focusReportingActiveHandler?() == true,
           let data = focusEncodeHandler?(gained) else { return }
-    inputHandler?(data)
+    focusReportHandler?(data)
   }
 
   /// Focus left us (e.g. ⌘P moved focus into the side-input box, or a ⌘-shortcut
